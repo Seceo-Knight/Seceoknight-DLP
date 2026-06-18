@@ -1,0 +1,39 @@
+{
+  "server_url": "https://YOUR_SERVER_IP/api/v1",
+  "agent_id": "33fb7ca4-c22a-47cf-807c-5f791be9ca4a",
+  "agent_name": "Linux-Agent",
+  "heartbeat_interval": 3,
+  "policy_sync_interval": 60,
+  "monitoring": {
+    "file_system": true,
+    "monitored_paths": [
+      "/home",
+      "/var/www",
+      "/opt/data"
+    ],
+    "exclude_paths": [
+      "/home/*/.cache",
+      "/home/*/.local/share",
+      "/home/*/snap"
+    ],
+    "file_extensions": [
+      ".pdf",
+      ".docx",
+      ".xlsx",
+      ".txt",
+      ".csv",
+      ".json",
+      ".xml",
+      ".sql",
+      ".conf"
+    ]
+  },
+  "quarantine": {
+    "enabled": true,
+    "folder": "/opt/seceoknight/quarantine"
+  },
+  "classification": {
+    "enabled": true,
+    "max_file_size_mb": 10
+  }
+}

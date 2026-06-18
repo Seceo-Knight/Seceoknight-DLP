@@ -170,6 +170,10 @@ models/checkpoints/
 !tsconfig.app.json
 !vite.config.ts
 !vite.config.js
+!server/data/*.json
+!agents/endpoint/linux/agent_config.json
+!dashboard/.dockerignore
+!server/.dockerignore
 *.parquet
 *.feather
 

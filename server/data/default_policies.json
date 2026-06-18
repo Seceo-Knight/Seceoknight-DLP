@@ -1,0 +1,129 @@
+[
+  {
+    "name": "Block Restricted Data on USB",
+    "description": "Blocks file transfers to USB drives when content is classified as Restricted (confidence >= 80%)",
+    "enabled": true,
+    "priority": 100,
+    "type": "usb_file_transfer_monitoring",
+    "severity": "critical",
+    "config": {
+      "description": "Block highly sensitive data from being copied to USB drives"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "classification_level",
+          "operator": "equals",
+          "value": "Restricted"
+        },
+        {
+          "field": "destination_type",
+          "operator": "equals",
+          "value": "removable_drive"
+        }
+      ]
+    },
+    "actions": {
+      "block": {},
+      "alert": {
+        "severity": "critical"
+      }
+    }
+  },
+  {
+    "name": "Block Confidential Data on USB",
+    "description": "Blocks file transfers to USB drives when content is classified as Confidential (confidence >= 60%)",
+    "enabled": true,
+    "priority": 90,
+    "type": "usb_file_transfer_monitoring",
+    "severity": "high",
+    "config": {
+      "description": "Block confidential data from being copied to USB drives"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "classification_level",
+          "operator": "in",
+          "value": ["Confidential", "Restricted"]
+        },
+        {
+          "field": "destination_type",
+          "operator": "equals",
+          "value": "removable_drive"
+        }
+      ]
+    },
+    "actions": {
+      "block": {},
+      "alert": {
+        "severity": "high"
+      }
+    }
+  },
+  {
+    "name": "Alert on Internal Data USB Transfer",
+    "description": "Generates alert when Internal-classified data is transferred to USB (does not block)",
+    "enabled": true,
+    "priority": 50,
+    "type": "usb_file_transfer_monitoring",
+    "severity": "medium",
+    "config": {
+      "description": "Alert when internal data is copied to USB drives"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "classification_level",
+          "operator": "equals",
+          "value": "Internal"
+        },
+        {
+          "field": "destination_type",
+          "operator": "equals",
+          "value": "removable_drive"
+        }
+      ]
+    },
+    "actions": {
+      "alert": {
+        "severity": "medium"
+      }
+    }
+  },
+  {
+    "name": "Block High-Confidence Sensitive USB Transfers",
+    "description": "Blocks any USB transfer where classification confidence score exceeds 50%",
+    "enabled": true,
+    "priority": 80,
+    "type": "usb_file_transfer_monitoring",
+    "severity": "high",
+    "config": {
+      "description": "Block USB transfers with high classification confidence regardless of level"
+    },
+    "conditions": {
+      "match": "all",
+      "rules": [
+        {
+          "field": "confidence_score",
+          "operator": ">=",
+          "value": 0.5
+        },
+        {
+          "field": "destination_type",
+          "operator": "equals",
+          "value": "removable_drive"
+        }
+      ]
+    },
+    "actions": {
+      "block": {},
+      "alert": {
+        "severity": "high"
+      }
+    }
+  }
+]

@@ -1,0 +1,492 @@
+[
+  {
+    "name": "US Social Security Number (SSN)",
+    "description": "Detects US Social Security Numbers in XXX-XX-XXXX format",
+    "type": "regex",
+    "pattern": "\\b\\d{3}-\\d{2}-\\d{4}\\b",
+    "threshold": 1,
+    "weight": 0.9,
+    "priority": 10,
+    "label": "Restricted",
+    "classification_labels": [
+      "PII",
+      "SSN"
+    ],
+    "severity": "critical",
+    "category": "PII",
+    "tags": [
+      "us",
+      "government_id"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Credit Card Number",
+    "description": "Detects credit card numbers (Visa, MasterCard, Amex, Discover)",
+    "type": "regex",
+    "pattern": "\\b(?:\\d{4}[\\s-]?){3}\\d{4}\\b",
+    "threshold": 1,
+    "weight": 0.95,
+    "priority": 5,
+    "label": "Restricted",
+    "classification_labels": [
+      "PCI",
+      "FINANCIAL",
+      "CREDIT_CARD"
+    ],
+    "severity": "critical",
+    "category": "Financial",
+    "tags": [
+      "pci-dss",
+      "payment"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Email Address",
+    "description": "Detects email addresses",
+    "type": "regex",
+    "pattern": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b",
+    "threshold": 1,
+    "weight": 0.3,
+    "priority": 80,
+    "label": "Internal",
+    "classification_labels": [
+      "CONTACT",
+      "EMAIL"
+    ],
+    "severity": "medium",
+    "category": "PII",
+    "tags": [
+      "contact"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "US Phone Number",
+    "description": "Detects US phone numbers in various formats",
+    "type": "regex",
+    "pattern": "\\b(?:\\+?1[\\s.-]?)?\\(?\\d{3}\\)?[\\s.-]?\\d{3}[\\s.-]?\\d{4}\\b",
+    "threshold": 1,
+    "weight": 0.4,
+    "priority": 70,
+    "label": "Internal",
+    "classification_labels": [
+      "CONTACT",
+      "PHONE"
+    ],
+    "severity": "medium",
+    "category": "PII",
+    "tags": [
+      "contact"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Indian Aadhaar Number",
+    "description": "Detects Indian Aadhaar numbers (12-digit UID)",
+    "type": "regex",
+    "pattern": "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b",
+    "threshold": 1,
+    "weight": 0.9,
+    "priority": 10,
+    "label": "Restricted",
+    "classification_labels": [
+      "PII",
+      "AADHAAR",
+      "INDIAN_ID"
+    ],
+    "severity": "critical",
+    "category": "PII",
+    "tags": [
+      "india",
+      "government_id"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Indian PAN Card",
+    "description": "Detects Indian Permanent Account Number (PAN)",
+    "type": "regex",
+    "pattern": "\\b[A-Z]{5}\\d{4}[A-Z]{1}\\b",
+    "threshold": 1,
+    "weight": 0.9,
+    "priority": 10,
+    "label": "Restricted",
+    "classification_labels": [
+      "TAX",
+      "PAN",
+      "INDIAN_ID"
+    ],
+    "severity": "critical",
+    "category": "Financial",
+    "tags": [
+      "india",
+      "tax"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Indian IFSC Code",
+    "description": "Detects Indian IFSC (bank branch) codes",
+    "type": "regex",
+    "pattern": "\\b[A-Z]{4}0[A-Z0-9]{6}\\b",
+    "threshold": 1,
+    "weight": 0.7,
+    "priority": 30,
+    "label": "Confidential",
+    "classification_labels": [
+      "BANKING",
+      "IFSC"
+    ],
+    "severity": "high",
+    "category": "Financial",
+    "tags": [
+      "india",
+      "banking"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Indian Mobile Number",
+    "description": "Detects Indian mobile numbers",
+    "type": "regex",
+    "pattern": "\\b(?:\\+91|91|0)?[6-9]\\d{9}\\b",
+    "threshold": 1,
+    "weight": 0.4,
+    "priority": 70,
+    "label": "Internal",
+    "classification_labels": [
+      "CONTACT",
+      "PHONE"
+    ],
+    "severity": "medium",
+    "category": "PII",
+    "tags": [
+      "india",
+      "contact"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "UPI ID",
+    "description": "Detects Indian UPI payment IDs",
+    "type": "regex",
+    "pattern": "\\b[\\w.-]+@(paytm|phonepe|ybl|okaxis|okhdfcbank|oksbi|okicici|axl|ibl|fbl|airtel|amazonpay)\\b",
+    "regex_flags": [
+      "IGNORECASE"
+    ],
+    "threshold": 1,
+    "weight": 0.7,
+    "priority": 30,
+    "label": "Confidential",
+    "classification_labels": [
+      "PAYMENT",
+      "UPI"
+    ],
+    "severity": "high",
+    "category": "Financial",
+    "tags": [
+      "india",
+      "payment",
+      "upi"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "IP Address (IPv4)",
+    "description": "Detects IPv4 addresses",
+    "type": "regex",
+    "pattern": "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b",
+    "threshold": 1,
+    "weight": 0.3,
+    "priority": 90,
+    "label": "Public",
+    "classification_labels": [
+      "NETWORK",
+      "IP_ADDRESS"
+    ],
+    "severity": "low",
+    "category": "Network",
+    "tags": [
+      "network"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "AWS Access Key",
+    "description": "Detects AWS access keys",
+    "type": "regex",
+    "pattern": "\\b(AKIA[0-9A-Z]{16})\\b",
+    "threshold": 1,
+    "weight": 0.95,
+    "priority": 5,
+    "label": "Restricted",
+    "classification_labels": [
+      "CREDENTIAL",
+      "AWS",
+      "API_KEY"
+    ],
+    "severity": "critical",
+    "category": "Credentials",
+    "tags": [
+      "aws",
+      "cloud",
+      "secrets"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "GitHub Personal Access Token",
+    "description": "Detects GitHub personal access tokens",
+    "type": "regex",
+    "pattern": "\\b(ghp_[A-Za-z0-9]{36})\\b",
+    "threshold": 1,
+    "weight": 0.95,
+    "priority": 5,
+    "label": "Restricted",
+    "classification_labels": [
+      "CREDENTIAL",
+      "GITHUB",
+      "API_KEY"
+    ],
+    "severity": "critical",
+    "category": "Credentials",
+    "tags": [
+      "github",
+      "secrets"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Generic API Key",
+    "description": "Detects generic API keys in code",
+    "type": "regex",
+    "pattern": "(?i)(api[_-]?key|apikey|access[_-]?token)[\"']?\\s*[:=]\\s*[\"']?([a-zA-Z0-9_\\-]{32,})[\"']?",
+    "threshold": 1,
+    "weight": 0.8,
+    "priority": 20,
+    "label": "Restricted",
+    "classification_labels": [
+      "CREDENTIAL",
+      "API_KEY"
+    ],
+    "severity": "high",
+    "category": "Credentials",
+    "tags": [
+      "secrets"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Database Connection String",
+    "description": "Detects database connection strings",
+    "type": "regex",
+    "pattern": "(jdbc:(mysql|postgresql|oracle|sqlserver)://|mongodb://|mongodb\\+srv://|redis://|rediss://)",
+    "regex_flags": [
+      "IGNORECASE"
+    ],
+    "threshold": 1,
+    "weight": 0.85,
+    "priority": 15,
+    "label": "Restricted",
+    "classification_labels": [
+      "CREDENTIAL",
+      "DATABASE",
+      "CONNECTION_STRING"
+    ],
+    "severity": "critical",
+    "category": "Credentials",
+    "tags": [
+      "database",
+      "secrets"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Private Key Header",
+    "description": "Detects RSA/SSH private key headers",
+    "type": "regex",
+    "pattern": "-----BEGIN (RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----",
+    "threshold": 1,
+    "weight": 0.95,
+    "priority": 5,
+    "label": "Restricted",
+    "classification_labels": [
+      "CREDENTIAL",
+      "PRIVATE_KEY",
+      "ENCRYPTION"
+    ],
+    "severity": "critical",
+    "category": "Credentials",
+    "tags": [
+      "ssh",
+      "rsa",
+      "encryption",
+      "secrets"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Confidential Document Markers",
+    "description": "Detects document classification markers",
+    "type": "keyword",
+    "keywords": [
+      "CONFIDENTIAL",
+      "SECRET",
+      "RESTRICTED",
+      "INTERNAL USE ONLY",
+      "PROPRIETARY",
+      "DO NOT DISTRIBUTE"
+    ],
+    "case_sensitive": false,
+    "threshold": 1,
+    "weight": 0.7,
+    "priority": 25,
+    "label": "Confidential",
+    "classification_labels": [
+      "DOCUMENT_CLASSIFICATION",
+      "CONFIDENTIAL"
+    ],
+    "severity": "high",
+    "category": "Classification",
+    "tags": [
+      "document"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Financial Terms",
+    "description": "Detects financial-related keywords",
+    "type": "keyword",
+    "keywords": [
+      "salary",
+      "compensation",
+      "revenue",
+      "profit",
+      "loss",
+      "financial statement",
+      "balance sheet",
+      "invoice",
+      "payment",
+      "budget",
+      "forecast"
+    ],
+    "case_sensitive": false,
+    "threshold": 1,
+    "weight": 0.5,
+    "priority": 50,
+    "label": "Internal",
+    "classification_labels": [
+      "FINANCIAL",
+      "BUSINESS"
+    ],
+    "severity": "medium",
+    "category": "Financial",
+    "tags": [
+      "business"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Medical Terms",
+    "description": "Detects healthcare/medical terminology",
+    "type": "keyword",
+    "keywords": [
+      "patient",
+      "diagnosis",
+      "prescription",
+      "medical record",
+      "treatment",
+      "symptoms",
+      "condition",
+      "hospital",
+      "clinic",
+      "doctor",
+      "physician"
+    ],
+    "case_sensitive": false,
+    "threshold": 1,
+    "weight": 0.6,
+    "priority": 40,
+    "label": "Confidential",
+    "classification_labels": [
+      "HEALTHCARE",
+      "HIPAA",
+      "MEDICAL"
+    ],
+    "severity": "high",
+    "category": "Healthcare",
+    "tags": [
+      "hipaa",
+      "medical"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Legal Terms",
+    "description": "Detects legal-related keywords",
+    "type": "keyword",
+    "keywords": [
+      "attorney-client privilege",
+      "confidential communication",
+      "settlement agreement",
+      "non-disclosure",
+      "contract",
+      "lawsuit",
+      "litigation",
+      "defendant",
+      "plaintiff"
+    ],
+    "case_sensitive": false,
+    "threshold": 2,
+    "weight": 0.6,
+    "priority": 40,
+    "label": "Confidential",
+    "classification_labels": [
+      "LEGAL",
+      "PRIVILEGED"
+    ],
+    "severity": "high",
+    "category": "Legal",
+    "tags": [
+      "legal"
+    ],
+    "enabled": true
+  },
+  {
+    "name": "Source Code Indicators",
+    "description": "Detects source code patterns",
+    "type": "keyword",
+    "keywords": [
+      "function",
+      "class",
+      "import",
+      "export",
+      "const",
+      "let",
+      "var",
+      "def",
+      "public",
+      "private",
+      "protected",
+      "static"
+    ],
+    "case_sensitive": true,
+    "threshold": 5,
+    "weight": 0.4,
+    "priority": 60,
+    "label": "Internal",
+    "classification_labels": [
+      "SOURCE_CODE",
+      "INTELLECTUAL_PROPERTY"
+    ],
+    "severity": "medium",
+    "category": "Source Code",
+    "tags": [
+      "code",
+      "ip"
+    ],
+    "enabled": true
+  }
+]
