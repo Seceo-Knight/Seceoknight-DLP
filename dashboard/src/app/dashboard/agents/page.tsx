@@ -55,7 +55,7 @@ export default function AgentsPage() {
 
 $AgentName = "${name}"
 $ServerIP = "${serverIp}"
-$DownloadURL = "http://${serverIp}:8000/api/v1/agents/download/windows"
+$DownloadURL = "https://${serverIp}/api/v1/agents/download/windows"
 
 Write-Host "Installing SeceoKnight DLP Agent..." -ForegroundColor Green
 Write-Host "Agent Name: $AgentName"
@@ -76,7 +76,7 @@ Write-Host "Agent will start automatically and connect to $ServerIP"`
 
 AGENT_NAME="${name}"
 SERVER_IP="${serverIp}"
-DOWNLOAD_URL="http://${serverIp}:8000/api/v1/agents/download/linux"
+DOWNLOAD_URL="https://${serverIp}/api/v1/agents/download/linux"
 
 echo "Installing SeceoKnight DLP Agent..."
 echo "Agent Name: $AGENT_NAME"

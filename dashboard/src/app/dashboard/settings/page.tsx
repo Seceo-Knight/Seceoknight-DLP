@@ -61,7 +61,7 @@ export default function SettingsPage() {
               </div>
               <div>
                 <label className="text-sm text-gray-400">Server IP Address</label>
-                <input type="text" value="10.220.143.130" className="w-full mt-2 px-4 py-2 bg-gray-900/50 border border-gray-600 rounded-lg text-white font-mono" />
+                <input type="text" defaultValue="Set in .env (SERVER_IP)" className="w-full mt-2 px-4 py-2 bg-gray-900/50 border border-gray-600 rounded-lg text-white font-mono" readOnly />
               </div>
               <div>
                 <label className="text-sm text-gray-400">Timezone</label>
