@@ -1,0 +1,34 @@
+[bandit]
+# Bandit security linter configuration
+
+# Test targets
+targets = app
+
+# Exclude paths
+exclude_dirs =
+    /tests
+    /migrations
+    /alembic
+    /.venv
+    /venv
+
+# Severity level (LOW, MEDIUM, HIGH)
+level = MEDIUM
+
+# Confidence level (LOW, MEDIUM, HIGH)
+confidence = MEDIUM
+
+# Tests to skip
+# B101: assert_used - We use asserts in tests
+# B601: paramiko_calls - We don't use paramiko
+# B603: subprocess_without_shell_equals_true - We carefully use subprocess
+skips = B101,B601
+
+# Tests to run (optional - run all by default)
+# tests = B201,B301,B302,B303,B304,B305,B306
+
+# Output format
+format = json
+
+# Output file
+output = bandit-report.json

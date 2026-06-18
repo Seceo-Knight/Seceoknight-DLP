@@ -1,0 +1,469 @@
+services:
+  # ── Nginx reverse proxy (SSL termination) ──────────────────────────────────
+  # All external traffic enters here. Manager and dashboard are NOT exposed
+  # directly to the host — only Nginx binds host ports 80 and 443.
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: seceoknight-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+      - ./certs/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
+      # certbot webroot for Let's Encrypt ACME challenge
+      - certbot_webroot:/var/www/certbot:ro
+    depends_on:
+      manager:
+        condition: service_healthy
+      dashboard:
+        condition: service_healthy
+    networks:
+      - seceoknight
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+        reservations:
+          memory: 32M
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t && pidof nginx >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # OpenSearch for event storage
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: seceoknight-opensearch
+    environment:
+      - cluster.name=seceoknight-cluster
+      - node.name=opensearch-node1
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g"
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD:?Set this password in .env file}
+      - DISABLE_SECURITY_PLUGIN=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    networks:
+      - seceoknight
+    # SECURITY: data tier is reachable only on the internal docker
+    # network. No host port binding — operators who need local ops
+    # access should use `docker compose exec` or bind to 127.0.0.1.
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+        reservations:
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "curl -k -u admin:${OPENSEARCH_PASSWORD:?Set this password in .env file} https://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # MongoDB for agent data
+  mongodb:
+    image: mongo:7.0
+    container_name: seceoknight-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGODB_PASSWORD:?Set this password in .env file}
+      MONGO_INITDB_DATABASE: seceoknight
+    volumes:
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+    networks:
+      - seceoknight
+    security_opt:
+      - no-new-privileges:true
+    # ports intentionally omitted — database tier is internal only
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2G
+        reservations:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # PostgreSQL for user data
+  postgres:
+    image: postgres:16-alpine
+    container_name: seceoknight-postgres
+    environment:
+      POSTGRES_USER: seceoknight
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set this password in .env file}
+      POSTGRES_DB: seceoknight
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - seceoknight
+    security_opt:
+      - no-new-privileges:true
+    # ports intentionally omitted — internal only
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seceoknight"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: seceoknight-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:?Set this password in .env file} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - seceoknight
+    security_opt:
+      - no-new-privileges:true
+    # ports intentionally omitted — internal only
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?Set this password in .env file}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Manager API
+  manager:
+    image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-manager:latest
+    container_name: seceoknight-manager
+    environment:
+      # Server
+      - PORT=55000
+      - WORKERS=4
+      - VERSION=2.0.0
+
+      # OpenSearch
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_PORT=9200
+      - OPENSEARCH_USER=admin
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?Set this password in .env file}
+      - OPENSEARCH_USE_SSL=true
+      - OPENSEARCH_VERIFY_CERTS=false
+      - OPENSEARCH_INDEX_PREFIX=seceoknight
+
+      # MongoDB
+      - MONGODB_HOST=mongodb
+      - MONGODB_PORT=27017
+      - MONGODB_USER=admin
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:?Set this password in .env file}
+      - MONGODB_DB=seceoknight
+
+      # PostgreSQL
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=seceoknight
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set this password in .env file}
+      - POSTGRES_DB=seceoknight
+
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?Set this password in .env file}
+
+      # JWT & Security
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env file (min 32 chars)}
+      - JWT_SECRET=${JWT_SECRET:?Set SECRET_KEY in .env file (min 32 chars)}
+      - JWT_ALGORITHM=HS256
+      - JWT_EXPIRATION=3600
+
+      # CORS — explicit allowlist only. No wildcard default.
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set (JSON list of allowed origins)}
+
+      # Timezone (display only — storage is always UTC)
+      - APP_TIMEZONE=${APP_TIMEZONE:-UTC}
+
+      # SSO shared secret for SIEM integration (empty = SSO disabled)
+      - DLP_SSO_SECRET=${DLP_SSO_SECRET:-}
+
+      # OneDrive OAuth (optional)
+      - ONEDRIVE_CLIENT_ID=${ONEDRIVE_CLIENT_ID:-}
+      - ONEDRIVE_CLIENT_SECRET=${ONEDRIVE_CLIENT_SECRET:-}
+      - ONEDRIVE_REDIRECT_URI=${ONEDRIVE_REDIRECT_URI:-}
+      - ONEDRIVE_TENANT_ID=${ONEDRIVE_TENANT_ID:-common}
+    volumes:
+      - ./config:/etc/seceoknight:ro
+      - ./server/logs:/var/log/seceoknight
+      - ./quarantine:/app/quarantine
+    # No host port binding — manager is reachable only via Nginx on :443.
+    # Agents connect to https://<your-domain>/api/v1 — not :55000 directly.
+    expose:
+      - "55000"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - seceoknight
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:55000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # Dashboard
+  dashboard:
+    image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-dashboard:latest
+    container_name: seceoknight-dashboard
+    # No host port binding — dashboard is served via Nginx on :443.
+    # Access it at https://<your-domain>/
+    expose:
+      - "3000"
+    volumes:
+      # Mount TLS certificates as read-only so a future nginx-ssl.conf
+      # can pick them up. The bind mount must resolve — install.sh
+      # generates a self-signed pair if the operator hasn't provided
+      # real ones.
+      - ${TLS_CERT_PATH:-./certs}/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+      - ${TLS_CERT_PATH:-./certs}/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
+    depends_on:
+      - manager
+    networks:
+      - seceoknight
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          memory: 64M
+    healthcheck:
+      # Bulletproof healthcheck for nginx:alpine running as the
+      # unprivileged `nginx` user: check that the nginx master process
+      # is alive via `pidof`, a BusyBox applet that always exists in
+      # Alpine. No network round-trip, no permission quirks, no
+      # dependency on curl/wget command availability. If the nginx
+      # master dies, the container is marked unhealthy.
+      test: ["CMD-SHELL", "pidof nginx >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  # Celery Worker
+  celery-worker:
+    image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-manager:latest
+    container_name: seceoknight-celery-worker
+    command: celery -A app.tasks worker --loglevel=info --concurrency=4
+    environment:
+      # OpenSearch
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_PORT=9200
+      - OPENSEARCH_USER=admin
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?Set this password in .env file}
+      - OPENSEARCH_USE_SSL=true
+      - OPENSEARCH_VERIFY_CERTS=false
+
+      # MongoDB
+      - MONGODB_HOST=mongodb
+      - MONGODB_PORT=27017
+      - MONGODB_USER=admin
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:?Set this password in .env file}
+      - MONGODB_DB=seceoknight
+
+      # PostgreSQL
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=seceoknight
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set this password in .env file}
+      - POSTGRES_DB=seceoknight
+
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?Set this password in .env file}
+
+      # JWT & Security
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env file (min 32 chars)}
+      - JWT_SECRET=${JWT_SECRET:?Set SECRET_KEY in .env file (min 32 chars)}
+
+      # CORS — celery-worker imports the same Settings class as the
+      # manager, so it also needs this. Without it, pydantic-settings
+      # raises ValidationError on startup and the worker exits with
+      # code 2 and keeps restarting.
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set (JSON list of allowed origins)}
+    volumes:
+      - ./server/logs:/var/log/seceoknight
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      manager:
+        condition: service_healthy
+    networks:
+      - seceoknight
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+        reservations:
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks inspect ping -d celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Celery Beat (Scheduler)
+  celery-beat:
+    image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-manager:latest
+    container_name: seceoknight-celery-beat
+    # --pidfile and --schedule both point at /tmp which is always
+    # writable by any container user. Previously beat tried to write
+    # the schedule file to its CWD (/app) under the unprivileged
+    # dlpuser and the healthcheck was polling for a pidfile beat
+    # never created — both silent failure modes.
+    command: >-
+      celery -A app.tasks beat --loglevel=info
+      --pidfile=/tmp/celerybeat.pid
+      --schedule=/tmp/celerybeat-schedule
+    environment:
+      # OpenSearch — celery-beat imports the full Settings class via
+      # `from app.core.config import settings`, which requires every
+      # mandatory field to be present at import time. Without these
+      # five OPENSEARCH_* vars, pydantic raises ValidationError and
+      # beat exits code 2 in a restart loop.
+      - OPENSEARCH_HOST=opensearch
+      - OPENSEARCH_PORT=9200
+      - OPENSEARCH_USER=admin
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?Set this password in .env file}
+      - OPENSEARCH_USE_SSL=true
+      - OPENSEARCH_VERIFY_CERTS=false
+
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?Set this password in .env file}
+
+      # PostgreSQL
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=seceoknight
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set this password in .env file}
+      - POSTGRES_DB=seceoknight
+
+      # MongoDB
+      - MONGODB_HOST=mongodb
+      - MONGODB_PORT=27017
+      - MONGODB_USER=admin
+      - MONGODB_PASSWORD=${MONGODB_PASSWORD:?Set this password in .env file}
+      - MONGODB_DB=seceoknight
+
+      # JWT & Security
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env file (min 32 chars)}
+      - JWT_SECRET=${JWT_SECRET:?Set SECRET_KEY in .env file (min 32 chars)}
+
+      # CORS — celery-beat imports the same Settings class (see note
+      # on celery-worker above). Required to avoid startup crash loop.
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set (JSON list of allowed origins)}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - seceoknight
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/celerybeat.pid"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+networks:
+  seceoknight:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  opensearch_data:
+    driver: local
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  # Shared volume for Let's Encrypt ACME challenge files (certbot webroot method)
+  certbot_webroot:
+    driver: local

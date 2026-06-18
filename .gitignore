@@ -1,0 +1,233 @@
+# Local-only documentation (not pushed to GitHub)
+login_details.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+# Anchor to repo root — these patterns are Python build artefacts
+# (distutils/setuptools), so root-anchoring stops them from also
+# eating frontend source dirs like dashboard/src/lib/.
+/lib/
+/lib64/
+/parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+cython_debug/
+
+# Virtual Environments
+venv/
+ENV/
+env/
+.venv
+.env
+.venv/
+env.bak/
+venv.bak/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Docker
+docker-compose.override.yml
+.dockerignore
+
+# Node.js (for dashboard)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+pids
+*.pid
+*.seed
+*.pid.lock
+.npm
+.yarn-integrity
+.cache
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+.nuxt/
+
+# Testing
+coverage/
+.nyc_output/
+*.cover
+*.coverage
+.hypothesis/
+htmlcov/
+.tox/
+.nox/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+.tmp/
+temp/
+tmp/
+
+# Security & Secrets
+*.pem
+*.key
+*.cert
+*.crt
+*.csr
+*.p12
+*.pfx
+secrets/
+credentials/
+.secrets/
+
+# ML Models
+*.h5
+*.pkl
+*.joblib
+*.model
+models/checkpoints/
+*.ckpt
+*.pth
+*.pt
+
+# Data files
+*.csv
+*.xlsx
+*.xls
+*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.node.json
+!tsconfig.app.json
+!vite.config.ts
+!vite.config.js
+*.parquet
+*.feather
+
+# Documentation builds
+docs/_build/
+site/
+
+# Project specific
+openapi.json
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.cover
+celerybeat-schedule
+celerybeat.pid
+
+# Ignore all markdown temporary files
+*.md.tmp.*
+
+# Ignore test/debug scripts only — keep install.sh and scripts/
+test_*.ps1
+verify_*.ps1
+check_*.ps1
+quick_test.ps1
+final_test.ps1
+manual_*.ps1
+FIX_*.sh
+fix_*.sh
+
+# Ignore analysis and status files
+*_ANALYSIS.md
+*_STATUS*.md
+*_FIX.md
+QUICK_FIX_COMMANDS.txt
+ARCHITECTURE.md
+CURRENT_STATUS*.md
+DASHBOARD_FIX.md
+INSTALLATION_COMPLETE.md
+FIX_*.sh
+
+# Ignore backup directories
+backend/
+cybersentinel-dlp-agent-windows/
+cybersentinel-dlp-server/
+
+# Redis dumps
+dump.rdb
+
+# Local settings
+.claude/settings.local.json.tmp.*
+
+# Git merge files
+*.orig
+
+# Cursor IDE
+
+
+# Claude Code local settings
+.claude/
+.cursor/

@@ -1,0 +1,72 @@
+name: CI - Code Quality
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  code-quality:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'server/requirements.txt'
+
+      - name: Install dependencies
+        working-directory: ./server
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 black
+
+      - name: Run Python syntax check
+        working-directory: ./server
+        run: |
+          python -m compileall -q app/ || exit 1
+          echo "✅ All Python files compiled successfully"
+
+      - name: Check code formatting (Black)
+        working-directory: ./server
+        run: |
+          black --check app/ || echo "⚠️ Code formatting issues found (non-blocking)"
+        continue-on-error: true
+
+      - name: Run linting (Flake8)
+        working-directory: ./server
+        run: |
+          flake8 app/ --max-line-length=120 --extend-ignore=E203,W503,E501 --exclude=__pycache__ || echo "⚠️ Linting issues found (non-blocking)"
+        continue-on-error: true
+
+      - name: Verify project structure
+        run: |
+          echo "Checking project structure..."
+          test -d server/app || (echo "❌ Missing server/app directory" && exit 1)
+          test -d agents/endpoint || (echo "❌ Missing agents/endpoint directory" && exit 1)
+          test -f docker-compose.prod.yml || (echo "❌ Missing docker-compose.prod.yml" && exit 1)
+          test -f README.md || (echo "❌ Missing README.md" && exit 1)
+          echo "✅ Project structure verified"
+
+      - name: Check agent files
+        run: |
+          python -m compileall -q agents/endpoint/linux/ || exit 1
+          echo "✅ All agent files compiled successfully"
+
+      - name: Summary
+        run: |
+          echo "========================================="
+          echo "✅ CI Pipeline Completed Successfully"
+          echo "========================================="
+          echo "✅ Python syntax validation passed"
+          echo "✅ Project structure verified"
+          echo "✅ Agent files validated"
+          echo "========================================="

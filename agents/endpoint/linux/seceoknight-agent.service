@@ -1,0 +1,19 @@
+[Unit]
+Description=SeceoKnight DLP Agent
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/seceoknight/agent
+ExecStart=/usr/bin/python3 /opt/seceoknight/agent/agent.py
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=seceoknight-agent
+
+[Install]
+WantedBy=multi-user.target

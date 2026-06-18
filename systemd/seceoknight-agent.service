@@ -1,0 +1,37 @@
+[Unit]
+Description=SeceoKnight DLP Linux Agent
+Documentation=https://github.com/Seceo-Knight/Seceoknight-DLP
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/seceoknight/agent
+
+# Set your server IP/domain here — or override via environment file
+Environment="SECEOKNIGHT_SERVER_URL=https://YOUR_SERVER_IP/api/v1"
+# Uncomment and point to an env file if you prefer:
+# EnvironmentFile=/etc/seceoknight/agent.env
+
+ExecStart=/usr/bin/python3 /opt/seceoknight/agent/agent.py
+
+# Restart on failure
+Restart=on-failure
+RestartSec=15
+StartLimitInterval=200
+StartLimitBurst=5
+
+# Security hardening
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/seceoknight/agent /var/log/seceoknight /opt/seceoknight/quarantine
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=seceoknight-agent
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+# SeceoKnight DLP Agent Requirements
+# Python 3.8+
+
+# Core dependencies
+structlog==24.1.0
+aiohttp==3.9.1
+
+# File monitoring (cross-platform)
+watchdog==3.0.0
+
+# Windows-specific (only needed on Windows)
+pywin32==306; sys_platform == 'win32'
+WMI==1.5.1; sys_platform == 'win32'
+
+# Linux-specific (only needed on Linux)
+pyinotify==0.9.6; sys_platform == 'linux'
+python-xlib==0.33; sys_platform == 'linux'
+pyudev==0.24.1; sys_platform == 'linux'

@@ -1,0 +1,658 @@
+/*
+ * ── Obsidian Vault Theme (v2 — high-contrast) ─────────────────────────
+ * Pure visual override. Loaded AFTER index.css so its rules win the
+ * cascade. No HTML/markup changes.
+ *
+ * Visibility rules (from spec):
+ *   1. NO blue/purple body text — primary text is platinum-white #E8E8F0.
+ *   2. Sidebar inactive nav text is bright (#A0A0B8), active text fully
+ *      bright (#E8E8F0) with a 3px indigo left border.
+ *   3. Indigo (#5B7EFF) is reserved for accents, icons, active borders,
+ *      links — never for large blocks of body text.
+ *   4. Status colors (red/orange/teal) are saturated for clear severity
+ *      signaling on the void background.
+ */
+
+:root {
+  /* Backgrounds */
+  --obsidian-bg-primary: #0A0A0D;
+  --obsidian-bg-secondary: #111118;
+  --obsidian-bg-tertiary: #1E1E2E;
+  --obsidian-bg-hover: #16161F;
+
+  /* Text — bright for high contrast (>= WCAG AAA on bg-primary) */
+  --obsidian-text-primary: #E8E8F0;     /* 15.5:1 on #0A0A0D  */
+  --obsidian-text-secondary: #A0A0B8;   /*  8.2:1 on #0A0A0D  */
+  --obsidian-text-tertiary: #606080;    /*  3.6:1 (AA only)   */
+  --obsidian-text-disabled: #404050;
+
+  /* Indigo accent — used for icons, links, focus rings, active markers */
+  --obsidian-accent: #5B7EFF;
+  --obsidian-accent-light: #7B9EFF;
+  --obsidian-accent-dark: #4A6FE0;
+
+  /* Status colors — saturated for severity-first design */
+  --obsidian-success: #2DD4BF;
+  --obsidian-critical: #F87171;
+  --obsidian-warning: #FB923C;
+  --obsidian-info: #5B7EFF;
+
+  /* Severity-tinted badge surfaces */
+  --obsidian-badge-success-bg: #1A3D35;
+  --obsidian-badge-critical-bg: #3D2628;
+  --obsidian-badge-warning-bg: #3D2A18;
+  --obsidian-badge-info-bg: #1E1E3E;
+  --obsidian-badge-neutral-bg: #1E1E2E;
+
+  /* Severity left-border tint for alert cards */
+  --obsidian-alert-critical-edge: #2A1428;
+  --obsidian-alert-warning-edge: #251810;
+  --obsidian-alert-info-edge: #1E1E3E;
+
+  --obsidian-border: #1E1E2E;
+
+  color-scheme: dark;
+}
+
+/* ── Page canvas ─────────────────────────────────────────────────── */
+html, body, #root {
+  background-color: var(--obsidian-bg-primary) !important;
+  color: var(--obsidian-text-primary) !important;
+}
+
+::selection {
+  background: rgba(91, 126, 255, 0.35);
+  color: var(--obsidian-text-primary);
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────── */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--obsidian-text-disabled);
+  border-radius: 0;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--obsidian-accent);
+}
+* {
+  scrollbar-color: var(--obsidian-text-disabled) transparent;
+  scrollbar-width: thin;
+}
+
+/* ── Tailwind utility overrides ──────────────────────────────────── */
+/* Backgrounds: collapse the gray ladder into 3 obsidian surfaces.    */
+.bg-white,
+.bg-gray-50 {
+  background-color: var(--obsidian-bg-secondary) !important;
+}
+.bg-gray-100,
+.bg-gray-200 {
+  background-color: var(--obsidian-bg-tertiary) !important;
+}
+.bg-gray-700,
+.bg-gray-800,
+.bg-gray-900 {
+  background-color: var(--obsidian-bg-primary) !important;
+}
+.hover\:bg-gray-50:hover,
+.hover\:bg-gray-100:hover {
+  background-color: var(--obsidian-bg-hover) !important;
+}
+.hover\:bg-gray-200:hover,
+.hover\:bg-gray-300:hover {
+  background-color: var(--obsidian-bg-tertiary) !important;
+}
+
+/* Text colors — collapse the gray ladder into 3 BRIGHT obsidian tiers.
+   Critical: text-gray-700/800/900 -> #E8E8F0 (bright white, NOT blue). */
+.text-gray-900,
+.text-gray-800,
+.text-gray-700 {
+  color: var(--obsidian-text-primary) !important;
+}
+.text-gray-600,
+.text-gray-500,
+.text-gray-400,
+.text-gray-300 {
+  color: var(--obsidian-text-secondary) !important;
+}
+.text-gray-200,
+.text-gray-100 {
+  color: var(--obsidian-text-tertiary) !important;
+}
+
+/* `text-white` SHOULD stay white most of the time, but inside surface
+   contexts (e.g. inside cards over the void) we want our exact platinum.
+   Tailwind's text-white compiles to rgb(255 255 255 / var(--tw-text-opacity)).
+   Re-pinning to #E8E8F0 lands closer to spec without breaking anything. */
+.text-white {
+  color: var(--obsidian-text-primary) !important;
+}
+
+/* Borders */
+.border-gray-100,
+.border-gray-200,
+.border-gray-300,
+.border-gray-700,
+.border-gray-800,
+.border-gray-900 {
+  border-color: var(--obsidian-border) !important;
+}
+.divide-gray-100 > :not([hidden]) ~ :not([hidden]),
+.divide-gray-200 > :not([hidden]) ~ :not([hidden]),
+.divide-gray-300 > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--obsidian-border) !important;
+}
+
+/* Severity-tinted backgrounds */
+.bg-green-50, .bg-green-100, .bg-emerald-50, .bg-emerald-100 {
+  background-color: var(--obsidian-badge-success-bg) !important;
+}
+.bg-red-50, .bg-red-100, .bg-rose-50, .bg-rose-100 {
+  background-color: var(--obsidian-badge-critical-bg) !important;
+}
+.bg-yellow-50, .bg-yellow-100, .bg-amber-50, .bg-amber-100,
+.bg-orange-50, .bg-orange-100 {
+  background-color: var(--obsidian-badge-warning-bg) !important;
+}
+.bg-blue-50, .bg-blue-100, .bg-indigo-50, .bg-indigo-100,
+.bg-sky-50, .bg-sky-100 {
+  background-color: var(--obsidian-badge-info-bg) !important;
+}
+
+/* Severity text — anchored to exact spec hex */
+.text-green-600, .text-green-700, .text-green-800,
+.text-emerald-600, .text-emerald-700, .text-emerald-800 {
+  color: var(--obsidian-success) !important;
+}
+.text-red-600, .text-red-700, .text-red-800,
+.text-rose-600, .text-rose-700, .text-rose-800 {
+  color: var(--obsidian-critical) !important;
+}
+.text-yellow-600, .text-yellow-700, .text-yellow-800,
+.text-amber-600, .text-amber-700, .text-amber-800,
+.text-orange-600, .text-orange-700, .text-orange-800 {
+  color: var(--obsidian-warning) !important;
+}
+.text-blue-600, .text-blue-700, .text-blue-800,
+.text-indigo-600, .text-indigo-700, .text-indigo-800,
+.text-sky-600, .text-sky-700, .text-sky-800 {
+  color: var(--obsidian-accent) !important;
+}
+
+/* Brand bg-{color}-600 (button fills) — re-pin to obsidian palette */
+.bg-blue-500, .bg-blue-600, .bg-blue-700,
+.bg-indigo-500, .bg-indigo-600, .bg-indigo-700,
+.bg-sky-500, .bg-sky-600, .bg-sky-700,
+.bg-primary-500, .bg-primary-600, .bg-primary-700 {
+  background-color: var(--obsidian-accent) !important;
+}
+.hover\:bg-blue-700:hover,
+.hover\:bg-indigo-700:hover,
+.hover\:bg-primary-700:hover {
+  background-color: var(--obsidian-accent-light) !important;
+}
+.bg-red-500, .bg-red-600, .bg-red-700,
+.bg-rose-500, .bg-rose-600, .bg-rose-700 {
+  background-color: var(--obsidian-critical) !important;
+}
+.bg-green-500, .bg-green-600, .bg-green-700,
+.bg-emerald-500, .bg-emerald-600, .bg-emerald-700 {
+  background-color: var(--obsidian-success) !important;
+}
+.bg-yellow-500, .bg-yellow-600, .bg-amber-500, .bg-amber-600,
+.bg-orange-500, .bg-orange-600 {
+  background-color: var(--obsidian-warning) !important;
+}
+
+/* Status dots */
+.bg-green-400, .bg-green-500, .bg-emerald-400, .bg-emerald-500 {
+  background-color: var(--obsidian-success) !important;
+}
+.bg-red-400, .bg-red-500, .bg-rose-400, .bg-rose-500 {
+  background-color: var(--obsidian-critical) !important;
+}
+.bg-yellow-400, .bg-yellow-500, .bg-amber-400, .bg-amber-500,
+.bg-orange-400, .bg-orange-500 {
+  background-color: var(--obsidian-warning) !important;
+}
+
+/* Decorative gradients — flatten to surface */
+.bg-gradient-to-br,
+.bg-gradient-to-r,
+.bg-gradient-to-b,
+.bg-gradient-to-bl,
+.bg-gradient-to-l,
+.bg-gradient-to-tl,
+.bg-gradient-to-t,
+.bg-gradient-to-tr {
+  background-image: none !important;
+  background-color: var(--obsidian-bg-secondary) !important;
+}
+
+/* Gradient text — flatten and re-pin so labels stay readable */
+.bg-clip-text {
+  background-image: none !important;
+  -webkit-background-clip: initial !important;
+  background-clip: initial !important;
+  color: var(--obsidian-text-primary) !important;
+  -webkit-text-fill-color: var(--obsidian-text-primary) !important;
+}
+.text-gradient-indigo,
+.text-gradient-indigo * {
+  -webkit-text-fill-color: var(--obsidian-accent) !important;
+  color: var(--obsidian-accent) !important;
+}
+.text-gradient-red,
+.text-gradient-red * {
+  -webkit-text-fill-color: var(--obsidian-critical) !important;
+  color: var(--obsidian-critical) !important;
+}
+.text-gradient-orange,
+.text-gradient-orange * {
+  -webkit-text-fill-color: var(--obsidian-warning) !important;
+  color: var(--obsidian-warning) !important;
+}
+.text-gradient-green,
+.text-gradient-green * {
+  -webkit-text-fill-color: var(--obsidian-success) !important;
+  color: var(--obsidian-success) !important;
+}
+
+/* Drop shadows — depth comes from borders */
+.shadow,
+.shadow-sm,
+.shadow-md,
+.shadow-lg,
+.shadow-xl,
+.shadow-2xl,
+.hover\:shadow-lg:hover,
+.hover\:shadow-xl:hover,
+.hover\:shadow-2xl:hover {
+  box-shadow: none !important;
+}
+.stats-blob {
+  display: none !important;
+}
+
+/* ── Sidebar (component class lives in Sidebar.tsx) ──────────────── */
+/* Uses arbitrary Tailwind colors bg-[#1a1d1f] / bg-[#2a2d2f] which we
+   target via attribute selectors since they are emitted as escaped
+   class names in the compiled stylesheet. */
+aside.bg-\[\#1a1d1f\] {
+  background-color: var(--obsidian-bg-secondary) !important;
+  border-right: 0.5px solid var(--obsidian-border) !important;
+  color: var(--obsidian-text-secondary) !important;
+}
+.hover\:bg-\[\#2a2d2f\]:hover {
+  background-color: var(--obsidian-bg-tertiary) !important;
+  color: var(--obsidian-text-primary) !important;
+}
+
+/* Sidebar nav — bright text per spec.
+   Inactive: #A0A0B8. Hover: #E8E8F0. Active: #1E1E2E bg + #E8E8F0 text
+   + indigo left border + indigo icon. */
+aside nav a {
+  color: var(--obsidian-text-secondary) !important;
+}
+aside nav a:hover {
+  color: var(--obsidian-text-primary) !important;
+  background-color: var(--obsidian-bg-tertiary) !important;
+}
+/* Active nav (NavLink renders aria-current on the active anchor). */
+aside nav a[aria-current="page"] {
+  background-color: var(--obsidian-bg-tertiary) !important;
+  color: var(--obsidian-text-primary) !important;
+  border-left: 3px solid var(--obsidian-accent) !important;
+  padding-left: calc(0.75rem - 3px) !important;
+}
+aside nav a[aria-current="page"] svg {
+  color: var(--obsidian-accent) !important;
+}
+/* Sidebar logo title text */
+aside .text-xl {
+  color: var(--obsidian-text-primary) !important;
+}
+/* Sidebar footer (Version, copyright) */
+aside .text-gray-400 {
+  color: var(--obsidian-text-tertiary) !important;
+}
+
+/* ── Component-class overrides (defined in index.css) ────────────── */
+.card,
+.card-modern,
+.card-static {
+  background: var(--obsidian-bg-secondary) !important;
+  border: 0.5px solid var(--obsidian-border) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+  color: var(--obsidian-text-primary);
+}
+.card-modern:hover {
+  transform: none !important;
+  background: var(--obsidian-bg-hover) !important;
+  border-color: var(--obsidian-accent) !important;
+}
+
+/* Buttons — indigo accent only on borders/text, never as full fill
+   (per spec: "DO NOT apply accent color to entire elements") */
+.btn {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease !important;
+  border-radius: 6px !important;
+}
+.btn-primary {
+  background: var(--obsidian-bg-secondary) !important;
+  color: var(--obsidian-accent) !important;
+  border: 0.5px solid var(--obsidian-accent) !important;
+}
+.btn-primary:hover {
+  background: var(--obsidian-bg-tertiary) !important;
+  color: var(--obsidian-accent-light) !important;
+  border-color: var(--obsidian-accent-light) !important;
+}
+.btn-primary:active {
+  background: #2A2A4A !important;
+  color: var(--obsidian-accent) !important;
+}
+.btn-secondary {
+  background: var(--obsidian-bg-secondary) !important;
+  color: var(--obsidian-text-primary) !important;
+  border: 0.5px solid var(--obsidian-border) !important;
+}
+.btn-secondary:hover {
+  background: var(--obsidian-bg-tertiary) !important;
+  color: var(--obsidian-text-primary) !important;
+  border-color: var(--obsidian-accent) !important;
+}
+.btn-danger {
+  background: var(--obsidian-bg-secondary) !important;
+  color: var(--obsidian-critical) !important;
+  border: 0.5px solid var(--obsidian-critical) !important;
+}
+.btn-danger:hover {
+  background: var(--obsidian-badge-critical-bg) !important;
+  color: var(--obsidian-critical) !important;
+}
+
+/* Badges */
+.badge-success {
+  background: var(--obsidian-badge-success-bg) !important;
+  color: var(--obsidian-success) !important;
+}
+.badge-danger {
+  background: var(--obsidian-badge-critical-bg) !important;
+  color: var(--obsidian-critical) !important;
+}
+.badge-warning {
+  background: var(--obsidian-badge-warning-bg) !important;
+  color: var(--obsidian-warning) !important;
+}
+.badge-info {
+  background: var(--obsidian-badge-info-bg) !important;
+  color: var(--obsidian-accent) !important;
+}
+
+/* Inputs / textareas / selects */
+.input,
+input[type="text"],
+input[type="search"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"],
+input[type="url"],
+input[type="tel"],
+textarea,
+select {
+  background: var(--obsidian-bg-secondary) !important;
+  color: var(--obsidian-text-primary) !important;
+  border: 0.5px solid var(--obsidian-border) !important;
+  border-radius: 6px !important;
+}
+.input:focus,
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none !important;
+  border-color: var(--obsidian-accent) !important;
+  box-shadow: 0 0 0 1px var(--obsidian-accent) !important;
+}
+::placeholder {
+  color: var(--obsidian-text-tertiary) !important;
+  opacity: 1;
+}
+/* Native datepicker calendar icon turns black on dark bg without this. */
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85) sepia(0.1);
+  cursor: pointer;
+}
+
+/* Tables */
+.table th,
+table th {
+  background: var(--obsidian-bg-secondary) !important;
+  color: var(--obsidian-text-primary) !important;
+  border-bottom: 0.5px solid var(--obsidian-border) !important;
+  font-weight: 600 !important;
+}
+.table td,
+table td {
+  background: transparent !important;
+  color: var(--obsidian-text-primary) !important;
+  border-bottom: 0.5px solid var(--obsidian-border) !important;
+}
+.table tr:hover,
+table tbody tr:hover {
+  background: var(--obsidian-bg-secondary) !important;
+}
+.table tr:hover td,
+table tbody tr:hover td {
+  background: var(--obsidian-bg-secondary) !important;
+}
+
+/* ── Modal & overlay ─────────────────────────────────────────────── */
+.fixed.inset-0.bg-black,
+.bg-black.bg-opacity-50,
+.bg-black\/50,
+.bg-black\/60,
+.bg-black\/70,
+.bg-black\/80 {
+  background-color: rgba(0, 0, 0, 0.85) !important;
+}
+
+/* Live-pulse — tweak to obsidian success */
+.live-dot,
+.live-dot::after {
+  background-color: var(--obsidian-success) !important;
+}
+
+/* ── Charts (Recharts SVG) ───────────────────────────────────────── */
+.recharts-cartesian-grid line,
+.recharts-cartesian-axis line,
+.recharts-cartesian-axis-tick line {
+  stroke: var(--obsidian-border) !important;
+}
+.recharts-cartesian-axis-tick text,
+.recharts-text {
+  fill: var(--obsidian-text-secondary) !important;
+}
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: var(--obsidian-bg-secondary) !important;
+  border: 0.5px solid var(--obsidian-accent) !important;
+  border-radius: 6px !important;
+  color: var(--obsidian-text-primary) !important;
+}
+.recharts-tooltip-label,
+.recharts-tooltip-item {
+  color: var(--obsidian-text-primary) !important;
+}
+.recharts-legend-item-text {
+  color: var(--obsidian-text-secondary) !important;
+}
+
+/* ── Misc ────────────────────────────────────────────────────────── */
+hr {
+  border-color: var(--obsidian-border) !important;
+}
+
+/* Focus rings */
+.ring-blue-500,
+.ring-indigo-500,
+.ring-primary-500 {
+  --tw-ring-color: var(--obsidian-accent) !important;
+}
+.focus\:ring-blue-500:focus,
+.focus\:ring-indigo-500:focus,
+.focus\:ring-primary-500:focus {
+  --tw-ring-color: var(--obsidian-accent) !important;
+}
+
+/* React-Hot-Toast surface */
+[data-hot-toast] {
+  background: var(--obsidian-bg-secondary) !important;
+  color: var(--obsidian-text-primary) !important;
+  border: 0.5px solid var(--obsidian-border) !important;
+  box-shadow: none !important;
+}
+
+/* Code/mono pills used for IDs, IPs */
+code {
+  background: var(--obsidian-bg-tertiary) !important;
+  color: var(--obsidian-text-primary) !important;
+}
+
+/* Login decorative blobs — barely visible on the void */
+.animate-blob {
+  opacity: 0.12 !important;
+}
+
+/* Disabled */
+:disabled,
+[disabled],
+.disabled\:opacity-50:disabled {
+  color: var(--obsidian-text-disabled) !important;
+}
+
+/* Required asterisk — convention is text-red-500 next to a label */
+.text-red-500 {
+  color: var(--obsidian-critical) !important;
+}
+
+/* ===== RECHARTS — OBSIDIAN VAULT OVERRIDES =====
+ *
+ * Recharts ships with light-theme defaults (white tooltip, gray axis
+ * text, white hover backgrounds). The block below makes those defaults
+ * legible on the void without touching the chart components themselves.
+ * Component-level styles set via the `tick`, `contentStyle`, and `cursor`
+ * props are intentionally overridden here so charts look right even
+ * before each call site is migrated to the new chart theme tokens.
+ */
+
+.recharts-text,
+.recharts-cartesian-axis-tick-value,
+.recharts-cartesian-axis-tick text {
+  fill: var(--obsidian-text-secondary) !important;
+  font-size: 12px !important;
+}
+
+.recharts-legend-item-text {
+  color: var(--obsidian-text-secondary) !important;
+  fill: var(--obsidian-text-secondary) !important;
+  font-size: 12px !important;
+}
+
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: var(--obsidian-bg-tertiary) !important;
+  opacity: 0.5 !important;
+}
+
+.recharts-cartesian-axis-line {
+  stroke: var(--obsidian-bg-tertiary) !important;
+}
+
+/* Default tooltip wrapper (no <CustomTooltip /> in use). Charts that
+ * already pass `content={<X />}` render their own DOM and won't hit
+ * these rules — those go through inline styles set by the component. */
+.recharts-tooltip-wrapper {
+  outline: none !important;
+}
+
+.recharts-default-tooltip {
+  background: var(--obsidian-bg-secondary) !important;
+  border: 0.5px solid var(--obsidian-bg-tertiary) !important;
+  border-radius: 6px !important;
+  padding: 12px !important;
+  box-shadow: none !important;
+}
+
+.recharts-tooltip-label {
+  color: var(--obsidian-text-primary) !important;
+  font-weight: 500 !important;
+}
+
+.recharts-tooltip-item,
+.recharts-tooltip-item-name,
+.recharts-tooltip-item-value,
+.recharts-tooltip-item-separator,
+.recharts-tooltip-item-unit {
+  color: var(--obsidian-text-primary) !important;
+}
+
+.recharts-tooltip-item-list {
+  list-style: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.recharts-tooltip-item-list li {
+  color: var(--obsidian-text-primary) !important;
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+  margin: 4px 0 !important;
+}
+
+/* Bar / pie hover — replace the default white wash with a subtle
+ * brightness lift so colors stay legible. */
+.recharts-bar-rectangle,
+.recharts-bar {
+  transition: opacity 0.2s ease, filter 0.2s ease !important;
+}
+
+.recharts-bar-rectangle:hover {
+  opacity: 0.85 !important;
+  filter: brightness(1.1) !important;
+}
+
+.recharts-pie-sector {
+  transition: filter 0.2s ease !important;
+}
+
+.recharts-pie-sector:hover {
+  filter: drop-shadow(0 0 10px rgba(91, 126, 255, 0.4)) brightness(1.1) !important;
+}
+
+/* Cursor (the line / fill that follows the mouse over the chart). */
+.recharts-cursor {
+  stroke: var(--obsidian-accent) !important;
+  opacity: 0.5 !important;
+}
+
+/* Catch any stray white rect (e.g. CartesianGrid background fills).
+ * Recharts emits these in a few corners; matching by attribute keeps
+ * the override surgical. */
+.recharts-wrapper rect[fill="white"],
+.recharts-wrapper rect[fill="#fff"],
+.recharts-wrapper rect[fill="#ffffff"] {
+  fill: var(--obsidian-bg-secondary) !important;
+}

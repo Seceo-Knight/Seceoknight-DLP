@@ -1,0 +1,73 @@
+;;;
+;;; CyberSentinel DLP Minifilter Driver
+;;; Windows 10/11 x64
+;;;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "ActivityMonitor"
+ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
+Provider    = %ProviderString%
+DriverVer   = 03/30/2026,2.0.0.0
+CatalogFile = csfilter.cat
+
+[DestinationDirs]
+DefaultDestDir          = 12       ; %windir%\system32\drivers
+CsFilter.DriverFiles    = 12
+
+[DefaultInstall]
+OptionDesc = %ServiceDescription%
+CopyFiles  = CsFilter.DriverFiles
+
+[DefaultInstall.Services]
+AddService = %ServiceName%,,CsFilter.Service
+
+[DefaultUninstall]
+DelFiles   = CsFilter.DriverFiles
+
+[DefaultUninstall.Services]
+DelService = %ServiceName%,0x200   ; SPSVCINST_STOPSERVICE
+
+;;; --- Service ---
+
+[CsFilter.Service]
+DisplayName    = %ServiceName%
+Description    = %ServiceDescription%
+ServiceBinary  = %12%\csfilter.sys
+Dependencies   = FltMgr
+ServiceType    = 2                 ; SERVICE_FILE_SYSTEM_DRIVER
+StartType      = 3                 ; SERVICE_DEMAND_START
+ErrorControl   = 1                 ; SERVICE_ERROR_NORMAL
+LoadOrderGroup = "FSFilter Activity Monitor"
+AddReg         = CsFilter.AddRegistry
+
+;;; --- Registry (altitude assignment) ---
+
+[CsFilter.AddRegistry]
+HKR,"Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Instances\"%Instance1.Name%,"Altitude",0x00000000,%Instance1.Altitude%
+HKR,"Instances\"%Instance1.Name%,"Flags",0x00010001,0x0
+
+;;; --- Copy list ---
+
+[CsFilter.DriverFiles]
+csfilter.sys
+
+;;; --- Source disk ---
+
+[SourceDisksFiles]
+csfilter.sys = 1,,
+
+[SourceDisksNames]
+1 = %DiskId1%,,,
+
+;;; --- Strings ---
+
+[Strings]
+ProviderString      = "CyberSentinel"
+ServiceName         = "CyberSentinelFilter"
+ServiceDescription  = "CyberSentinel DLP File System Minifilter"
+DefaultInstance     = "CyberSentinel Default Instance"
+Instance1.Name      = "CyberSentinel Default Instance"
+Instance1.Altitude  = "370100"     ; Activity Monitor altitude range
+DiskId1             = "CyberSentinel DLP Installation Disk"

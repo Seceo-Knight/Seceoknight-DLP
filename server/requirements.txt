@@ -1,0 +1,95 @@
+# FastAPI and Server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Database
+sqlalchemy==2.0.23
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+alembic==1.13.0
+# pymongo 4.6.0 has CVE-2024-5629 (BSON OOB read) — fixed in 4.6.3
+pymongo==4.6.3
+motor==3.3.2
+redis==5.0.1
+opensearch-py==2.4.2
+elasticsearch==8.11.1
+
+# Authentication & Security
+# python-jose 3.3.0 has CVE-2024-33664 (JWE PBES2 DoS, CRITICAL) and
+# CVE-2024-33663 (algorithm confusion with OpenSSH ECDSA keys, HIGH).
+# Both fixed in 3.4.0.
+python-jose[cryptography]==3.4.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.1
+# cryptography 41.0.7 has CVE-2023-50782 (Bleichenbacher timing oracle)
+# and CVE-2024-26130 (NULL deref in PKCS#12). Fixed in 42.0.4+.
+cryptography==42.0.8
+
+# HTTP & API
+httpx==0.25.2
+# aiohttp 3.9.1 has CVE-2024-23334 (path traversal), CVE-2024-30251
+# (DoS via multipart), and CVE-2024-27306 (XSS in static index).
+# All fixed in 3.9.5+.
+aiohttp==3.9.5
+aiofiles==23.2.1
+# requests 2.31.0 has CVE-2024-35195 (verify=False session persistence).
+requests==2.32.3
+google-auth==2.35.0
+google-auth-oauthlib==1.2.1
+google-api-python-client==2.154.0
+msal==1.24.0
+
+# Monitoring & Logging
+prometheus-client==0.19.0
+python-json-logger==2.0.7
+structlog==23.2.0
+
+# Validation & Parsing
+email-validator==2.1.0
+python-dateutil==2.8.2
+bleach==6.1.0
+reportlab==4.0.7
+
+# ML & Data Processing
+# IMPORTANT: Install these in the specific order defined in Dockerfile
+# numpy must be installed first, then other packages depend on it
+numpy==1.26.2
+pandas==2.1.4
+scikit-learn==1.3.2
+# TensorFlow 2.15.0 requires numpy>=1.26.0,<2.0
+tensorflow==2.15.0
+# PyTorch - version 2.1.2 (no +cpu suffix as it's not available for all platforms)
+torch==2.1.2
+# Transformers and spaCy
+# transformers 4.36.0 has CVE-2024-3568 (arbitrary code exec via
+# TFPreTrainedModel.from_pretrained untrusted model deserialization).
+# Fixed in 4.38.0+.
+transformers==4.38.2
+spacy==3.7.2
+
+# NLP & Text Processing
+nltk==3.8.1
+regex==2023.10.3
+
+# Utilities
+python-dotenv==1.0.0
+tenacity==8.2.3
+schedule==1.2.0
+celery==5.3.4
+kombu==5.3.4
+
+# Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+Faker==20.1.0
+psutil==5.9.6
+
+# Development
+black==23.12.0
+flake8==6.1.0
+mypy==1.7.1
+pre-commit==3.6.0
