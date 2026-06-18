@@ -28,7 +28,7 @@ const EMPTY_CREATE: AdminUserCreateInput = {
   password: '',
   full_name: '',
   role: 'VIEWER',
-  organization: 'CyberSentinel',
+  organization: 'SeceoKnight',
   username: '',
   department: '',
   clearance_level: 1,
@@ -448,7 +448,7 @@ function CreateUserDialog({
               className="input"
               value={form.email}
               onChange={(e) => update('email', e.target.value)}
-              placeholder="user@cybersentinel.siem"
+              placeholder="user@seceoknight.com"
             />
           </Field>
           <Field label="Username (display alias)">

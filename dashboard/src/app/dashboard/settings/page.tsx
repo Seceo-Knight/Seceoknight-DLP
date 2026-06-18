@@ -57,7 +57,7 @@ export default function SettingsPage() {
             <div className="space-y-4">
               <div>
                 <label className="text-sm text-gray-400">Organization Name</label>
-                <input type="text" value="CyberSentinel Corp" className="w-full mt-2 px-4 py-2 bg-gray-900/50 border border-gray-600 rounded-lg text-white" />
+                <input type="text" value="SeceoKnight" className="w-full mt-2 px-4 py-2 bg-gray-900/50 border border-gray-600 rounded-lg text-white" />
               </div>
               <div>
                 <label className="text-sm text-gray-400">Server IP Address</label>

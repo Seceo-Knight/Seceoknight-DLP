@@ -1,5 +1,5 @@
 /**
- * API Client for CyberSentinel DLP Backend
+ * API Client for SeceoKnight DLP Backend
  * Handles all HTTP requests to the FastAPI backend
  */
 

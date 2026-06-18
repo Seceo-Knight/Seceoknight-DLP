@@ -6,7 +6,7 @@ import { Providers } from '@/components/Providers'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'CyberSentinel DLP - Dashboard',
+  title: 'SeceoKnight DLP - Dashboard',
   description: 'Enterprise Data Loss Prevention Platform',
 }
 

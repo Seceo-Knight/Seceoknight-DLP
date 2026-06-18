@@ -1,5 +1,5 @@
 /**
- * API Services for CyberSentinel DLP
+ * API Services for SeceoKnight DLP
  * Service layer for all API endpoints
  */
 

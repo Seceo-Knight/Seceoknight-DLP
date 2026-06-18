@@ -75,7 +75,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
                 <Shield className="w-5 h-5 text-white" />
               </div>
-              <span className="text-lg font-bold text-white">Cybersentinel dlp</span>
+              <span className="text-lg font-bold text-white">SeceoKnight DLP</span>
             </div>
             <button
               onClick={() => setSidebarOpen(false)}

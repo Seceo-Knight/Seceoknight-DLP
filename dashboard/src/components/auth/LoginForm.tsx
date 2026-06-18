@@ -92,7 +92,7 @@ export default function LoginForm() {
               <Shield className="w-10 h-10 text-white" />
             )}
           </div>
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">CyberSentinel DLP</h1>
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">SeceoKnight DLP</h1>
           <p className="text-gray-200 mt-3 font-medium">
             {isChangePassword ? 'Change Your Password' : 'Enterprise Data Loss Prevention'}
           </p>

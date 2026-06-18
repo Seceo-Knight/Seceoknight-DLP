@@ -515,12 +515,12 @@ This document details all changes, fixes, and improvements made during testing a
   - All values configurable via `.env` file
 
 - **`agents/endpoint/linux/agent.py`**: Added environment variable support
-  - Checks `CYBERSENTINEL_SERVER_URL` environment variable first
+  - Checks `SECEOKNIGHT_SERVER_URL` environment variable first
   - Falls back to config file, then defaults to `http://localhost:55000/api/v1`
   - Environment variable takes precedence over config file
 
 - **`agents/endpoint/windows/agent.py`**: Added environment variable support
-  - Checks `CYBERSENTINEL_SERVER_URL` environment variable first
+  - Checks `SECEOKNIGHT_SERVER_URL` environment variable first
   - Falls back to config file, then defaults to `http://localhost:55000/api/v1`
   - Environment variable expansion for `%USERNAME%` in monitored paths (via `os.path.expandvars()`)
   - Environment variable takes precedence over config file

@@ -224,11 +224,11 @@ export default function Settings() {
               <input
                 type="text"
                 className="input"
-                defaultValue="cybersentinel"
+                defaultValue="seceoknight"
                 readOnly
               />
               <p className="mt-1 text-xs text-gray-500">
-                Prefix for all indices (e.g., cybersentinel-events-2025.01.12)
+                Prefix for all indices (e.g., seceoknight-events-2025.01.12)
               </p>
             </div>
 

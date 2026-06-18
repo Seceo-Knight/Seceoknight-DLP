@@ -13,7 +13,7 @@ export default function AgentsPage() {
   const [deployConfig, setDeployConfig] = useState({
     os: 'windows',
     name: '',
-    serverIp: '10.220.143.130'
+    serverIp: ''
   })
   const [generatedScript, setGeneratedScript] = useState('')
   const [copied, setCopied] = useState(false)
@@ -50,14 +50,14 @@ export default function AgentsPage() {
     let script = ''
 
     if (os === 'windows') {
-      script = `# CyberSentinel DLP Agent - Windows Installer
+      script = `# SeceoKnight DLP Agent - Windows Installer
 # Run this script as Administrator
 
 $AgentName = "${name}"
 $ServerIP = "${serverIp}"
 $DownloadURL = "http://${serverIp}:8000/api/v1/agents/download/windows"
 
-Write-Host "Installing CyberSentinel DLP Agent..." -ForegroundColor Green
+Write-Host "Installing SeceoKnight DLP Agent..." -ForegroundColor Green
 Write-Host "Agent Name: $AgentName"
 Write-Host "Server: $ServerIP"
 
@@ -71,14 +71,14 @@ Write-Host "Installation complete!" -ForegroundColor Green
 Write-Host "Agent will start automatically and connect to $ServerIP"`
     } else {
       script = `#!/bin/bash
-# CyberSentinel DLP Agent - Linux Installer
+# SeceoKnight DLP Agent - Linux Installer
 # Run this script with sudo
 
 AGENT_NAME="${name}"
 SERVER_IP="${serverIp}"
 DOWNLOAD_URL="http://${serverIp}:8000/api/v1/agents/download/linux"
 
-echo "Installing CyberSentinel DLP Agent..."
+echo "Installing SeceoKnight DLP Agent..."
 echo "Agent Name: $AGENT_NAME"
 echo "Server: $SERVER_IP"
 

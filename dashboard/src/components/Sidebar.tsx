@@ -60,11 +60,11 @@ export default function Sidebar() {
         <div className="flex items-center overflow-hidden">
           <img
             src={logo}
-            alt="CyberSentinel-DLP Logo"
+            alt="SeceoKnight DLP Logo"
             className="h-12 w-12 object-contain flex-shrink-0"
           />
           {!isCollapsed && (
-            <span className="ml-1 text-xl font-semibold whitespace-nowrap">CyberSentinel-DLP</span>
+            <span className="ml-1 text-xl font-semibold whitespace-nowrap">SeceoKnight DLP</span>
           )}
         </div>
       </div>
@@ -109,7 +109,7 @@ export default function Sidebar() {
       {!isCollapsed && (
         <div className="px-6 py-4 border-t border-gray-800 text-xs text-gray-400">
           <div>Version 2.0.0</div>
-          <div className="mt-1">© 2025 CyberSentinel DLP</div>
+          <div className="mt-1">© 2025 SeceoKnight DLP</div>
         </div>
       )}
     </aside>
