@@ -56,8 +56,8 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 ```bash
 # Clone the repository
-git clone https://github.com/seceoknight-06/seceoknight-dlp.git
-cd seceoknight-dlp
+git clone https://github.com/Seceo-Knight/Seceoknight-DLP.git
+cd Seceoknight-DLP
 
 # Backend setup
 cd server
@@ -124,7 +124,7 @@ Fixes #42
 ## Project Structure
 
 ```
-seceoknight-dlp/
+Seceoknight-DLP/
 ├── server/              # FastAPI backend
 │   ├── app/
 │   │   ├── api/         # API routes
