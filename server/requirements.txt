@@ -53,22 +53,10 @@ python-dateutil==2.8.2
 bleach==6.1.0
 reportlab==4.0.7
 
-# ML & Data Processing
-# IMPORTANT: Install these in the specific order defined in Dockerfile
-# numpy must be installed first, then other packages depend on it
+# Data Processing
 numpy==1.26.2
 pandas==2.1.4
 scikit-learn==1.3.2
-# TensorFlow 2.15.0 requires numpy>=1.26.0,<2.0
-tensorflow==2.15.0
-# PyTorch - version 2.1.2 (no +cpu suffix as it's not available for all platforms)
-torch==2.1.2
-# Transformers and spaCy
-# transformers 4.36.0 has CVE-2024-3568 (arbitrary code exec via
-# TFPreTrainedModel.from_pretrained untrusted model deserialization).
-# Fixed in 4.38.0+.
-transformers==4.38.2
-spacy==3.7.2
 
 # NLP & Text Processing
 nltk==3.8.1

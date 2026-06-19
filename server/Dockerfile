@@ -10,9 +10,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libpq-dev \
-    wget \
-    pkg-config \
-    libhdf5-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -20,14 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 COPY constraints.txt .
 
-# Make pip resilient to flaky networks — the ML stack downloads include
-# tensorflow (~475MB) and torch (~800MB). A read-timeout on one chunk
-# used to abort the entire build and wipe ~3 minutes of progress.
-#
-#   PIP_DEFAULT_TIMEOUT=600 → 10 minutes before pip gives up on a read
-#   PIP_RETRIES=10          → automatic retry of failed downloads
-ENV PIP_DEFAULT_TIMEOUT=600 \
-    PIP_RETRIES=10 \
+ENV PIP_DEFAULT_TIMEOUT=120 \
+    PIP_RETRIES=3 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Install Python dependencies
@@ -36,9 +27,8 @@ RUN pip install --no-cache-dir --upgrade pip==24.0 setuptools wheel && \
 
 # Verify critical packages are installed correctly
 RUN python -c "import numpy; print(f'NumPy version: {numpy.__version__}')" && \
-    python -c "import tensorflow; print(f'TensorFlow version: {tensorflow.__version__}')" && \
-    python -c "import torch; print(f'PyTorch version: {torch.__version__}')" && \
-    python -c "import pandas; print(f'Pandas version: {pandas.__version__}')"
+    python -c "import pandas; print(f'Pandas version: {pandas.__version__}')" && \
+    python -c "import fastapi; print(f'FastAPI version: {fastapi.__version__}')"
 
 # Production stage
 FROM python:3.11-slim
