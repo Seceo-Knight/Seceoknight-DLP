@@ -184,9 +184,11 @@ say "Starting all services in detached mode"
 docker compose -f "${COMPOSE_FILE}" up -d
 
 # ─── 8. Wait for health ───────────────────────────────────────────────
-say "Waiting for the manager API to come up (max ~3 minutes)"
+# Health is checked via nginx (port 443) since manager port 55000 is
+# internal-only and not published to the host.
+say "Waiting for the API to come up via nginx (max ~3 minutes)"
 for i in $(seq 1 90); do
-    if curl -fsS http://localhost:55000/health >/dev/null 2>&1; then
+    if curl -fsSk https://localhost/api/v1/health >/dev/null 2>&1; then
         break
     fi
     sleep 2
@@ -194,8 +196,8 @@ for i in $(seq 1 90); do
 done
 echo
 
-if ! curl -fsS http://localhost:55000/health >/dev/null 2>&1; then
-    c_red "[FATAL] Manager API did not become healthy within 3 minutes."
+if ! curl -fsSk https://localhost/api/v1/health >/dev/null 2>&1; then
+    c_red "[FATAL] API did not become healthy within 3 minutes."
     c_red "Check the logs:"
     c_red "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} logs manager"
     exit 1
