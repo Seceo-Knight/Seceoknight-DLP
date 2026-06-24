@@ -456,14 +456,14 @@ class EventProcessor:
                 "severity": "high"
             },
             "indian_bank_account": {
-                "pattern": r'\b\d{9,18}\b',
+                "pattern": r'\b\d{11,18}\b',
                 "label": "INDIAN_BANK_ACCOUNT",
                 "severity": "high"
             },
             "indian_phone": {
                 "pattern": r'\b(\+91|91|0)?[6-9]\d{9}\b',
                 "label": "INDIAN_PHONE",
-                "severity": "medium"
+                "severity": "high"
             },
             "upi_id": {
                 "pattern": r'\b[\w.-]+@(paytm|phonepe|ybl|okaxis|okhdfcbank|oksbi|okicici)\b',
