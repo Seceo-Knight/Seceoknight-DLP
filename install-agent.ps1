@@ -91,7 +91,7 @@ do {
     }
 } while (-not (Test-ServerHost $serverIP))
 
-$serverURL = "https://${serverIP}/api/v1"
+$serverURL = "https://${serverIP}:443/api/v1"
 Write-ColorOutput "Server URL: $serverURL" -Type "Success"
 Write-Host ""
 
