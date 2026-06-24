@@ -74,7 +74,7 @@ mkdir -p "${INSTALL_DIR}"
 cd "${INSTALL_DIR}"
 say "Working in ${INSTALL_DIR}"
 
-# ─── 3. Download compose + env template ───────────────────────────────
+# ─── 3. Download compose + env template + nginx config ────────────────
 say "Downloading ${COMPOSE_FILE}"
 curl -fsSL "${RAW_BASE}/${COMPOSE_FILE}" -o "${COMPOSE_FILE}"
 
@@ -82,6 +82,10 @@ if [ ! -f "${ENV_FILE}" ]; then
     say "Downloading ${ENV_EXAMPLE}"
     curl -fsSL "${RAW_BASE}/${ENV_EXAMPLE}" -o "${ENV_EXAMPLE}"
 fi
+
+say "Downloading nginx/nginx.conf"
+mkdir -p "${INSTALL_DIR}/nginx"
+curl -fsSL "${RAW_BASE}/nginx/nginx.conf" -o "${INSTALL_DIR}/nginx/nginx.conf"
 
 # ─── 4. Generate .env with secure random secrets ──────────────────────
 gen_secret() {
