@@ -91,7 +91,7 @@ do {
     }
 } while (-not (Test-ServerHost $serverIP))
 
-$serverURL = "https://${serverIP}:443/api/v1"
+$serverURL = "http://${serverIP}:80/api/v1"
 Write-ColorOutput "Server URL: $serverURL" -Type "Success"
 Write-Host ""
 
@@ -110,7 +110,7 @@ try {
 # Test server connectivity
 Write-ColorOutput "Testing server connectivity..." -Type "Info"
 try {
-    $healthUrl = "https://${serverIP}/api/v1/health"
+    $healthUrl = "http://${serverIP}/api/v1/health"
     $resp = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 10
     if ($resp.status -eq "healthy") {
         Write-ColorOutput "Server is healthy" -Type "Success"
