@@ -23,11 +23,10 @@ from app.core.cache import get_cache, CacheService
 logger = structlog.get_logger()
 router = APIRouter()
 
-# Agent is considered dead if no heartbeat received in 5 seconds.
-# This is the threshold for the boolean ``is_active`` flag we keep around
-# for backward-compatibility with old dashboard code; the new four-tier
-# lifecycle status (active/disconnected/inactive/stale) lives below.
-AGENT_TIMEOUT_SECONDS = 5
+# Agent is considered active if heartbeat received within 60 seconds.
+# Default agent heartbeat interval is 30s, so 60s gives a comfortable
+# 2x buffer before flipping to disconnected.
+AGENT_TIMEOUT_SECONDS = 60
 
 # ── Lifecycle status thresholds ──────────────────────────────────────
 # Tiered freshness ladder reported as ``lifecycle_status`` on agent
@@ -35,12 +34,8 @@ AGENT_TIMEOUT_SECONDS = 5
 # exactly one tier — UIs can show a colored badge without computing the
 # math themselves.
 #
-#   active:       last_seen ≤ 5s ago        — heartbeat just arrived
-#   disconnected: 5s   < last_seen ≤ 24h    — recently silent (spec says
-#                                             "< 1 hour" but escalates
-#                                             to inactive only at >24h,
-#                                             so the disconnected band
-#                                             stretches to fill the gap)
+#   active:       last_seen ≤ 60s ago       — heartbeat recently received
+#   disconnected: 60s  < last_seen ≤ 24h    — recently silent
 #   inactive:     24h  < last_seen ≤ 7d     — quiet for a while
 #   stale:        last_seen > 7d            — likely abandoned/uninstalled
 #

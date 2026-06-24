@@ -50,8 +50,8 @@ const TIER_BADGE: Record<LifecycleTier, { label: string; className: string; dot:
 }
 
 const TIER_HINT: Record<LifecycleTier, string> = {
-  active: 'Heartbeat within last 5 seconds',
-  disconnected: 'No heartbeat for >5 seconds',
+  active: 'Heartbeat within last 60 seconds',
+  disconnected: 'No heartbeat for >60 seconds',
   inactive: 'No heartbeat for >24 hours',
   stale: 'No heartbeat for >7 days',
 }
