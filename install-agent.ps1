@@ -91,14 +91,26 @@ do {
     }
 } while (-not (Test-ServerHost $serverIP))
 
-$serverURL = "http://${serverIP}:55000/api/v1"
+$serverURL = "https://${serverIP}/api/v1"
 Write-ColorOutput "Server URL: $serverURL" -Type "Success"
 Write-Host ""
+
+# Trust self-signed certs for health check
+try {
+    add-type @"
+        using System.Net;
+        using System.Security.Cryptography.X509Certificates;
+        public class TrustAllCertsPolicy : ICertificatePolicy {
+            public bool CheckValidationResult(ServicePoint srvPoint, X509Certificate certificate, WebRequest request, int certificateProblem) { return true; }
+        }
+"@
+    [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
+} catch {}
 
 # Test server connectivity
 Write-ColorOutput "Testing server connectivity..." -Type "Info"
 try {
-    $healthUrl = "http://${serverIP}:55000/health"
+    $healthUrl = "https://${serverIP}/api/v1/health"
     $resp = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 10
     if ($resp.status -eq "healthy") {
         Write-ColorOutput "Server is healthy" -Type "Success"
