@@ -1,10 +1,10 @@
 /*
- * CyberSentinel DLP - Windows Endpoint Agent (C++)
+ * SeceoKnight DLP - Windows Endpoint Agent (C++)
  * 
  * Monitors file operations, clipboard, and USB devices for data loss prevention
  * 
  * Build Instructions (MinGW):
- * g++ -std=c++17 -O2 agent.cpp -o cybersentinel_agent.exe -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lws2_32 -static
+ * g++ -std=c++17 -O2 agent.cpp -o seceoknight_agent.exe -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lws2_32 -static
  * 
  * Build Instructions (MSVC):
  * cl.exe /EHsc /std:c++17 /O2 agent.cpp /link winhttp.lib wbemuuid.lib ole32.lib oleaut32.lib user32.lib ws2_32.lib
@@ -429,9 +429,9 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
         const size_t MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB
         
     public:
-        Logger(const std::string& filename = "cybersentinel_agent.log") {
+        Logger(const std::string& filename = "seceoknight_agent.log") {
             // Check if custom log directory is specified in environment
-            const char* envLogDir = std::getenv("CYBERSENTINEL_LOG_DIR");
+            const char* envLogDir = std::getenv("SECEOKNIGHT_LOG_DIR");
             std::string logDir = envLogDir ? envLogDir : "";
             
             if (!logDir.empty()) {
@@ -446,7 +446,7 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
             lastRotationCheck = std::chrono::system_clock::now();
             
             Info("=================================================");
-            Info("CyberSentinel DLP Agent Logger Initialized");
+            Info("SeceoKnight DLP Agent Logger Initialized");
             Info("Log file: " + logFilePath);
             Info("=================================================");
         }
@@ -535,7 +535,7 @@ void Log(const std::string& level, const std::string& message) {
     // Log timestamps use Asia/Kolkata (IST). Event payloads sent to the
     // server continue to use UTC via GetCurrentTimestampISO().
     std::string timestamp = GetCurrentTimestampLocalIST();
-    std::string logMsg = timestamp + " - CyberSentinelAgent - " + level + " - " + message;
+    std::string logMsg = timestamp + " - SeceoKnightAgent - " + level + " - " + message;
     
     // Only output to console if window is visible (not in background mode)
     HWND consoleWindow = GetConsoleWindow();
@@ -604,7 +604,7 @@ void Log(const std::string& level, const std::string& message) {
     private:
         void LoadDefaults() {
             // Default server URL: check environment variable, then use localhost
-            const char* envUrl = std::getenv("CYBERSENTINEL_SERVER_URL");
+            const char* envUrl = std::getenv("SECEOKNIGHT_SERVER_URL");
             serverUrl = envUrl ? envUrl : "http://localhost:55000/api/v1";
             
             // Generate unique agent ID
@@ -672,7 +672,7 @@ void Log(const std::string& level, const std::string& message) {
                     serverUrl = extractedUrl;
                 } else {
                     // Fallback to environment or default
-                    const char* envUrl = std::getenv("CYBERSENTINEL_SERVER_URL");
+                    const char* envUrl = std::getenv("SECEOKNIGHT_SERVER_URL");
                     serverUrl = envUrl ? envUrl : "http://localhost:55000/api/v1";
                 }
                 
@@ -2291,7 +2291,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
     }
      
      void Start() {
-         logger.Info("Starting CyberSentinel DLP Agent...");
+         logger.Info("Starting SeceoKnight DLP Agent...");
          logger.Info("Server URL: " + config.serverUrl);
          logger.Info("Agent ID: " + config.agentId);
          
@@ -6881,15 +6881,15 @@ void HideConsoleWindow() {
 }
 
 void ShowUsage() {
-    std::cout << "Usage: cybersentinel_agent.exe [OPTIONS]\n\n";
+    std::cout << "Usage: seceoknight_agent.exe [OPTIONS]\n\n";
     std::cout << "Options:\n";
     std::cout << "  -background, --background, -bg, --bg, bg\n";
     std::cout << "                        Run agent in background mode (no console output)\n";
     std::cout << "  -h, --help            Show this help message\n\n";
     std::cout << "Examples:\n";
-    std::cout << "  cybersentinel_agent.exe\n";
-    std::cout << "  cybersentinel_agent.exe -background\n";
-    std::cout << "  cybersentinel_agent.exe --bg\n\n";
+    std::cout << "  seceoknight_agent.exe\n";
+    std::cout << "  seceoknight_agent.exe -background\n";
+    std::cout << "  seceoknight_agent.exe --bg\n\n";
 }
  
 int main(int argc, char* argv[]) {
@@ -6911,17 +6911,17 @@ int main(int argc, char* argv[]) {
     } else {
         // Show startup banner only in foreground mode
         std::cout << "============================================================\n";
-        std::cout << "CyberSentinel DLP - Windows Agent (C++)\n";
+        std::cout << "SeceoKnight DLP - Windows Agent (C++)\n";
         std::cout << "============================================================\n\n";
         
         // Check for server URL environment variable
-        const char* envUrl = std::getenv("CYBERSENTINEL_SERVER_URL");
+        const char* envUrl = std::getenv("SECEOKNIGHT_SERVER_URL");
         if (envUrl) {
             std::cout << "Using server URL from environment: " << envUrl << "\n";
         } else {
             std::cout << "Using default server URL: http://localhost:55000/api/v1\n";
             std::cout << "To change server URL, set environment variable:\n";
-            std::cout << "  set CYBERSENTINEL_SERVER_URL=http://your-server:port/api/v1\n\n";
+            std::cout << "  set SECEOKNIGHT_SERVER_URL=http://your-server:port/api/v1\n\n";
         }
     }
     
@@ -6937,7 +6937,7 @@ int main(int argc, char* argv[]) {
             // In background mode, log startup info to file only
             Logger bgLogger;
             bgLogger.Info("============================================================");
-            bgLogger.Info("CyberSentinel DLP Agent started in BACKGROUND MODE");
+            bgLogger.Info("SeceoKnight DLP Agent started in BACKGROUND MODE");
             bgLogger.Info("============================================================");
             bgLogger.Info("Process ID: " + std::to_string(GetCurrentProcessId()));
             bgLogger.Info("Console window hidden - all output redirected to log file");
@@ -6951,7 +6951,7 @@ int main(int argc, char* argv[]) {
             Logger bgLogger;
             bgLogger.Error("Fatal error: " + std::string(e.what()));
             bgLogger.Error("Troubleshooting:");
-            bgLogger.Error("1. Ensure the CyberSentinel server is running");
+            bgLogger.Error("1. Ensure the SeceoKnight server is running");
             bgLogger.Error("2. Check network connectivity to the server");
             bgLogger.Error("3. Verify firewall settings allow connections");
             bgLogger.Error("4. Check server URL in agent_config.json or environment variable");
@@ -6959,7 +6959,7 @@ int main(int argc, char* argv[]) {
             // Show error in console in foreground mode
             std::cerr << "\nFatal error: " << e.what() << std::endl;
             std::cerr << "\nTroubleshooting:\n";
-            std::cerr << "1. Ensure the CyberSentinel server is running\n";
+            std::cerr << "1. Ensure the SeceoKnight server is running\n";
             std::cerr << "2. Check network connectivity to the server\n";
             std::cerr << "3. Verify firewall settings allow connections\n";
             std::cerr << "4. Check server URL in agent_config.json or environment variable\n";
