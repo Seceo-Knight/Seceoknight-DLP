@@ -311,11 +311,12 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
      std::string host;
      std::string basePath;
      int port;
-     
+     bool useHttps = false;
+
  public:
      HttpClient(const std::string& url) : serverUrl(url) {
          ParseUrl(url);
-         hSession = WinHttpOpen(L"CyberSentinel/1.0",
+         hSession = WinHttpOpen(L"SeceoKnight/1.0",
              WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
              WINHTTP_NO_PROXY_NAME,
              WINHTTP_NO_PROXY_BYPASS, 0);
@@ -353,16 +354,22 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
          // and (b) made misconfigured agents quietly attach to whatever
          // happened to live at that address. We now require a valid URL
          // and clear the host instead — SendRequest then refuses to send.
-         std::regex urlRegex(R"(https?://([^:/]+):?(\d+)?(/.*)?$)");
+         std::regex urlRegex(R"((https?)://([^:/]+):?(\d+)?(/.*)?$)");
          std::smatch match;
          if (std::regex_search(url, match, urlRegex)) {
-             host = match[1].str();
-             port = match[2].length() > 0 ? std::stoi(match[2].str()) : 55000;
-             basePath = match[3].length() > 0 ? match[3].str() : "";
+             useHttps = (match[1].str() == "https");
+             host = match[2].str();
+             if (match[3].length() > 0) {
+                 port = std::stoi(match[3].str());
+             } else {
+                 port = useHttps ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
+             }
+             basePath = match[4].length() > 0 ? match[4].str() : "";
          } else {
              host = "";
              port = 0;
              basePath = "";
+             useHttps = false;
          }
      }
      
@@ -373,8 +380,9 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
          std::string fullPath = basePath + path;
          
          std::wstring wpath(fullPath.begin(), fullPath.end());
+         DWORD requestFlags = useHttps ? WINHTTP_FLAG_SECURE : 0;
          HINTERNET hRequest = WinHttpOpenRequest(hConnect, method, wpath.c_str(),
-             nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+             nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, requestFlags);
          
          if (!hRequest) return {0, ""};
          
