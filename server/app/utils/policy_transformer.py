@@ -602,12 +602,14 @@ def _transform_usb_transfer_config(config: Dict[str, Any]) -> Tuple[Dict[str, An
                 }
             )
 
-    # Add destination type rule (must be removable drive)
+    # Match on event_subtype sent by the agent ("usb_file_transfer").
+    # Note: the agent does NOT send destination_type in the main event payload,
+    # so we match event_subtype which is always present for USB file transfers.
     rules.append(
         {
-            "field": "destination_type",
+            "field": "event_subtype",
             "operator": "equals",
-            "value": "removable_drive",
+            "value": "usb_file_transfer",
         }
     )
 
