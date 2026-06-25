@@ -4,7 +4,7 @@ Create, update, and manage DLP policies
 """
 
 from typing import List, Dict, Any, Literal, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -335,7 +335,7 @@ async def get_policies(
     from sqlalchemy import func, text
     from app.models.alert import Alert as AlertModel
     import uuid as uuid_module
-    lookback = datetime.utcnow() - timedelta(hours=24)
+    lookback = datetime.now(timezone.utc) - timedelta(hours=24)
     violation_counts: Dict[str, int] = {}
     try:
         from sqlalchemy import cast
