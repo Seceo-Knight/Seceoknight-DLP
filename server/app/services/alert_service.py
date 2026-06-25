@@ -137,8 +137,9 @@ class AlertService:
             alert_type=alert_type,
             severity=severity,
             title=title,
+            description=message,  # Alert model uses description (NOT NULL), message is alias
             message=message,
-            source_type=source_type,
+            source=source_type,   # Alert model column is 'source', not 'source_type'
             source_id=source_id,
             policy_id=policy_id,
             event_id=event_id,
@@ -149,7 +150,7 @@ class AlertService:
             assigned_to=assigned_to,
             resolved=False,
             escalation_level=0,
-            metadata=metadata or {},
+            alert_metadata=metadata or {},  # SQLAlchemy attribute is alert_metadata, column alias is metadata
         )
 
         self.db.add(alert)
