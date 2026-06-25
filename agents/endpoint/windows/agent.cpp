@@ -4823,8 +4823,29 @@ if (shouldMonitor) {
                         }
                     }
                 } else {
-                    logger.Debug("No sensitive data detected, skipping event");
-                    return;
+                    // Check if any relevant policy is in pure monitoring mode (monitoredPaths set, no dataTypes)
+                    // e.g. a file_system_monitoring policy with no content filters should alert on any file event
+                    bool hasPureMonitoringPolicy = false;
+                    for (const auto& policy : relevantPolicies) {
+                        if (policy.dataTypes.empty() && !policy.monitoredPaths.empty()) {
+                            hasPureMonitoringPolicy = true;
+                            classification.matchedPolicies.push_back(policy.policyId);
+                            std::string sev = policy.severity.empty() ? "medium" : policy.severity;
+                            if (classification.severity == "low") classification.severity = sev;
+                            if (classification.suggestedAction == "logged") {
+                                classification.suggestedAction = policy.action.empty() ? "alert" : policy.action;
+                            }
+                            classification.detectedContent["FILE_ACCESSED"] = {fileName};
+                        }
+                    }
+
+                    if (hasPureMonitoringPolicy) {
+                        logger.Info("Pure file monitoring policy matched - generating alert for: " + fileName);
+                        classification.labels.push_back("FILE_ACCESSED");
+                    } else {
+                        logger.Debug("No sensitive data detected, skipping event");
+                        return;
+                    }
                 }
             }
             
