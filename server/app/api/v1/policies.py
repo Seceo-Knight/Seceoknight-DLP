@@ -330,6 +330,21 @@ async def get_policies(
         enabled_only=enabled_only,
     )
 
+    # Build per-policy violation counts from MongoDB alerts (last 24h)
+    mongo = get_mongodb()
+    lookback = datetime.utcnow() - timedelta(hours=24)
+    violation_counts: Dict[str, int] = {}
+    try:
+        pipeline = [
+            {"$match": {"created_at": {"$gte": lookback.isoformat()}}},
+            {"$group": {"_id": "$policy_id", "count": {"$sum": 1}}},
+        ]
+        async for doc in mongo.get_collection("alerts").aggregate(pipeline):
+            if doc.get("_id"):
+                violation_counts[str(doc["_id"])] = doc["count"]
+    except Exception:
+        pass
+
     return [
         {
             "id": str(policy.id),
@@ -356,6 +371,7 @@ async def get_policies(
             "created_at": policy.created_at,
             "updated_at": policy.updated_at,
             "created_by": str(policy.created_by) if policy.created_by else None,
+            "violation_count": violation_counts.get(str(policy.id), 0),
         }
         for policy in policies
     ]
@@ -662,14 +678,13 @@ async def get_policy_stats(
     policy_service = PolicyService(db)
     stats = await policy_service.get_policy_stats()
 
-    # Augment violations count using MongoDB events (last 24 hours)
+    # Augment violations count using MongoDB alerts (last 24 hours)
+    # Count alerts rather than blocked events — policies that alert (not block)
+    # still generate violations and should be counted here.
     mongo = get_mongodb()
     lookback = datetime.utcnow() - timedelta(hours=24)
-    violations = await mongo.dlp_events.count_documents(
-        {
-            "blocked": True,
-            "timestamp": {"$gte": lookback},
-        }
+    violations = await mongo.get_collection("alerts").count_documents(
+        {"created_at": {"$gte": lookback.isoformat()}}
     )
     stats["violations"] = violations
 
