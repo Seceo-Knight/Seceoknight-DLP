@@ -7,7 +7,7 @@ import hashlib
 import secrets
 import uuid
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import structlog
 import aiofiles
@@ -219,7 +219,6 @@ class ActionExecutor:
         # MongoDB, not PostgreSQL, so this is what makes alerts visible in the UI.
         try:
             from app.core.database import get_mongodb
-            from datetime import datetime, timezone
             mongo_db = get_mongodb()
             alerts_collection = mongo_db.get_collection("alerts")
             await alerts_collection.insert_one({
@@ -248,6 +247,48 @@ class ActionExecutor:
         except Exception as e:
             logger.logger.error(
                 "failed_to_write_alert_to_mongodb",
+                alert_id=alert_id,
+                error=str(e)
+            )
+
+        # Also write incident to MongoDB — Incidents tab reads from MongoDB incidents collection
+        try:
+            from app.core.database import get_mongodb
+            severity_map = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+            sev_num = severity_map.get(severity, 2)
+            event_id_str = event.get("event_id", alert_id)
+            incident_id = f"incident-{event_id_str}"
+            mongo_db = get_mongodb()
+            incidents_col = mongo_db.get_collection("incidents")
+            # Only insert if no incident exists for this event yet
+            existing = await incidents_col.find_one({"event_id": event_id_str})
+            if not existing:
+                await incidents_col.insert_one({
+                    "id": incident_id,
+                    "event_id": event_id_str,
+                    "alert_id": alert_id,
+                    "title": title,
+                    "description": message,
+                    "severity": sev_num,
+                    "status": "open",
+                    "source": "policy_violation",
+                    "policy_id": action.get("metadata", {}).get("policy_id"),
+                    "user_email": event.get("user", {}).get("email") or event.get("user_email"),
+                    "agent_id": event.get("agent", {}).get("id"),
+                    "classification_level": event.get("classification_metadata", {}).get("classification_level"),
+                    "blocked": event.get("blocked", False),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
+                logger.logger.info(
+                    "incident_written_to_mongodb",
+                    incident_id=incident_id,
+                    event_id=event_id_str,
+                    severity=severity,
+                )
+        except Exception as e:
+            logger.logger.error(
+                "failed_to_write_incident_to_mongodb",
                 alert_id=alert_id,
                 error=str(e)
             )
