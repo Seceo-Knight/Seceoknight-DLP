@@ -419,10 +419,11 @@ try {
     # Action: run VBScript launcher (hidden, no CMD window)
     $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$vbsPath`"" -WorkingDirectory $INSTALL_DIR
 
-    # Triggers: at logon AND at startup
+    # Triggers: at logon, at startup, and repeat every 5 min as watchdog
     $triggerLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $triggerStartup = New-ScheduledTaskTrigger -AtStartup
     $triggerStartup.Delay = "PT30S"
+    $triggerRepeat = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes 5) -Once -At (Get-Date "00:00")
 
     # Principal: run with highest privileges as current user
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
@@ -441,7 +442,7 @@ try {
     Register-ScheduledTask `
         -TaskName $TASK_NAME `
         -Action $action `
-        -Trigger @($triggerLogon, $triggerStartup) `
+        -Trigger @($triggerLogon, $triggerStartup, $triggerRepeat) `
         -Principal $principal `
         -Settings $settings `
         -Description "SeceoKnight DLP Agent - Data Loss Prevention monitoring (clipboard, USB, files, screen capture)" `
