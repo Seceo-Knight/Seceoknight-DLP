@@ -106,6 +106,12 @@ async def get_alerts(
                         if dt_val.tzinfo is None:
                             dt_val = dt_val.replace(tzinfo=timezone.utc)
                         alert_dict[dt_field] = dt_val.isoformat()
+                # Ensure 'id' is present — older docs may only have 'alert_id'
+                if "id" not in alert_dict:
+                    alert_dict["id"] = alert_dict.get("alert_id", str(alert_doc.get("_id", "")))
+                # Ensure 'event_id' is present (required str field)
+                if not alert_dict.get("event_id"):
+                    alert_dict["event_id"] = alert_dict.get("id", "")
                 alerts.append(Alert(**alert_dict))
             except Exception as e:
                 logger.warning("Skipping malformed alert document", error=str(e))
