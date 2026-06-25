@@ -404,7 +404,7 @@ export const transformApiPolicyToFrontend = (apiPolicy: any): Policy => {
     createdAt: apiPolicy.created_at || new Date().toISOString(),
     updatedAt: apiPolicy.updated_at || new Date().toISOString(),
     createdBy: apiPolicy.created_by || undefined,
-    violations: 0, // TODO: Get from stats endpoint
+    violations: apiPolicy.violations ?? 0,
     lastViolation: undefined, // TODO: Get from stats endpoint
     config: apiPolicy.config || getDefaultConfig(apiPolicy.type as PolicyType),
     conditions,
