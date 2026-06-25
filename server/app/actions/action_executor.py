@@ -223,6 +223,7 @@ class ActionExecutor:
             mongo_db = get_mongodb()
             alerts_collection = mongo_db.get_collection("alerts")
             await alerts_collection.insert_one({
+                "id": alert_id,           # Pydantic Alert model requires 'id' field
                 "alert_id": alert_id,
                 "alert_type": "policy_violation",
                 "severity": severity,
@@ -231,7 +232,7 @@ class ActionExecutor:
                 "description": message,
                 "source": "policy",
                 "policy_id": action.get("metadata", {}).get("policy_id"),
-                "event_id": event.get("event_id"),
+                "event_id": event.get("event_id") or alert_id,  # required str field
                 "user_email": event.get("user", {}).get("email") or event.get("user_email"),
                 "agent_id": event.get("agent", {}).get("id"),
                 "status": "new",
