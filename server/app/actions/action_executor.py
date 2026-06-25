@@ -181,7 +181,7 @@ class ActionExecutor:
             "event_id_ref": event.get("event_id"),
         }
 
-        # Persist alert to database
+        # Persist alert to PostgreSQL (for audit/compliance)
         try:
             async with postgres_session_factory() as session:
                 alert_service = AlertService(session)
@@ -214,6 +214,42 @@ class ActionExecutor:
                 error=str(e)
             )
             # Continue even if database save fails
+
+        # Also write alert to MongoDB — the GET /alerts/ endpoint reads from
+        # MongoDB, not PostgreSQL, so this is what makes alerts visible in the UI.
+        try:
+            from app.core.database import get_mongodb
+            from datetime import datetime, timezone
+            mongo_db = get_mongodb()
+            alerts_collection = mongo_db.get_collection("alerts")
+            await alerts_collection.insert_one({
+                "alert_id": alert_id,
+                "alert_type": "policy_violation",
+                "severity": severity,
+                "title": title,
+                "message": message,
+                "description": message,
+                "source": "policy",
+                "policy_id": action.get("metadata", {}).get("policy_id"),
+                "event_id": event.get("event_id"),
+                "user_email": event.get("user", {}).get("email") or event.get("user_email"),
+                "agent_id": event.get("agent", {}).get("id"),
+                "status": "new",
+                "metadata": alert_metadata,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.logger.info(
+                "alert_written_to_mongodb",
+                alert_id=alert_id,
+                event_id=event.get("event_id"),
+            )
+        except Exception as e:
+            logger.logger.error(
+                "failed_to_write_alert_to_mongodb",
+                alert_id=alert_id,
+                error=str(e)
+            )
 
         # Log policy violation for metrics
         logger.log_policy_violation(
