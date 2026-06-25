@@ -332,25 +332,23 @@ async def get_policies(
 
     # Build per-policy violation counts from PostgreSQL alerts (last 24h)
     # PostgreSQL is the authoritative store for alert-policy relationships.
-    from sqlalchemy import func, text
-    from app.models.alert import Alert as AlertModel
-    import uuid as uuid_module
+    from sqlalchemy import text
     lookback = datetime.now(timezone.utc) - timedelta(hours=24)
     violation_counts: Dict[str, int] = {}
     try:
-        from sqlalchemy import cast
-        from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-        rows = await db.execute(
-            select(
-                AlertModel.policy_id,
-                func.count(AlertModel.id).label("cnt"),
-            )
-            .where(AlertModel.policy_id.isnot(None))
-            .where(AlertModel.created_at >= lookback)
-            .group_by(AlertModel.policy_id)
+        result = await db.execute(
+            text("""
+                SELECT policy_id::text, COUNT(id) AS cnt
+                FROM alerts
+                WHERE policy_id IS NOT NULL
+                AND created_at >= :lookback
+                GROUP BY policy_id
+            """),
+            {"lookback": lookback},
         )
-        for row in rows:
-            violation_counts[str(row.policy_id)] = row.cnt
+        for row in result:
+            violation_counts[row[0]] = row[1]
+        logger.info("Per-policy violation counts", counts=violation_counts)
     except Exception as _e:
         logger.warning("Failed to compute per-policy violation counts", error=str(_e))
 
