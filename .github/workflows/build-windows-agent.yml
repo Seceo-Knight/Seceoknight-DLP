@@ -1,0 +1,58 @@
+name: Build Windows Agent
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'agents/endpoint/windows/agent.cpp'
+      - 'agents/endpoint/windows/**.h'
+      - '.github/workflows/build-windows-agent.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+
+      - name: Build Windows agent
+        working-directory: agents/endpoint/windows
+        run: |
+          x86_64-w64-mingw32-g++ -std=c++17 -O2 agent.cpp -o seceoknight_agent.exe \
+            -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 \
+            -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -static
+          ls -lh seceoknight_agent.exe
+
+      - name: Generate SHA256 checksum
+        working-directory: agents/endpoint/windows
+        run: |
+          sha256sum seceoknight_agent.exe > seceoknight_agent.exe.sha256
+          cat seceoknight_agent.exe.sha256
+
+      - name: Commit updated binary
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add agents/endpoint/windows/seceoknight_agent.exe
+          git add agents/endpoint/windows/seceoknight_agent.exe.sha256
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "build: update Windows agent binary [skip ci]"
+            git push
+          fi
