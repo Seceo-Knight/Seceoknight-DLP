@@ -156,7 +156,11 @@ class ActionExecutor:
         from app.core.database import postgres_session_factory
 
         alert_id = f"alert-{uuid.uuid4()}"
-        severity = action.get("parameters", {}).get("severity") or action.get("severity", "medium")
+        severity = (
+            action.get("parameters", {}).get("severity")
+            or action.get("metadata", {}).get("policy_severity")
+            or action.get("severity", "medium")
+        )
 
         # Build descriptive title and message
         title = self._build_alert_title(event, action)
