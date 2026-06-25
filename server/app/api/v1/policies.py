@@ -371,7 +371,7 @@ async def get_policies(
             "created_at": policy.created_at,
             "updated_at": policy.updated_at,
             "created_by": str(policy.created_by) if policy.created_by else None,
-            "violation_count": violation_counts.get(str(policy.id), 0),
+            "violations": violation_counts.get(str(policy.id), 0),
         }
         for policy in policies
     ]
