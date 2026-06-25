@@ -330,18 +330,27 @@ async def get_policies(
         enabled_only=enabled_only,
     )
 
-    # Build per-policy violation counts from MongoDB alerts (last 24h)
-    mongo = get_mongodb()
+    # Build per-policy violation counts from PostgreSQL alerts (last 24h)
+    # PostgreSQL is the authoritative store for alert-policy relationships.
+    from sqlalchemy import func, text
+    from app.models.alert import Alert as AlertModel
+    import uuid as uuid_module
     lookback = datetime.utcnow() - timedelta(hours=24)
     violation_counts: Dict[str, int] = {}
     try:
-        pipeline = [
-            {"$match": {"created_at": {"$gte": lookback.isoformat()}}},
-            {"$group": {"_id": "$policy_id", "count": {"$sum": 1}}},
-        ]
-        async for doc in mongo.get_collection("alerts").aggregate(pipeline):
-            if doc.get("_id"):
-                violation_counts[str(doc["_id"])] = doc["count"]
+        from sqlalchemy import cast
+        from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+        rows = await db.execute(
+            select(
+                AlertModel.policy_id,
+                func.count(AlertModel.id).label("cnt"),
+            )
+            .where(AlertModel.policy_id.isnot(None))
+            .where(AlertModel.created_at >= lookback)
+            .group_by(AlertModel.policy_id)
+        )
+        for row in rows:
+            violation_counts[str(row.policy_id)] = row.cnt
     except Exception:
         pass
 
