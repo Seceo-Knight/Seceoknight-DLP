@@ -399,8 +399,15 @@ Write-ColorOutput "Step 8: Creating background launcher..." -Type "Info"
 
 $vbsPath = Join-Path $INSTALL_DIR "launch_agent.vbs"
 $vbsContent = @"
-Set objShell = CreateObject("Wscript.Shell")
-objShell.Run """$exePath""", 0, False
+' Only start agent if not already running
+Dim objWMI, colProcesses
+Set objWMI = GetObject("winmgmts:\\.\root\cimv2")
+Set colProcesses = objWMI.ExecQuery("SELECT * FROM Win32_Process WHERE Name = 'seceoknight_agent.exe'")
+If colProcesses.Count = 0 Then
+    Dim objShell
+    Set objShell = CreateObject("Wscript.Shell")
+    objShell.Run """$exePath""", 0, False
+End If
 "@
 $vbsContent | Out-File -FilePath $vbsPath -Encoding ASCII -Force
 Write-ColorOutput "Background launcher created: $vbsPath" -Type "Success"
