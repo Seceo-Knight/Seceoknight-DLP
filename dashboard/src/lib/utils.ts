@@ -65,9 +65,14 @@ export function formatAgentLabel(
   name?: string | null,
   code?: number | null,
   fallbackName?: string | null,
+  agentId?: string | null,
 ): string {
   const resolvedName = name || fallbackName
-  if (!resolvedName) return 'Unknown Agent'
+  if (!resolvedName) {
+    // Show truncated agent_id so the event is still identifiable
+    if (agentId) return `Agent ${agentId.slice(0, 8).toUpperCase()}`
+    return 'Unknown Agent'
+  }
   if (typeof code === 'number') {
     return `${resolvedName} (${String(code).padStart(3, '0')})`
   }

@@ -264,9 +264,7 @@ export const validatePolicy = (policy: Partial<Policy>): { valid: boolean; error
       
       case 'usb_file_transfer_monitoring': {
         const c = policy.config as USBTransferConfig
-        if (c.monitoredPaths.length === 0) {
-          errors.push('At least one monitored path is required')
-        }
+        // monitoredPaths can be empty — empty means classification-based mode (scan all files on USB)
         if (c.action === 'quarantine' && !c.quarantinePath?.trim()) {
           errors.push('Quarantine path is required when action is quarantine')
         }

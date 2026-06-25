@@ -170,7 +170,7 @@ function EventDetailModal({
               <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                 <label className="text-xs text-gray-600 uppercase font-medium mb-1 block">Agent</label>
                 <p className="text-gray-900 font-medium" title={event.agent_id}>
-                  {formatAgentLabel(event.agent_name, event.agent_code)}
+                  {formatAgentLabel(event.agent_name, event.agent_code, null, event.agent_id)}
                 </p>
               </div>
               <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
@@ -678,6 +678,7 @@ export default function Events() {
       event.agent_name,
       event.agent_code ?? fallback?.agent_code,
       fallback?.name,
+      event.agent_id,
     )
   }
 
