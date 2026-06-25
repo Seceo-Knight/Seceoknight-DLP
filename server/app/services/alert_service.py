@@ -106,7 +106,7 @@ class AlertService:
         event_id: Optional[str] = None,
         user_email: Optional[str] = None,
         agent_id: Optional[str] = None,
-        priority: str = "medium",
+        priority: int = 50,
         assigned_to: Optional[str] = None,
         metadata: Optional[dict] = None,
     ) -> Alert:
