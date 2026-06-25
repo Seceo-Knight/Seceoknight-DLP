@@ -132,6 +132,18 @@ class AlertService:
         Returns:
             Created Alert object
         """
+        import uuid as _uuid
+        # UUID(as_uuid=True) columns require uuid.UUID objects, not strings
+        def _to_uuid(val):
+            if val is None:
+                return None
+            if isinstance(val, _uuid.UUID):
+                return val
+            try:
+                return _uuid.UUID(str(val))
+            except (ValueError, AttributeError):
+                return None
+
         alert = Alert(
             alert_id=alert_id,
             alert_type=alert_type,
@@ -141,8 +153,8 @@ class AlertService:
             message=message,
             source=source_type,   # Alert model column is 'source', not 'source_type'
             source_id=source_id,
-            policy_id=policy_id,
-            event_id=event_id,
+            policy_id=_to_uuid(policy_id),
+            event_id=_to_uuid(event_id),
             user_email=user_email,
             agent_id=agent_id,
             status="new",

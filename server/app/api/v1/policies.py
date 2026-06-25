@@ -351,8 +351,8 @@ async def get_policies(
         )
         for row in rows:
             violation_counts[str(row.policy_id)] = row.cnt
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.warning("Failed to compute per-policy violation counts", error=str(_e))
 
     return [
         {
