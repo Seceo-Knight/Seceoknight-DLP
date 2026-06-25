@@ -174,7 +174,11 @@ class ActionExecutor:
             "source_path": event.get("source_path"),
             "destination_path": event.get("destination", {}).get("path"),
             "blocked": event.get("blocked", False),
-            "action_details": action
+            "action_details": action,
+            # Store event_id as plain string reference — the FK on alerts.event_id
+            # points to the PG events table which is only populated AFTER alert
+            # creation (pg_event_mirror runs later), so we cannot use the FK field.
+            "event_id_ref": event.get("event_id"),
         }
 
         # Persist alert to database
@@ -190,7 +194,8 @@ class ActionExecutor:
                     message=message,
                     source_type="policy",
                     policy_id=action.get("metadata", {}).get("policy_id"),
-                    event_id=event.get("event_id"),
+                    event_id=None,  # FK to PG events table — omit because the PG mirror
+                                    # runs after alert creation; event_id stored in metadata
                     user_email=event.get("user", {}).get("email") or event.get("user_email"),
                     agent_id=event.get("agent", {}).get("id"),
                     metadata=alert_metadata
