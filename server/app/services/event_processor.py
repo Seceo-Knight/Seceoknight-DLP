@@ -480,9 +480,10 @@ class EventProcessor:
                 "label": "INDIAN_DOB",
                 "severity": "medium"
             },
-            # Source code detection
+            # Source code detection — requires multiple programming keywords to
+            # avoid false positives from OCR screen text (e.g. "from window")
             "source_code_content": {
-                "pattern": r'\b(function|def|class|public|private|protected|static|import|from|require|include|using|package|const|let|var|int|string|float|bool)\s+\w+',
+                "pattern": r'\b(function\s+\w+\s*\(|def\s+\w+\s*\(|class\s+\w+[\s:{]|import\s+[\w.]+\s*;|require\s*\(["\'][\w./]+["\']\)|const\s+\w+\s*=|let\s+\w+\s*=|var\s+\w+\s*=|public\s+(static\s+)?\w+\s+\w+\s*\(|private\s+(static\s+)?\w+\s+\w+\s*\()',
                 "label": "SOURCE_CODE",
                 "severity": "high"
             },
