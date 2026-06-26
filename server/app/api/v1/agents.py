@@ -968,13 +968,20 @@ async def sync_agent_policies(
 
 class PolicyEvaluationRequest(BaseModel):
     """Request model for real-time policy evaluation"""
-    file_name: str = Field(..., description="Name of the file being transferred")
-    file_content: str = Field(..., description="Content of the file to classify")
+    file_name: Optional[str] = Field(None, description="Name of the file being transferred (omit for clipboard)")
+    file_content: Optional[str] = Field(None, description="Content of the file to classify")
+    content: Optional[str] = Field(None, description="Clipboard or generic content (alias for file_content)")
     file_size: Optional[int] = Field(None, description="File size in bytes")
-    event_type: str = Field(..., description="Event type (e.g., 'usb_file_transfer', 'clipboard')")
+    event_type: str = Field("clipboard_copy", description="Event type (e.g., 'usb_file_transfer', 'clipboard_copy')")
     destination_type: Optional[str] = Field(None, description="Destination type (e.g., 'removable_drive', 'network')")
     source_path: Optional[str] = Field(None, description="Source file path")
     destination_path: Optional[str] = Field(None, description="Destination path")
+    agent_id: Optional[str] = Field(None, description="Agent ID (also taken from URL path)")
+    user_email: Optional[str] = Field(None, description="User email for ABAC")
+
+    def get_content(self) -> str:
+        """Return whichever content field is populated."""
+        return self.file_content or self.content or ""
 
 
 class ClassificationDetails(BaseModel):
@@ -1023,10 +1030,10 @@ async def evaluate_policy_realtime(
         # 1. Classify the file content using ClassificationEngine
         classification_engine = ClassificationEngine(db)
         classification_result = await classification_engine.classify_content(
-            request.file_content,
+            request.get_content(),
             context={
                 "event_type": request.event_type,
-                "file_name": request.file_name,
+                "file_name": request.file_name or "",
                 "source_path": request.source_path,
             }
         )

@@ -3853,6 +3853,40 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
 
             SendEvent(json.Build());
 
+            // CLASSIFICATION-AWARE ENFORCEMENT: If local policy didn't block,
+            // call the server's real-time policy/evaluate endpoint so that
+            // classification_aware policies (e.g. Study Report keyword rules)
+            // get a chance to enforce a block decision.
+            if (classification.suggestedAction != "block") {
+                try {
+                    JsonBuilder evalJson;
+                    evalJson.AddString("content", content);
+                    evalJson.AddString("event_type", "clipboard_copy");
+                    evalJson.AddString("source_type", "clipboard");
+                    evalJson.AddString("agent_id", config.agentId);
+                    evalJson.AddString("user_email", GetUsername() + "@" + GetHostname());
+
+                    std::string evalPath = "/agents/" + config.agentId + "/policy/evaluate";
+                    auto [evalStatus, evalBody] = httpClient->Post(evalPath, evalJson.Build());
+
+                    if (evalStatus == 200) {
+                        std::string serverAction = config.ExtractJsonValue(evalBody, "action");
+                        if (serverAction == "BLOCK" || serverAction == "block") {
+                            logger.Warning("  🚫 SERVER CLASSIFICATION-AWARE BLOCK — sensitive content detected!");
+                            std::string reason = config.ExtractJsonValue(evalBody, "reason");
+                            if (!reason.empty()) {
+                                logger.Warning("  Reason: " + reason);
+                            }
+                            classification.suggestedAction = "block";
+                        }
+                    } else {
+                        logger.Debug("Policy evaluate returned status " + std::to_string(evalStatus) + " — fail-open");
+                    }
+                } catch (const std::exception& e) {
+                    logger.Warning("Classification-aware eval failed: " + std::string(e.what()) + " — fail-open");
+                }
+            }
+
             // ENFORCEMENT: If policy says block, clear the clipboard completely
             if (classification.suggestedAction == "block") {
                 logger.Warning("  CLEARING CLIPBOARD — sensitive data detected!");

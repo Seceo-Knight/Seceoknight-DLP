@@ -20,6 +20,7 @@ POLICY_PLATFORM_SUPPORT: Dict[str, List[str]] = {
     "usb_device_monitoring": ["windows"],
     "usb_file_transfer_monitoring": ["windows"],
     "google_drive_local_monitoring": ["windows"],
+    "classification_aware": ["windows", "linux"],  # Content-classification-driven policies
 }
 
 POLICY_CAPABILITY_MAP: Dict[str, str] = {
@@ -29,6 +30,7 @@ POLICY_CAPABILITY_MAP: Dict[str, str] = {
     "usb_device_monitoring": "usb_monitoring",
     "usb_file_transfer_monitoring": "usb_monitoring",
     "google_drive_local_monitoring": "file_monitoring",
+    "classification_aware": "clipboard_monitoring",  # Enforced via clipboard + file paths
 }
 
 
@@ -105,6 +107,18 @@ class AgentPolicyTransformer:
 
     def _serialize_policy(self, policy: Policy) -> Dict[str, Any]:
         updated_at = policy.updated_at or policy.created_at or datetime.now(timezone.utc)
+
+        # Derive the enforcement action from the actions dict
+        # Precedence: block > quarantine > alert > log
+        actions = policy.actions or {}
+        enforcement_action = "log"
+        if "block" in actions:
+            enforcement_action = "block"
+        elif "quarantine" in actions:
+            enforcement_action = "quarantine"
+        elif "alert" in actions:
+            enforcement_action = "alert"
+
         return {
             "id": str(policy.id),
             "name": policy.name,
@@ -112,8 +126,10 @@ class AgentPolicyTransformer:
             "priority": policy.priority,
             "severity": policy.severity,
             "type": policy.type,
+            "action": enforcement_action,  # Flattened action for agent local evaluation
             "config": policy.config or {},
-            "actions": policy.actions or {},
+            "actions": actions,
+            "conditions": policy.conditions or {},  # Full conditions for classification_aware eval
             "compliance_tags": policy.compliance_tags or [],
             "updated_at": updated_at.isoformat(),
         }

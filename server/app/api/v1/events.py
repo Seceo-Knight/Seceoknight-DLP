@@ -280,6 +280,7 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
 
             if processed.get("blocked"):
                 update_fields["blocked"] = True
+                update_fields["action_taken"] = "blocked"
             if processed.get("quarantined"):
                 update_fields["quarantined"] = True
             if processed.get("classification_metadata"):

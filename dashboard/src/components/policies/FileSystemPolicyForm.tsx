@@ -34,6 +34,7 @@ export default function FileSystemPolicyForm({ config, onChange }: FileSystemPol
     setNewPath('')
   }
 
+
   const handleRemovePath = (index: number) => {
     onChange({
       ...config,
