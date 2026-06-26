@@ -9,6 +9,9 @@ on:
       - '.github/workflows/build-windows-agent.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -28,11 +31,12 @@ jobs:
           update: true
           install: >-
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-headers-git
 
       - name: Build Windows agent
         working-directory: agents/endpoint/windows
         run: |
-          x86_64-w64-mingw32-g++ -std=c++17 -O2 agent.cpp -o seceoknight_agent.exe \
+          g++ -std=c++17 -O2 agent.cpp -o seceoknight_agent.exe \
             -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 \
             -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -static
           ls -lh seceoknight_agent.exe
