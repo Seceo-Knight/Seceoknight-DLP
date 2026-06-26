@@ -3512,14 +3512,32 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
     }
     
     void HeartbeatLoop() {
-         while (running) {
-             try {
-                 SendHeartbeat();
-             } catch (...) {
-                 logger.Error("Heartbeat error");
-             }
-             std::this_thread::sleep_for(std::chrono::seconds(config.heartbeatInterval));
-         }
+        int consecutiveFailures = 0;
+        while (running) {
+            try {
+                SendHeartbeat();
+                consecutiveFailures = 0;  // Reset on success
+            } catch (...) {
+                consecutiveFailures++;
+                logger.Error("Heartbeat error (consecutive failures: " + std::to_string(consecutiveFailures) + ")");
+            }
+
+            // After 3 consecutive failures, re-initialize the HTTP client.
+            // This handles stale WinHTTP sessions after network drops, sleep/wake,
+            // or IP address changes — all of which invalidate open connections.
+            if (consecutiveFailures >= 3) {
+                logger.Warning("3 consecutive heartbeat failures - reinitializing HTTP client");
+                try {
+                    httpClient = std::make_unique<HttpClient>(config.serverUrl, config.agentId, config.apiToken);
+                    consecutiveFailures = 0;
+                    logger.Info("HTTP client reinitialized - will retry heartbeat");
+                } catch (...) {
+                    logger.Error("Failed to reinitialize HTTP client - will retry next cycle");
+                }
+            }
+
+            std::this_thread::sleep_for(std::chrono::seconds(config.heartbeatInterval));
+        }
      }
      
      void SendHeartbeat() {

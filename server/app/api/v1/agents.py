@@ -23,10 +23,11 @@ from app.core.cache import get_cache, CacheService
 logger = structlog.get_logger()
 router = APIRouter()
 
-# Agent is considered active if heartbeat received within 60 seconds.
-# Default agent heartbeat interval is 30s, so 60s gives a comfortable
-# 2x buffer before flipping to disconnected.
-AGENT_TIMEOUT_SECONDS = 60
+# Agent is considered active if heartbeat received within 5 minutes.
+# Default agent heartbeat interval is 30s. 5 minutes gives room for
+# brief network drops, sleep/wake cycles, and HTTP client reconnection
+# (agent reinitializes WinHTTP after 3 consecutive failures ~90s).
+AGENT_TIMEOUT_SECONDS = 300
 
 # ── Lifecycle status thresholds ──────────────────────────────────────
 # Tiered freshness ladder reported as ``lifecycle_status`` on agent
@@ -34,10 +35,10 @@ AGENT_TIMEOUT_SECONDS = 60
 # exactly one tier — UIs can show a colored badge without computing the
 # math themselves.
 #
-#   active:       last_seen ≤ 60s ago       — heartbeat recently received
-#   disconnected: 60s  < last_seen ≤ 24h    — recently silent
-#   inactive:     24h  < last_seen ≤ 7d     — quiet for a while
-#   stale:        last_seen > 7d            — likely abandoned/uninstalled
+#   active:       last_seen ≤ 5min ago      — heartbeat recently received
+#   disconnected: 5min < last_seen ≤ 24h   — recently silent
+#   inactive:     24h  < last_seen ≤ 7d    — quiet for a while
+#   stale:        last_seen > 7d           — likely abandoned/uninstalled
 #
 # An agent with no last_seen at all is reported as ``stale`` (it's worse
 # than just silent — we have nothing to time-bound it).
