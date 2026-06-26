@@ -32,13 +32,40 @@ jobs:
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-headers-git
+            mingw-w64-x86_64-windows-default-manifest
 
       - name: Build Windows agent
         working-directory: agents/endpoint/windows
         run: |
-          g++ -std=c++17 -O2 agent.cpp -o seceoknight_agent.exe \
-            -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 \
-            -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -static
+          echo "=== Compiler version ==="
+          g++ --version
+
+          echo "=== Checking headers ==="
+          ls /mingw64/include/wbemidl.h 2>/dev/null && echo "wbemidl.h found" || echo "wbemidl.h NOT found"
+          ls /mingw64/include/winhttp.h 2>/dev/null && echo "winhttp.h found" || echo "winhttp.h NOT found"
+
+          echo "=== Compiling ==="
+          g++ -std=c++17 -O2 \
+            agent.cpp \
+            network_exfil_monitor.cpp \
+            print_monitor.cpp \
+            screen_capture_monitor.cpp \
+            -o seceoknight_agent.exe \
+            -lwinhttp \
+            -lwbemuuid \
+            -lole32 \
+            -loleaut32 \
+            -luser32 \
+            -lws2_32 \
+            -lsetupapi \
+            -ladvapi32 \
+            -lcfgmgr32 \
+            -lshell32 \
+            -luuid \
+            -lcomdlg32 \
+            -lgdi32 \
+            2>&1
+          echo "Exit code: $?"
           ls -lh seceoknight_agent.exe
 
       - name: Generate SHA256 checksum
