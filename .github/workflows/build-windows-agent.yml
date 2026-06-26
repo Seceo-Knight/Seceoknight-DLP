@@ -64,6 +64,7 @@ jobs:
             -luuid \
             -lcomdlg32 \
             -lgdi32 \
+            -lwinspool \
             2>&1
           echo "Exit code: $?"
           ls -lh seceoknight_agent.exe
