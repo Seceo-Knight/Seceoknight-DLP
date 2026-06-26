@@ -3528,7 +3528,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             if (consecutiveFailures >= 3) {
                 logger.Warning("3 consecutive heartbeat failures - reinitializing HTTP client");
                 try {
-                    httpClient = std::make_unique<HttpClient>(config.serverUrl, config.agentId, config.apiToken);
+                    httpClient = std::make_unique<HttpClient>(config.serverUrl);
                     consecutiveFailures = 0;
                     logger.Info("HTTP client reinitialized - will retry heartbeat");
                 } catch (...) {
