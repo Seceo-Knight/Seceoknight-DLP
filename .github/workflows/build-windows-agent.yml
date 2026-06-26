@@ -51,6 +51,11 @@ jobs:
             print_monitor.cpp \
             screen_capture_monitor.cpp \
             -o seceoknight_agent.exe \
+            -static \
+            -static-libgcc \
+            -static-libstdc++ \
+            -Wl,-Bstatic -lpthread \
+            -Wl,-Bdynamic \
             -lwinhttp \
             -lwbemuuid \
             -lole32 \
