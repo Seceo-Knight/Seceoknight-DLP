@@ -176,7 +176,7 @@ async def create_rule(
         created_rule = await service.create_rule(
             name=rule.name,
             type=rule.type,
-            created_by=UUID(current_user["sub"]),
+            created_by=current_user.id,
             description=rule.description,
             pattern=rule.pattern,
             regex_flags=rule.regex_flags,
@@ -192,7 +192,7 @@ async def create_rule(
             enabled=rule.enabled,
         )
 
-        await audit_log(current_user["sub"], "rule.create", {"rule_name": rule.name})
+        await audit_log(current_user.id, "rule.create", {"rule_name": rule.name})
 
         return RuleResponse(**created_rule.to_dict())
 
@@ -324,7 +324,7 @@ async def delete_rule(
             detail=f"Rule {rule_id} not found"
         )
 
-    await audit_log(current_user["sub"], "rule.delete", {"rule_id": str(rule_id)})
+    await audit_log(current_user.id, "rule.delete", {"rule_id": str(rule_id)})
 
 
 @router.post("/{rule_id}/toggle", response_model=RuleResponse)
@@ -424,7 +424,7 @@ async def bulk_import_rules(
             created_rule = await service.create_rule(
                 name=rule_data.name,
                 type=rule_data.type,
-                created_by=UUID(current_user["sub"]),
+                created_by=current_user.id,
                 description=rule_data.description,
                 pattern=rule_data.pattern,
                 regex_flags=rule_data.regex_flags,
