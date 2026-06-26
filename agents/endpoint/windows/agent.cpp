@@ -3251,10 +3251,11 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                         }
                     }
                     
-                    // Extract monitoredPaths
-                    rule.monitoredPaths = ExtractJsonArray(configObj, "monitoredPaths");
                 }
-                
+
+                // Extract monitoredPaths for ALL policy types (file_system_monitoring, usb_file_transfer_monitoring, etc.)
+                rule.monitoredPaths = ExtractJsonArray(configObj, "monitoredPaths");
+
                 // ============================================================
                 // CRITICAL: USB POLICY MUST BE PARSED FIRST
                 // ============================================================
