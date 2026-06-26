@@ -13,6 +13,8 @@ from app.policies.database_policy_evaluator import DatabasePolicyEvaluator
 from app.actions.action_executor import ActionExecutor
 from app.actions.action_types import ExecutionSummary
 from app.services.classification_engine import ClassificationEngine
+from app.services.rule_service import RuleService
+from uuid import UUID
 import app.core.database as _db
 
 logger = structlog.get_logger()
@@ -327,6 +329,7 @@ class EventProcessor:
                     # Convert ClassificationEngine result to event format
                     if result.matched_rules:
                         classifications = []
+                        rule_service = RuleService(session)
 
                         for matched_rule in result.matched_rules:
                             classification = {
@@ -343,6 +346,12 @@ class EventProcessor:
                                 }
                             }
                             classifications.append(classification)
+
+                            # Increment match count for matched rule
+                            try:
+                                await rule_service.increment_match_count(UUID(matched_rule["rule_id"]))
+                            except Exception as exc:
+                                logger.warning("Failed to increment rule match count", rule_id=matched_rule["rule_id"], error=str(exc))
 
                             # Add classification tag
                             tag = f"contains_{matched_rule['rule_type']}"
