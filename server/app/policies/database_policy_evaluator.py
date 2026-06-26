@@ -260,6 +260,7 @@ class DatabasePolicyEvaluator:
             "matched_rules_count": ["classification_metadata.matched_rules_count", "matched_rules_count"],
             "total_matches": ["classification_metadata.total_matches", "total_matches"],
             "classification_engine": ["classification_metadata.engine", "classification_engine"],
+            "classification_labels": ["classification_metadata.classification_labels", "classification_labels"],
         }
 
         candidate_paths = field_mappings.get(field, [field])

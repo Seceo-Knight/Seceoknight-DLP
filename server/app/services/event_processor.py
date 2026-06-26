@@ -372,6 +372,7 @@ class EventProcessor:
                             "confidence_score": result.confidence_score,
                             "total_matches": result.total_matches,
                             "matched_rules_count": len(result.matched_rules),
+                            "classification_labels": result.data_types,
                             "engine": "rule_based"
                         }
 
