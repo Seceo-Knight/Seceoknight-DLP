@@ -18,6 +18,48 @@ from app.services.policy_service import PolicyService
 
 logger = structlog.get_logger()
 
+
+def _prefix_match(candidate: str, prefix: str) -> bool:
+    """
+    Check whether ``candidate`` starts with ``prefix``.
+
+    Handles Windows-style environment variable placeholders (e.g. ``%USERNAME%``,
+    ``%USERPROFILE%``) by treating each placeholder as a wildcard that matches
+    exactly one non-empty path component.
+
+    Both ``\\`` and ``/`` are accepted as path separators.
+
+    Examples
+    --------
+    _prefix_match(r"C:\\Users\\vaibhav\\Downloads\\file.xlsx",
+                  r"C:\\Users\\%USERNAME%\\Downloads")  -> True
+    _prefix_match(r"C:\\Users\\vaibhav\\Documents\\x.pdf",
+                  r"C:\\Users\\%USERNAME%\\Downloads")  -> False
+    """
+    if "%" not in prefix:
+        return candidate.lower().startswith(prefix.lower())
+
+    # Normalise path separators so we can split on "/" consistently.
+    norm_cand = candidate.replace("\\", "/").lower()
+    norm_pref = prefix.replace("\\", "/").lower()
+
+    cand_parts = [p for p in norm_cand.split("/") if p]
+    pref_parts = [p for p in norm_pref.split("/") if p]
+
+    if len(pref_parts) > len(cand_parts):
+        return False
+
+    for pref_comp, cand_comp in zip(pref_parts, cand_parts):
+        # %VAR% wildcard matches any non-empty single component
+        if pref_comp.startswith("%") and pref_comp.endswith("%"):
+            if not cand_comp:
+                return False
+        elif pref_comp != cand_comp:
+            return False
+
+    return True
+
+
 from app.policies.cache_control import get_policy_cache_generation
 
 
@@ -173,11 +215,11 @@ class DatabasePolicyEvaluator:
                 pattern = self._get_regex(str(value))
                 return bool(pattern.search(str(event_value)))
             if operator == "starts_with":
-                return str(event_value).lower().startswith(str(value).lower())
+                return _prefix_match(str(event_value), str(value))
             if operator == "matches_any_prefix":
                 prefixes = value if isinstance(value, list) else [value]
-                candidate = str(event_value).lower()
-                return any(candidate.startswith(str(prefix).lower()) for prefix in prefixes)
+                candidate = str(event_value)
+                return any(_prefix_match(candidate, str(prefix)) for prefix in prefixes)
             if operator == "in":
                 options = value if isinstance(value, list) else [value]
                 if isinstance(event_value, list):
