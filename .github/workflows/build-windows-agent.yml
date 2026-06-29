@@ -87,6 +87,7 @@ jobs:
             -lgdi32 \
             -lwinspool \
             -lfltlib \
+            -lcrypt32 \
             -static-libgcc \
             -static-libstdc++ \
             -static -lpthread \

@@ -54,6 +54,8 @@
 #include <shellapi.h>
 
 #pragma comment(lib, "shell32.lib")
+#include <wincrypt.h>
+#pragma comment(lib, "advapi32.lib")
 
 #pragma comment(lib, "cfgmgr32.lib")
 
@@ -194,26 +196,110 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
      return "127.0.0.1";
  }
  
+ /**
+  * Compute the real SHA-256 hash of a file using Windows CryptoAPI.
+  * Returns lowercase hex string (64 chars), or "" on error.
+  * Replaces the old weak polynomial hash.
+  */
  std::string CalculateFileHash(const std::string& filePath) {
-     std::ifstream file(filePath, std::ios::binary);
-     if (!file.is_open()) {
-         throw std::runtime_error("Cannot open file");
+     HCRYPTPROV hProv = 0;
+     HCRYPTHASH hHash = 0;
+     std::string result;
+
+     if (!CryptAcquireContextW(&hProv, nullptr, nullptr,
+                               PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) {
+         return "";
      }
-     
-     // Simple hash implementation (for production use proper SHA-256)
-     std::ostringstream hash;
-     hash << std::hex << std::setfill('0');
-     
-     char buffer[4096];
-     unsigned long long hashValue = 0;
-     while (file.read(buffer, sizeof(buffer)) || file.gcount() > 0) {
-         for (std::streamsize i = 0; i < file.gcount(); ++i) {
-             hashValue = hashValue * 31 + static_cast<unsigned char>(buffer[i]);
+
+     if (!CryptCreateHash(hProv, CALG_SHA_256, 0, 0, &hHash)) {
+         CryptReleaseContext(hProv, 0);
+         return "";
+     }
+
+     std::ifstream file(filePath, std::ios::binary);
+     if (file.is_open()) {
+         char buf[65536];
+         while (file.read(buf, sizeof(buf)) || file.gcount() > 0) {
+             CryptHashData(hHash,
+                           reinterpret_cast<BYTE*>(buf),
+                           static_cast<DWORD>(file.gcount()), 0);
+         }
+
+         BYTE hash[32];
+         DWORD hashLen = sizeof(hash);
+         if (CryptGetHashParam(hHash, HP_HASHVAL, hash, &hashLen, 0)) {
+             std::ostringstream oss;
+             oss << std::hex << std::setfill('0');
+             for (DWORD i = 0; i < hashLen; ++i)
+                 oss << std::setw(2) << static_cast<int>(hash[i]);
+             result = oss.str();
          }
      }
-     
-     hash << std::setw(64) << hashValue;
-     return hash.str();
+
+     CryptDestroyHash(hHash);
+     CryptReleaseContext(hProv, 0);
+     return result;
+ }
+
+ /**
+  * Download a file from any HTTPS URL using WinHTTP.
+  * Returns true on success, false on any error.
+  * Used by the auto-update loop to fetch the new binary from GitHub.
+  */
+ bool DownloadFileHttps(const std::string& url, const std::string& destPath) {
+     // Parse URL: https://host/path
+     std::regex urlRe(R"(https://([^/]+)(/.+))");
+     std::smatch m;
+     if (!std::regex_match(url, m, urlRe)) return false;
+
+     std::wstring host(m[1].str().begin(), m[1].str().end());
+     std::wstring path(m[2].str().begin(), m[2].str().end());
+
+     HINTERNET hSession = WinHttpOpen(L"SeceoKnight-Updater/1.0",
+         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+     if (!hSession) return false;
+
+     HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(),
+                                         INTERNET_DEFAULT_HTTPS_PORT, 0);
+     if (!hConnect) { WinHttpCloseHandle(hSession); return false; }
+
+     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path.c_str(),
+         nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+         WINHTTP_FLAG_SECURE);
+     if (!hRequest) {
+         WinHttpCloseHandle(hConnect);
+         WinHttpCloseHandle(hSession);
+         return false;
+     }
+
+     bool ok = false;
+     if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+         WinHttpReceiveResponse(hRequest, nullptr)) {
+
+         DWORD status = 0, statusSize = sizeof(status);
+         WinHttpQueryHeaders(hRequest,
+             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+             nullptr, &status, &statusSize, nullptr);
+
+         if (status == 200) {
+             std::ofstream out(destPath, std::ios::binary | std::ios::trunc);
+             if (out.is_open()) {
+                 DWORD read = 0;
+                 char buf[65536];
+                 while (WinHttpReadData(hRequest, buf, sizeof(buf), &read) && read > 0) {
+                     out.write(buf, read);
+                 }
+                 ok = out.good();
+             }
+         }
+     }
+
+     WinHttpCloseHandle(hRequest);
+     WinHttpCloseHandle(hConnect);
+     WinHttpCloseHandle(hSession);
+     return ok;
  }
  
  std::string ReadFileContent(const std::string& filePath, size_t maxBytes = 100000) {
@@ -2371,6 +2457,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
 
          workerThreads.emplace_back(&DLPAgent::HeartbeatLoop, this);
          workerThreads.emplace_back(&DLPAgent::PolicySyncLoop, this);
+         workerThreads.emplace_back(&DLPAgent::AutoUpdateLoop, this);
          workerThreads.emplace_back(&DLPAgent::ClipboardMonitor, this);
          workerThreads.emplace_back(&DLPAgent::UsbMonitor, this);
          workerThreads.emplace_back(&DLPAgent::FileSystemMonitor, this);
@@ -3643,6 +3730,161 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
          }
      }
      
+     /* ── Auto-Update Loop ────────────────────────────────────────────────────
+      *
+      * Every 5 minutes:
+      *   1. Fetch SHA-256 sidecar from GitHub (tiny text file, ~66 bytes)
+      *   2. Compute SHA-256 of the currently running binary
+      *   3. If they differ → new version available:
+      *        a. Download new binary to TEMP folder
+      *        b. Verify its SHA-256 matches what GitHub said
+      *        c. Write a .bat updater script that replaces the binary and
+      *           restarts the scheduled task after the current process exits
+      *        d. Launch the .bat detached and exit — the scheduled task
+      *           watchdog brings up the new version automatically
+      *
+      * Fail-open: any error (no internet, bad hash, disk full) is logged
+      * and silently skipped — the agent keeps running on the current version.
+      * ─────────────────────────────────────────────────────────────────────── */
+     void AutoUpdateLoop() {
+         static const std::string SHA256_URL =
+             "https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/"
+             "main/agents/endpoint/windows/seceoknight_agent.exe.sha256";
+         static const std::string EXE_URL =
+             "https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/"
+             "main/agents/endpoint/windows/seceoknight_agent.exe";
+         static const int CHECK_INTERVAL_SEC = 300; /* 5 minutes */
+
+         /* Stagger first check by 60s so startup completes first */
+         std::this_thread::sleep_for(std::chrono::seconds(60));
+
+         while (running) {
+             try {
+                 /* ── Step 1: Fetch expected SHA-256 from GitHub ─────────── */
+                 std::string tempSum = std::string(getenv("TEMP") ? getenv("TEMP")
+                                                   : "C:\\Windows\\Temp")
+                                       + "\\seceoknight_sum.txt";
+
+                 if (!DownloadFileHttps(SHA256_URL, tempSum)) {
+                     logger.Debug("AutoUpdate: cannot reach GitHub — skipping check");
+                     goto sleep_and_continue;
+                 }
+
+                 {
+                     std::ifstream sf(tempSum);
+                     if (!sf.is_open()) goto sleep_and_continue;
+                     std::string line;
+                     std::getline(sf, line);
+                     /* The sidecar file is "<hash>  filename" — take first token */
+                     std::string remoteHash = line.substr(0, 64);
+                     /* Lowercase for comparison */
+                     std::transform(remoteHash.begin(), remoteHash.end(),
+                                    remoteHash.begin(), ::tolower);
+
+                     if (remoteHash.size() != 64) {
+                         logger.Debug("AutoUpdate: invalid SHA-256 from GitHub");
+                         goto sleep_and_continue;
+                     }
+
+                     /* ── Step 2: Hash the running binary ────────────────── */
+                     wchar_t exePathW[MAX_PATH] = {};
+                     GetModuleFileNameW(nullptr, exePathW, MAX_PATH);
+                     std::wstring ws(exePathW);
+                     std::string currentExe(ws.begin(), ws.end());
+
+                     std::string localHash = CalculateFileHash(currentExe);
+                     std::transform(localHash.begin(), localHash.end(),
+                                    localHash.begin(), ::tolower);
+
+                     logger.Debug("AutoUpdate: remote=" + remoteHash.substr(0,12)
+                                  + "... local=" + localHash.substr(0,12) + "...");
+
+                     if (remoteHash == localHash) {
+                         logger.Debug("AutoUpdate: already up to date");
+                         goto sleep_and_continue;
+                     }
+
+                     /* ── Step 3: New version detected ───────────────────── */
+                     logger.Info("AutoUpdate: new version detected — downloading...");
+
+                     std::string tempExe = std::string(getenv("TEMP") ? getenv("TEMP")
+                                                       : "C:\\Windows\\Temp")
+                                           + "\\seceoknight_agent_update.exe";
+
+                     if (!DownloadFileHttps(EXE_URL, tempExe)) {
+                         logger.Warning("AutoUpdate: download failed — will retry next cycle");
+                         goto sleep_and_continue;
+                     }
+
+                     /* ── Step 4: Verify the downloaded binary ───────────── */
+                     std::string downloadedHash = CalculateFileHash(tempExe);
+                     std::transform(downloadedHash.begin(), downloadedHash.end(),
+                                    downloadedHash.begin(), ::tolower);
+
+                     if (downloadedHash != remoteHash) {
+                         logger.Warning("AutoUpdate: SHA-256 MISMATCH — rejecting download");
+                         logger.Warning("  Expected: " + remoteHash);
+                         logger.Warning("  Got     : " + downloadedHash);
+                         DeleteFileA(tempExe.c_str());
+                         goto sleep_and_continue;
+                     }
+
+                     logger.Info("AutoUpdate: SHA-256 verified — preparing update");
+
+                     /* ── Step 5: Write batch updater script ─────────────── */
+                     /* The script runs after this process exits:
+                        - waits 3s for process to fully exit
+                        - copies new exe over old
+                        - starts the scheduled task (brings up new version)
+                        - deletes itself                                        */
+                     std::string batPath = std::string(getenv("TEMP") ? getenv("TEMP")
+                                                       : "C:\\Windows\\Temp")
+                                           + "\\seceoknight_update.bat";
+                     {
+                         std::ofstream bat(batPath);
+                         bat << "@echo off\r\n";
+                         bat << "timeout /t 3 /nobreak >nul\r\n";
+                         bat << "copy /y \"" << tempExe << "\" \"" << currentExe << "\"\r\n";
+                         bat << "schtasks /run /tn \"SeceoKnight DLP Agent\"\r\n";
+                         bat << "del \"%~f0\"\r\n";  /* self-delete */
+                     }
+
+                     /* ── Step 6: Launch batch detached and exit ─────────── */
+                     STARTUPINFOA si = {};
+                     PROCESS_INFORMATION pi = {};
+                     si.cb = sizeof(si);
+                     std::string cmd = "cmd.exe /c \"" + batPath + "\"";
+                     std::vector<char> cmdBuf(cmd.begin(), cmd.end());
+                     cmdBuf.push_back('\0');
+
+                     if (CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr,
+                                        FALSE,
+                                        CREATE_NO_WINDOW | DETACHED_PROCESS,
+                                        nullptr, nullptr, &si, &pi)) {
+                         CloseHandle(pi.hProcess);
+                         CloseHandle(pi.hThread);
+                         logger.Info("AutoUpdate: updater launched — restarting with new version");
+                         /* Stop this agent — the batch script restarts it */
+                         running = false;
+                         return;
+                     } else {
+                         logger.Warning("AutoUpdate: failed to launch updater script");
+                     }
+                 }
+
+             } catch (const std::exception& e) {
+                 logger.Debug(std::string("AutoUpdate error: ") + e.what());
+             } catch (...) {
+                 logger.Debug("AutoUpdate: unknown error — skipping");
+             }
+
+             sleep_and_continue:
+             for (int i = 0; i < CHECK_INTERVAL_SEC && running; ++i) {
+                 std::this_thread::sleep_for(std::chrono::seconds(1));
+             }
+         }
+     }
+
      void PolicySyncLoop() {
         while (running) {
             std::this_thread::sleep_for(std::chrono::seconds(config.policySyncInterval));
