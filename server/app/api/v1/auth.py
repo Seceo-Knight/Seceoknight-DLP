@@ -16,6 +16,7 @@ import structlog
 from app.core.security import (
     create_access_token,
     create_refresh_token,
+    create_mfa_token,
     get_password_hash,
     verify_password,
     validate_password_strength,
@@ -29,6 +30,7 @@ from app.core.cache import get_cache
 from app.services.user_service import UserService
 from app.services.blacklist_service import TokenBlacklistService
 from app.services.audit_service import audit_log
+from app.services import mfa_service
 from app.models.user import User
 
 logger = structlog.get_logger()
@@ -46,6 +48,38 @@ class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+
+
+class LoginResponse(BaseModel):
+    """
+    Login can return either:
+      - Full tokens (mfa_required=False) — MFA not enabled for this user
+      - An mfa_token (mfa_required=True) — caller must complete /mfa/validate
+    """
+    access_token: str = ""
+    refresh_token: str = ""
+    token_type: str = "bearer"
+    mfa_required: bool = False
+    mfa_token: str = ""   # short-lived bridge token, only set when mfa_required=True
+
+
+class MfaValidateRequest(BaseModel):
+    mfa_token: str
+    code: str  # 6-digit TOTP code
+
+
+class MfaSetupResponse(BaseModel):
+    qr_code: str   # base64 PNG — render as <img src="data:image/png;base64,{qr_code}">
+    secret: str    # plaintext secret shown once for manual entry in authenticator apps
+
+
+class MfaVerifySetupRequest(BaseModel):
+    code: str      # first TOTP code the user enters to confirm setup
+
+
+class MfaDisableRequest(BaseModel):
+    password: str  # current password
+    code: str      # current TOTP code
 
 
 class RefreshTokenRequest(BaseModel):
@@ -128,7 +162,7 @@ async def register(
         )
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=LoginResponse)
 async def login(
     request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -213,7 +247,17 @@ async def login(
             detail="Password change required. Use /api/v1/auth/change-password to set a new password before logging in.",
         )
 
-    # Create tokens
+    # ── MFA gate ──────────────────────────────────────────────────────
+    # If the user has MFA enabled, do NOT issue full tokens yet.
+    # Return a short-lived mfa_token instead; the client must call
+    # POST /auth/mfa/validate with the TOTP code to get real tokens.
+    if getattr(user, "mfa_enabled", False):
+        mfa_tok = create_mfa_token(str(user.id))
+        logger.info("MFA challenge issued", user_id=str(user.id))
+        await audit_log(user.id, "auth.mfa_challenge", {})
+        return LoginResponse(mfa_required=True, mfa_token=mfa_tok)
+
+    # No MFA — issue tokens immediately (existing behaviour).
     access_token = create_access_token(
         data={
             "sub": str(user.id),
@@ -233,11 +277,11 @@ async def login(
 
     await audit_log(user.id, "auth.login", {})
 
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-    }
+    return LoginResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        mfa_required=False,
+    )
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -655,3 +699,264 @@ async def sso_exchange(
         "refresh_token": refresh_token,
         "token_type": "bearer",
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MFA Endpoints
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.post("/mfa/setup", response_model=MfaSetupResponse)
+async def mfa_setup(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Begin MFA setup for the authenticated user.
+
+    Generates a fresh TOTP secret, stores it encrypted in the DB
+    (mfa_enabled stays False until /mfa/verify-setup succeeds), and
+    returns the QR code + plaintext secret for the user to scan.
+
+    If the user already has MFA enabled this endpoint returns 409 so
+    the UI can redirect to /mfa/disable first.
+    """
+    if getattr(current_user, "mfa_enabled", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="MFA is already enabled. Disable it first to re-enroll.",
+        )
+
+    secret = mfa_service.generate_secret()
+    encrypted = mfa_service.encrypt_secret(secret)
+
+    user_service = UserService(db)
+    user = await user_service.get_user_by_id(str(current_user.id))
+    user.mfa_secret = encrypted
+    await db.commit()
+
+    qr = mfa_service.generate_qr_code_base64(secret, current_user.email)
+
+    await audit_log(current_user.id, "auth.mfa_setup_started", {})
+    logger.info("MFA setup started", user_id=str(current_user.id))
+
+    return MfaSetupResponse(qr_code=qr, secret=secret)
+
+
+@router.post("/mfa/verify-setup", response_model=TokenResponse)
+async def mfa_verify_setup(
+    body: MfaVerifySetupRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Complete MFA setup by verifying the first TOTP code.
+
+    The user scans the QR code from /mfa/setup into their authenticator
+    app, then enters the 6-digit code here. On success mfa_enabled is
+    set to True and fresh tokens are returned (so the UI stays logged in).
+    """
+    if getattr(current_user, "mfa_enabled", False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="MFA is already enabled.",
+        )
+
+    encrypted = getattr(current_user, "mfa_secret", None)
+    if not encrypted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No MFA setup in progress. Call /auth/mfa/setup first.",
+        )
+
+    try:
+        secret = mfa_service.decrypt_secret(encrypted)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MFA secret could not be read. Please restart setup.",
+        )
+
+    if not mfa_service.verify_totp(secret, body.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid code. Check your authenticator app and try again.",
+        )
+
+    user_service = UserService(db)
+    user = await user_service.get_user_by_id(str(current_user.id))
+    user.mfa_enabled = True
+    await db.commit()
+
+    access_token = create_access_token(
+        data={"sub": str(user.id), "email": user.email, "role": user.role}
+    )
+    refresh_token = create_refresh_token(
+        data={"sub": str(user.id), "email": user.email}
+    )
+
+    await audit_log(current_user.id, "auth.mfa_enabled", {})
+    logger.info("MFA enabled", user_id=str(current_user.id))
+
+    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+
+
+@router.post("/mfa/validate", response_model=TokenResponse)
+async def mfa_validate(
+    body: MfaValidateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Second step of MFA login: validate the TOTP code and issue full tokens.
+
+    Accepts the mfa_token returned by /auth/login (when mfa_required=True)
+    plus the 6-digit code from the user's authenticator app.
+
+    The mfa_token is single-use: it is consumed in Redis immediately so
+    replay attacks cannot reuse a captured token within its 5-minute window.
+    """
+    from jose import jwt as jose_jwt, JWTError, ExpiredSignatureError
+
+    # ── Decode & validate mfa_token ───────────────────────────────────
+    try:
+        payload = jose_jwt.decode(
+            body.mfa_token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+        )
+    except ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="MFA session expired. Please log in again.",
+        )
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid MFA token.",
+        )
+
+    if payload.get("type") != "mfa_pending":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type.",
+        )
+
+    user_id = payload.get("sub")
+    jti = payload.get("jti", "")
+
+    # ── Single-use enforcement ────────────────────────────────────────
+    used_key = f"mfa_used:{jti}"
+    try:
+        cache = get_cache()
+        if await cache.get(used_key) is not None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="MFA token already used. Please log in again.",
+            )
+        await cache.set(used_key, "1", ex=360)  # keep for 6 min (> 5 min TTL)
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Redis unavailable — fail open; expiry still enforced by JWT exp
+
+    # ── Load user and verify TOTP ─────────────────────────────────────
+    user_service = UserService(db)
+    user = await user_service.get_user_by_id(user_id)
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive.",
+        )
+
+    encrypted = getattr(user, "mfa_secret", None)
+    if not encrypted:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MFA secret missing. Contact an administrator.",
+        )
+
+    try:
+        secret = mfa_service.decrypt_secret(encrypted)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MFA secret could not be read.",
+        )
+
+    if not mfa_service.verify_totp(secret, body.code):
+        await audit_log(user.id, "auth.mfa_failed", {})
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authenticator code.",
+        )
+
+    # ── Issue full tokens ─────────────────────────────────────────────
+    access_token = create_access_token(
+        data={"sub": str(user.id), "email": user.email, "role": user.role}
+    )
+    refresh_token = create_refresh_token(
+        data={"sub": str(user.id), "email": user.email}
+    )
+
+    await audit_log(user.id, "auth.mfa_login", {})
+    logger.info("MFA login successful", user_id=str(user.id))
+
+    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+
+
+@router.post("/mfa/disable")
+async def mfa_disable(
+    body: MfaDisableRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Disable MFA for the authenticated user.
+
+    Requires both the current password AND a valid TOTP code to prevent
+    an attacker with a stolen session token from silently removing MFA.
+    """
+    if not getattr(current_user, "mfa_enabled", False):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="MFA is not enabled for this account.",
+        )
+
+    # Re-verify password
+    if not verify_password(body.password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect password.",
+        )
+
+    # Verify TOTP
+    encrypted = getattr(current_user, "mfa_secret", None)
+    if not encrypted:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MFA secret missing.",
+        )
+
+    try:
+        secret = mfa_service.decrypt_secret(encrypted)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="MFA secret could not be read.",
+        )
+
+    if not mfa_service.verify_totp(secret, body.code):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authenticator code.",
+        )
+
+    user_service = UserService(db)
+    user = await user_service.get_user_by_id(str(current_user.id))
+    user.mfa_enabled = False
+    user.mfa_secret = None
+    await db.commit()
+
+    await audit_log(current_user.id, "auth.mfa_disabled", {})
+    logger.info("MFA disabled", user_id=str(current_user.id))
+
+    return {"message": "MFA has been disabled for your account."}

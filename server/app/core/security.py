@@ -100,6 +100,25 @@ def create_refresh_token(data: Dict[str, Any]) -> str:
     return encoded_jwt
 
 
+def create_mfa_token(user_id: str) -> str:
+    """
+    Create a short-lived (5 min) JWT used as a bridge between the first
+    login step (password OK) and the second step (TOTP validation).
+
+    The token carries type='mfa_pending' so it cannot be used as an
+    access token — get_current_user rejects any token whose type != 'access'.
+    """
+    expire = datetime.utcnow() + timedelta(minutes=5)
+    payload = {
+        "sub": user_id,
+        "exp": expire,
+        "iat": datetime.utcnow(),
+        "jti": str(uuid.uuid4()),
+        "type": "mfa_pending",
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
 def decode_token(token: str) -> Dict[str, Any]:
     """
     Decode and validate JWT token

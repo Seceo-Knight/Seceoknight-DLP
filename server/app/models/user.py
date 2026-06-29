@@ -44,6 +44,10 @@ class User(Base):
     is_verified = Column(Boolean, default=False, nullable=False)
     must_change_password = Column(Boolean, default=False, nullable=False, server_default="false")
 
+    # MFA / TOTP
+    mfa_enabled = Column(Boolean, default=False, nullable=False, server_default="false")
+    mfa_secret = Column(String(255), nullable=True)  # Fernet-encrypted TOTP secret
+
     # Soft delete
     deleted_at = Column(DateTime(timezone=True), nullable=True)
 
