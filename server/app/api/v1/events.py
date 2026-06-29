@@ -180,8 +180,8 @@ async def create_event(
     from app.api.v1.agents import verify_agent_key
     await verify_agent_key(request)
 
-    db = get_mongodb()
-    events_collection = db["dlp_events"]
+    mongo_db = get_mongodb()
+    events_collection = mongo_db["dlp_events"]
 
     # Resolve ABAC attrs from the user that the event is about. If the
     # payload explicitly carried department/required_clearance we honour
