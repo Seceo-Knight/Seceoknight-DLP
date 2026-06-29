@@ -715,4 +715,36 @@ export async function getScanResults(jobId: string, params?: { skip?: number; li
 }
 
 
+// ── MFA / TOTP ──────────────────────────────────────────────────────────────
+
+/** Initiate MFA setup — returns QR code (base64 PNG) and plaintext secret */
+export async function mfaSetup(): Promise<{ qr_code: string; secret: string }> {
+  const { data } = await apiClient.post('/auth/mfa/setup')
+  return data
+}
+
+/** Confirm MFA setup by verifying the first TOTP code — enables MFA on the account */
+export async function mfaVerifySetup(code: string): Promise<{ message: string }> {
+  const { data } = await apiClient.post('/auth/mfa/verify-setup', { code })
+  return data
+}
+
+/** Complete a pending MFA login — exchange mfa_token + TOTP code for full tokens */
+export async function mfaValidate(
+  mfa_token: string,
+  code: string
+): Promise<{ access_token: string; refresh_token: string; token_type: string }> {
+  const { data } = await apiClient.post('/auth/mfa/validate', { mfa_token, code })
+  return data
+}
+
+/** Disable MFA — requires current password and a valid TOTP code */
+export async function mfaDisable(
+  password: string,
+  code: string
+): Promise<{ message: string }> {
+  const { data } = await apiClient.post('/auth/mfa/disable', { password, code })
+  return data
+}
+
 export default apiClient

@@ -4,6 +4,16 @@ import axios from 'axios'
 import { API_URL } from '../config'
 import { decodeJwt } from '../auth/jwt'
 
+/** Thrown by login() when the server requires a TOTP second factor. */
+export class MfaRequiredError extends Error {
+  mfaToken: string
+  constructor(mfaToken: string) {
+    super('MFA_REQUIRED')
+    this.name = 'MfaRequiredError'
+    this.mfaToken = mfaToken
+  }
+}
+
 export interface AuthUser {
   id: string
   email: string
@@ -22,6 +32,8 @@ interface AuthState {
   accessToken: string | null
   refreshToken: string | null
   login: (email: string, password: string) => Promise<void>
+  /** Called after a successful MFA validate — sets tokens and fetches /me */
+  loginWithTokens: (accessToken: string, refreshToken: string) => Promise<void>
   logout: () => void
   setTokens: (accessToken: string, refreshToken: string) => void
   refreshMe: () => Promise<void>
@@ -74,7 +86,14 @@ export const useAuthStore = create<AuthState>()(
             }
           )
 
-          const { access_token, refresh_token } = response.data
+          const responseData = response.data
+
+          // MFA second factor required — throw so the UI can show the TOTP step.
+          if (responseData.mfa_required) {
+            throw new MfaRequiredError(responseData.mfa_token)
+          }
+
+          const { access_token, refresh_token } = responseData
 
           // Resolve real identity from /auth/me. The JWT's `role` claim is
           // only used as an instant-UI hint while the /me request is in flight.
@@ -106,6 +125,22 @@ export const useAuthStore = create<AuthState>()(
             error.response?.data?.detail || 'Invalid email or password'
           throw new Error(errorMessage)
         }
+      },
+
+      loginWithTokens: async (accessToken: string, refreshToken: string) => {
+        let user: AuthUser
+        try {
+          user = await fetchMe(accessToken)
+        } catch {
+          const claims = decodeJwt(accessToken)
+          user = {
+            id: String(claims?.sub ?? ''),
+            email: String(claims?.email ?? ''),
+            role: String(claims?.role ?? 'VIEWER'),
+            permissions: [],
+          }
+        }
+        set({ isAuthenticated: true, accessToken, refreshToken, user })
       },
 
       logout: () => {
