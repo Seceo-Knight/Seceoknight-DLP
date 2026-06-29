@@ -161,6 +161,7 @@ async def create_event(
     event: EventCreate,
     request: Request,
     background_tasks: BackgroundTasks = None,
+    db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """
     Create a new DLP event.  Requires ``X-Agent-Key`` header from a registered agent.
@@ -239,6 +240,61 @@ async def create_event(
     if result.matched_count > 0:
         return {"status": "duplicate", "event_id": event.event_id}
 
+    # ── Step 2.5: Synchronous block check for clipboard events ──────────
+    # Run classification + policy evaluation inline so the agent gets a
+    # "block: true/false" field in the HTTP response it already receives.
+    # This avoids the need for a separate /policy/evaluate round-trip.
+    block_decision = False
+    if event.event_type.lower() in ("clipboard", "clipboard_copy") and event.content:
+        try:
+            from app.services.classification_engine import ClassificationEngine
+            from app.services.policy_evaluator import DatabasePolicyEvaluator
+
+            classification_engine = ClassificationEngine(db)
+            classification_result = await classification_engine.classify_content(
+                event.content,
+                context={"event_type": event.event_type, "file_name": ""},
+            )
+
+            event_data_eval = {
+                "classification_level": classification_result.classification,
+                "confidence_score": classification_result.confidence_score,
+                "classification_labels": [
+                    label
+                    for rule in classification_result.matched_rules
+                    for label in rule.get("classification_labels", [])
+                ],
+                "event_type": event.event_type,
+                "event_subtype": event.event_type,
+                "agent_id": event.agent_id,
+            }
+
+            policy_evaluator = DatabasePolicyEvaluator()
+            policy_matches = await policy_evaluator.evaluate_event(event_data_eval)
+
+            for match in policy_matches:
+                for action_obj in match.actions:
+                    action_type = action_obj.get("type") or action_obj.get("action")
+                    if action_type == "block":
+                        block_decision = True
+                        break
+                if block_decision:
+                    break
+
+            logger.info(
+                "Clipboard sync classification complete",
+                agent_id=event.agent_id,
+                classification=classification_result.classification,
+                confidence=classification_result.confidence_score,
+                matched_rules=len(classification_result.matched_rules),
+                block=block_decision,
+            )
+        except Exception as _sync_err:
+            logger.warning(
+                "Clipboard sync block check failed (non-fatal)",
+                error=str(_sync_err),
+            )
+
     # ── Step 3: Queue background processing ────────────────────────────
     background_tasks.add_task(
         _process_event_background,
@@ -246,7 +302,7 @@ async def create_event(
         payload=_build_processor_payload(event),
     )
 
-    return {"status": "accepted", "event_id": event.event_id}
+    return {"status": "accepted", "event_id": event.event_id, "block": block_decision}
 
 
 async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> None:

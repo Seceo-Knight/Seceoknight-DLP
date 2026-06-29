@@ -3851,39 +3851,37 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
 
             json.AddString("timestamp", GetCurrentTimestampISO());
 
-            SendEvent(json.Build());
-
-            // CLASSIFICATION-AWARE ENFORCEMENT: If local policy didn't block,
-            // call the server's real-time policy/evaluate endpoint so that
-            // classification_aware policies (e.g. Study Report keyword rules)
-            // get a chance to enforce a block decision.
-            if (classification.suggestedAction != "block") {
+            // Send event to server and read synchronous block decision.
+            // The /events endpoint now classifies clipboard content inline
+            // and returns "block": true if a classification_aware policy fires.
+            // This is cheaper than a separate /policy/evaluate round-trip.
+            {
+                std::string eventPayload = json.Build();
                 try {
-                    JsonBuilder evalJson;
-                    evalJson.AddString("content", content);
-                    evalJson.AddString("event_type", "clipboard_copy");
-                    evalJson.AddString("source_type", "clipboard");
-                    evalJson.AddString("agent_id", config.agentId);
-                    evalJson.AddString("user_email", GetUsername() + "@" + GetHostname());
-
-                    std::string evalPath = "/agents/" + config.agentId + "/policy/evaluate";
-                    auto [evalStatus, evalBody] = httpClient->Post(evalPath, evalJson.Build());
-
-                    if (evalStatus == 200) {
-                        std::string serverAction = config.ExtractJsonValue(evalBody, "action");
-                        if (serverAction == "BLOCK" || serverAction == "block") {
-                            logger.Warning("  🚫 SERVER CLASSIFICATION-AWARE BLOCK — sensitive content detected!");
-                            std::string reason = config.ExtractJsonValue(evalBody, "reason");
-                            if (!reason.empty()) {
-                                logger.Warning("  Reason: " + reason);
-                            }
-                            classification.suggestedAction = "block";
-                        }
+                    if (!allowEvents) {
+                        logger.Debug("Dropping event because no active policies");
                     } else {
-                        logger.Debug("Policy evaluate returned status " + std::to_string(evalStatus) + " — fail-open");
+                        auto [evStatus, evBody] = httpClient->Post("/events", eventPayload);
+                        if (evStatus == 200 || evStatus == 201) {
+                            logger.Debug("Event sent successfully");
+                            // Check for server-side block decision (boolean in JSON)
+                            bool serverBlock =
+                                evBody.find("\"block\":true")  != std::string::npos ||
+                                evBody.find("\"block\": true") != std::string::npos;
+                            if (serverBlock) {
+                                logger.Warning("  🚫 SERVER SYNC BLOCK — classification_aware policy matched!");
+                                classification.suggestedAction = "block";
+                            } else {
+                                logger.Debug("  Server decision: allow");
+                            }
+                        } else {
+                            logger.Warning("Failed to send event: " + std::to_string(evStatus) + " — fail-open");
+                        }
                     }
                 } catch (const std::exception& e) {
-                    logger.Warning("Classification-aware eval failed: " + std::string(e.what()) + " — fail-open");
+                    logger.Warning("Event send failed: " + std::string(e.what()) + " — fail-open");
+                } catch (...) {
+                    logger.Error("Error sending event");
                 }
             }
 
