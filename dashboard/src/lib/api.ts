@@ -497,6 +497,7 @@ export type AdminUser = {
   department: string | null
   clearance_level: number
   is_active: boolean
+  mfa_enabled: boolean
   created_at: string | null
   /** Effective permission set (role defaults ∪ direct grants), sorted. */
   permissions: string[]
@@ -735,6 +736,12 @@ export async function mfaValidate(
   code: string
 ): Promise<{ access_token: string; refresh_token: string; token_type: string }> {
   const { data } = await apiClient.post('/auth/mfa/validate', { mfa_token, code })
+  return data
+}
+
+/** Admin: disable and clear MFA for any user (account recovery) */
+export async function adminResetUserMfa(userId: string): Promise<{ message: string }> {
+  const { data } = await apiClient.post(`/users/${userId}/mfa/reset`)
   return data
 }
 

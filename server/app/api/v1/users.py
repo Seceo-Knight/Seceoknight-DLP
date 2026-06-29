@@ -93,6 +93,7 @@ def _to_out(user, effective: Optional[set] = None, direct: Optional[set] = None)
         "department": user.department,
         "clearance_level": getattr(user, "clearance_level", 1) or 1,
         "is_active": user.is_active,
+        "mfa_enabled": getattr(user, "mfa_enabled", False) or False,
         "created_at": user.created_at,
         "permissions": sorted(effective) if effective is not None else [],
         "direct_permissions": sorted(direct) if direct is not None else [],
@@ -390,3 +391,37 @@ async def delete_user(
         deactivated_by=str(current_user.id),
     )
     return {"message": "User deactivated successfully", "hard": False}
+
+
+@router.post("/{user_id}/mfa/reset", status_code=200)
+async def admin_reset_user_mfa(
+    user_id: str,
+    current_user: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Admin endpoint: disable and clear MFA for any user account.
+
+    Useful for account recovery when a user loses access to their
+    authenticator app. The user can re-enable MFA themselves afterwards
+    from Settings → Two-Factor Authentication.
+    """
+    user_service = UserService(db)
+    target = await user_service.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Clear MFA fields directly on the model
+    target.mfa_enabled = False
+    target.mfa_secret = None
+    db.add(target)
+    await db.commit()
+
+    logger.info(
+        "Admin reset MFA for user",
+        target_user_id=user_id,
+        target_email=target.email,
+        admin_id=str(current_user.id),
+    )
+
+    return {"message": f"MFA has been disabled for {target.email}"}

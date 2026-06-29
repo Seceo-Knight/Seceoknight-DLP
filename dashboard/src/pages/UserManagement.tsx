@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import {
   UserPlus, Edit3, Power, Trash2, X, Shield, Loader2, AlertCircle,
-  Users as UsersIcon,
+  Users as UsersIcon, ShieldOff,
 } from 'lucide-react'
 
 import {
@@ -12,6 +12,7 @@ import {
   adminUpdateUser,
   adminDeactivateUser,
   adminHardDeleteUser,
+  adminResetUserMfa,
   listAllPermissions,
   type AdminUser,
   type AdminUserCreateInput,
@@ -106,6 +107,16 @@ export default function UserManagement() {
       toast.error(err?.response?.data?.detail || 'Delete failed'),
   })
 
+  const resetMfaMutation = useMutation({
+    mutationFn: (id: string) => adminResetUserMfa(id),
+    onSuccess: () => {
+      toast.success('MFA has been reset for this user')
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] })
+    },
+    onError: (err: any) =>
+      toast.error(err?.response?.data?.detail || 'MFA reset failed'),
+  })
+
   const [createOpen, setCreateOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<AdminUser | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null)
@@ -187,6 +198,7 @@ export default function UserManagement() {
                   <Th>Clearance</Th>
                   <Th>Permissions</Th>
                   <Th>Status</Th>
+                  <Th>MFA</Th>
                   <Th className="text-right pr-6">Actions</Th>
                 </tr>
               </thead>
@@ -211,6 +223,9 @@ export default function UserManagement() {
                     <Td>
                       <StatusBadge active={u.is_active} />
                     </Td>
+                    <Td>
+                      <MfaBadge enabled={u.mfa_enabled} />
+                    </Td>
                     <Td className="text-right pr-6">
                       <div className="inline-flex gap-1">
                         <IconButton
@@ -220,6 +235,23 @@ export default function UserManagement() {
                         >
                           <Edit3 className="w-4 h-4" />
                         </IconButton>
+                        {u.mfa_enabled && (
+                          <IconButton
+                            title="Reset MFA (disable for account recovery)"
+                            onClick={() => {
+                              if (
+                                window.confirm(
+                                  `Reset MFA for ${u.email}?\n\nThis will disable two-factor authentication on their account. They can re-enable it from Settings.`
+                                )
+                              )
+                                resetMfaMutation.mutate(u.id)
+                            }}
+                            color="yellow"
+                            disabled={resetMfaMutation.isPending}
+                          >
+                            <ShieldOff className="w-4 h-4" />
+                          </IconButton>
+                        )}
                         {u.is_active && (
                           <IconButton
                             title="Deactivate (soft)"
@@ -320,6 +352,20 @@ function RoleBadge({ role }: { role: string }) {
   return (
     <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold ${cls}`}>
       {role}
+    </span>
+  )
+}
+
+function MfaBadge({ enabled }: { enabled: boolean }) {
+  return enabled ? (
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-800">
+      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+      On
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 text-gray-500">
+      <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+      Off
     </span>
   )
 }
