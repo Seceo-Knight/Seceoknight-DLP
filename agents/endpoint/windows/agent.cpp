@@ -3571,10 +3571,27 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
     
     void HeartbeatLoop() {
         int consecutiveFailures = 0;
+        int heartbeatCount = 0;
         while (running) {
             try {
                 SendHeartbeat();
-                consecutiveFailures = 0;  // Reset on success
+                consecutiveFailures = 0;
+                heartbeatCount++;
+
+                /* Log evaluation performance stats every 10 heartbeats
+                 * (~5 min at default 30s interval).
+                 * This proves the sub-10ms local evaluation guarantee. */
+                if (heartbeatCount % 10 == 0 && kernelClient_) {
+                    auto stats = kernelPolicyEngine_.GetEvalStats();
+                    if (stats.count > 0) {
+                        logger.Info("=== Policy Evaluation Stats ===");
+                        logger.Info("  Evaluations : " + std::to_string(stats.count));
+                        logger.Info("  Avg latency : " + std::to_string(stats.avgMs).substr(0,5) + " ms");
+                        logger.Info("  Peak latency: " + std::to_string(stats.maxMs).substr(0,5) + " ms");
+                        logger.Info(std::string("  Sub-10ms    : ") + (stats.within10ms ? "YES ✓" : "NO — investigate"));
+                        logger.Info("===============================");
+                    }
+                }
             } catch (...) {
                 consecutiveFailures++;
                 logger.Error("Heartbeat error (consecutive failures: " + std::to_string(consecutiveFailures) + ")");

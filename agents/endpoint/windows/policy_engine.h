@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <functional>
 #include <cstdint>
+#include <cmath>
 
 namespace cs {
 
@@ -208,6 +209,7 @@ struct Event {
     std::vector<Label>       labels;
     std::vector<std::string> dataTypes;
     float                    confidenceScore = 0.0f;
+    float                    entropyScore    = 0.0f;  /* Shannon bits/byte [0,8] */
 
     /* Populated by fingerprint engine */
     bool fingerprintMatched = false;
@@ -264,10 +266,14 @@ struct Decision {
     std::string policyId;
     std::string policyName;
     std::string reason;
-    int         priority = 0;
+    int         priority    = 0;
+    uint32_t    evalMicros  = 0;   /* How long Evaluate() took in microseconds */
 
     static Decision DefaultAllow() {
-        return Decision{Action::Allow, "", "", "No policy matched - default allow", 0};
+        Decision d;
+        d.action   = Action::Allow;
+        d.reason   = "No policy matched - default allow";
+        return d;
     }
 };
 
@@ -350,7 +356,37 @@ public:
         fingerprints_.clear();
     }
 
-    /** Full classification pipeline: fingerprint → regex → keyword */
+    /* ── Shannon Entropy ────────────────────────────────────────────────────
+     * Measures byte-level randomness using the information-theory formula:
+     *   H = -Σ p_i * log2(p_i)  for each distinct byte value
+     *
+     * Interpretation:
+     *   0.0 – 4.0  : normal text / source code (low entropy)
+     *   4.0 – 6.5  : structured data, XML, JSON
+     *   6.5 – 7.5  : base64-encoded data, private keys, obfuscated scripts
+     *   7.5 – 8.0  : encrypted content, compressed archives, random data
+     *
+     * Returns bits-per-byte in range [0.0, 8.0].
+     * Empty input returns 0.0.
+     */
+    static float ComputeShannonEntropy(const std::string& data) {
+        if (data.empty()) return 0.0f;
+
+        /* Count occurrences of each byte value (0–255) */
+        uint64_t freq[256] = {};
+        for (unsigned char c : data) freq[c]++;
+
+        const double total = static_cast<double>(data.size());
+        double entropy = 0.0;
+        for (int i = 0; i < 256; ++i) {
+            if (freq[i] == 0) continue;
+            double p = static_cast<double>(freq[i]) / total;
+            entropy -= p * std::log2(p);
+        }
+        return static_cast<float>(entropy);
+    }
+
+    /** Full classification pipeline: fingerprint → regex → keyword → entropy */
     void Classify(Event& event) const {
         /* Phase 1: Fingerprint check (O(1) hash lookup) */
         if (!event.fileHash.empty()) {
@@ -410,6 +446,45 @@ public:
                     totalWeight += rule.weight;
                     if (rule.label > highestLabel) highestLabel = rule.label;
                 }
+            }
+        }
+
+        /* Phase 4: Shannon Entropy Analysis
+         *
+         * Runs ONLY when no keyword/regex rule already matched with high
+         * confidence — entropy is a last-resort signal, not a primary one.
+         * This catches encrypted blobs, private keys, and compressed dumps
+         * that have no detectable keywords.
+         *
+         * Thresholds (bits/byte):
+         *   ≥ 7.5  → likely encrypted / compressed  → Restricted
+         *   ≥ 6.5  → likely base64 / obfuscated     → Confidential
+         *   ≥ 5.5  → elevated randomness             → Internal (boost)
+         */
+        if (!event.content.empty()) {
+            float entropy = ComputeShannonEntropy(event.content);
+            event.entropyScore = entropy;
+
+            /* Only escalate if entropy evidence is stronger than what
+               keyword/regex already found (avoid double-counting) */
+            if (entropy >= 7.5f && highestLabel < Label::Restricted) {
+                highestLabel = Label::Restricted;
+                totalWeight  = std::max(totalWeight, 0.85f);
+                if (std::find(event.dataTypes.begin(), event.dataTypes.end(),
+                              "high_entropy") == event.dataTypes.end()) {
+                    event.dataTypes.push_back("high_entropy");
+                }
+            } else if (entropy >= 6.5f && highestLabel < Label::Confidential) {
+                highestLabel = Label::Confidential;
+                totalWeight  = std::max(totalWeight, 0.65f);
+                if (std::find(event.dataTypes.begin(), event.dataTypes.end(),
+                              "elevated_entropy") == event.dataTypes.end()) {
+                    event.dataTypes.push_back("elevated_entropy");
+                }
+            } else if (entropy >= 5.5f && totalWeight < 0.3f) {
+                /* Mild signal — bump Internal only if nothing else matched */
+                highestLabel = Label::Internal;
+                totalWeight  = std::max(totalWeight, 0.35f);
             }
         }
 
@@ -503,6 +578,9 @@ public:
      * No heap allocation during evaluation.
      */
     Decision Evaluate(Event& event) const {
+        /* ── Timing start ───────────────────────────────────────────────── */
+        auto t0 = std::chrono::steady_clock::now();
+
         /* Get snapshot of active bundle (atomic read) */
         auto bundle = GetActiveBundle();
 
@@ -546,7 +624,53 @@ public:
             }
         }
 
+        /* ── Timing end + stats update ──────────────────────────────────── */
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+
+        evalCount_.fetch_add(1, std::memory_order_relaxed);
+        evalTotalUs_.fetch_add(static_cast<uint64_t>(elapsed), std::memory_order_relaxed);
+
+        /* Track peak latency with CAS loop */
+        uint64_t prev = evalMaxUs_.load(std::memory_order_relaxed);
+        while (static_cast<uint64_t>(elapsed) > prev &&
+               !evalMaxUs_.compare_exchange_weak(prev,
+                   static_cast<uint64_t>(elapsed),
+                   std::memory_order_relaxed)) {}
+
+        /* Store last evaluation time so callers can log it */
+        best.evalMicros = static_cast<uint32_t>(elapsed);
+
         return best;
+    }
+
+    /* ── Evaluation statistics ──────────────────────────────────────────────
+     * Call GetEvalStats() to get a snapshot of all evaluation timings.
+     * Useful for dashboards, logs, and verifying the <10ms guarantee.
+     */
+    struct EvalStats {
+        uint64_t count;       /* total evaluations since start */
+        double   avgMs;       /* average latency in milliseconds */
+        double   maxMs;       /* peak latency in milliseconds */
+        bool     within10ms;  /* true if peak is under 10ms */
+    };
+
+    EvalStats GetEvalStats() const {
+        uint64_t count   = evalCount_.load(std::memory_order_relaxed);
+        uint64_t totalUs = evalTotalUs_.load(std::memory_order_relaxed);
+        uint64_t maxUs   = evalMaxUs_.load(std::memory_order_relaxed);
+        EvalStats s;
+        s.count      = count;
+        s.avgMs      = (count > 0) ? (totalUs / 1000.0 / count) : 0.0;
+        s.maxMs      = maxUs / 1000.0;
+        s.within10ms = (maxUs < 10000);
+        return s;
+    }
+
+    void ResetEvalStats() {
+        evalCount_.store(0,  std::memory_order_relaxed);
+        evalTotalUs_.store(0, std::memory_order_relaxed);
+        evalMaxUs_.store(0,  std::memory_order_relaxed);
     }
 
     void SetClassifier(const ClassificationEngine* classifier) {
@@ -579,6 +703,11 @@ private:
     std::shared_ptr<PolicyBundle> activeBundle_;
     std::shared_ptr<PolicyBundle> previousBundle_;
     const ClassificationEngine* classifier_ = nullptr;
+
+    /* Evaluation timing counters — updated atomically on every Evaluate() call */
+    mutable std::atomic<uint64_t> evalCount_{0};
+    mutable std::atomic<uint64_t> evalTotalUs_{0};
+    mutable std::atomic<uint64_t> evalMaxUs_{0};
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
