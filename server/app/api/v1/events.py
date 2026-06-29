@@ -248,7 +248,7 @@ async def create_event(
     if event.event_type.lower() in ("clipboard", "clipboard_copy") and event.content:
         try:
             from app.services.classification_engine import ClassificationEngine
-            from app.services.policy_evaluator import DatabasePolicyEvaluator
+            from app.policies.database_policy_evaluator import DatabasePolicyEvaluator
 
             classification_engine = ClassificationEngine(db)
             classification_result = await classification_engine.classify_content(
