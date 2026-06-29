@@ -168,6 +168,9 @@ services:
 
   # Manager API
   manager:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
     image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-manager:latest
     container_name: seceoknight-manager
     environment:
@@ -262,6 +265,9 @@ services:
 
   # Dashboard
   dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
     image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-dashboard:latest
     container_name: seceoknight-dashboard
     # No host port binding — dashboard is served via Nginx on :443.
@@ -304,6 +310,9 @@ services:
 
   # Celery Worker
   celery-worker:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
     image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-manager:latest
     container_name: seceoknight-celery-worker
     command: celery -A app.tasks worker --loglevel=info --concurrency=4
@@ -375,6 +384,9 @@ services:
 
   # Celery Beat (Scheduler)
   celery-beat:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
     image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-manager:latest
     container_name: seceoknight-celery-beat
     # --pidfile and --schedule both point at /tmp which is always
