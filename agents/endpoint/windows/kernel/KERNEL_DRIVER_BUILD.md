@@ -134,14 +134,64 @@ Start-ScheduledTask -TaskName "SeceoKnight DLP Agent"
 
 ---
 
-## Phase 7 — Rebuild the Agent .exe (with -lfltlib)
+## Phase 7 — Install MSYS2 and Rebuild the Agent .exe
 
-The user-mode agent now links against `fltlib.lib` for the kernel communication.
-Rebuild it in MSYS2 with the new flag:
+The user-mode agent needs to be rebuilt with an extra flag (`-lfltlib`) for kernel communication.
+MSYS2 is the compiler environment we use to build the Windows C++ agent.
+
+### Step 7a — Install MSYS2 (if not already installed)
+
+1. Go to **https://www.msys2.org/**
+2. Download `msys2-x86_64-XXXXXXXX.exe` and run it
+3. Install to the default path: `C:\msys64`
+4. When installation finishes, **uncheck** "Run MSYS2 now" and click Finish
+
+### Step 7b — Open MSYS2 MinGW64 terminal
+
+> ⚠️ You must use the **MinGW64** terminal, NOT the MSYS2 or UCRT64 terminal.
+> Only MinGW64 produces native Windows .exe files.
+
+1. Press the **Windows key**
+2. Search for **"MSYS2 MinGW x64"**
+3. Click it to open the terminal — it looks like a black command prompt window
+
+### Step 7c — Install g++ compiler (first time only)
+
+Inside the MSYS2 MinGW64 terminal, run these two commands one at a time:
 
 ```bash
-cd /c/path/to/agents/endpoint/windows
+pacman -Syu
+```
+> If it says "close the terminal and reopen", do that, then open MSYS2 MinGW64 again and run:
 
+```bash
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-gcc-libs
+```
+Press `Y` and Enter when asked to confirm.
+
+### Step 7d — Navigate to the project folder
+
+Still inside the MSYS2 MinGW64 terminal:
+
+```bash
+cd /c/Users/YourWindowsUsername/Downloads/NewDLP/extracted/cybersentineldlp-prod-main/agents/endpoint/windows
+```
+
+> Replace `YourWindowsUsername` with your actual Windows username (e.g. `vaibhav`).
+> In MSYS2, `C:\` is written as `/c/`
+
+Pull the latest code first:
+```bash
+cd /c/Users/YourWindowsUsername/Downloads/NewDLP/extracted/cybersentineldlp-prod-main
+git pull origin main
+cd agents/endpoint/windows
+```
+
+### Step 7e — Build the agent
+
+Run this single command inside the MSYS2 MinGW64 terminal:
+
+```bash
 g++ -std=c++17 -O2 \
   agent.cpp network_exfil_monitor.cpp print_monitor.cpp screen_capture_monitor.cpp \
   -o seceoknight_agent.exe \
@@ -150,12 +200,36 @@ g++ -std=c++17 -O2 \
   -lfltlib -static
 ```
 
-Then deploy:
+> The key new flag is **`-lfltlib`** — this links the Windows Filter Manager library
+> so the agent can talk to the kernel driver via `FilterConnectCommunicationPort`.
+
+Wait ~1-2 minutes. When it finishes with no errors, you will see `seceoknight_agent.exe`
+in the current folder.
+
+### Step 7f — Deploy the new .exe
+
+Now switch to **PowerShell as Administrator** and run:
+
 ```powershell
+# Stop the running agent
 Stop-ScheduledTask -TaskName "SeceoKnight DLP Agent"
 Get-Process | Where-Object {$_.Path -like "*SeceoKnight*"} | Stop-Process -Force
-Copy-Item "seceoknight_agent.exe" "C:\Program Files\SeceoKnight\seceoknight_agent.exe" -Force
+
+# Copy new binary (adjust path to match your Windows username)
+Copy-Item "C:\Users\YourWindowsUsername\Downloads\NewDLP\extracted\cybersentineldlp-prod-main\agents\endpoint\windows\seceoknight_agent.exe" `
+          "C:\Program Files\SeceoKnight\seceoknight_agent.exe" -Force
+
+# Start the agent again
 Start-ScheduledTask -TaskName "SeceoKnight DLP Agent"
+```
+
+### Step 7g — Push the new .exe to git (from MSYS2 terminal)
+
+```bash
+cd /c/Users/YourWindowsUsername/Downloads/NewDLP/extracted/cybersentineldlp-prod-main
+git add agents/endpoint/windows/seceoknight_agent.exe
+git commit -m "build: Windows agent with kernel minifilter support (-lfltlib)"
+git push origin main
 ```
 
 ---
