@@ -1,5 +1,5 @@
 /**
- * CyberSentinel DLP Minifilter - Shared Header (v2)
+ * SeceoKnight DLP Minifilter - Shared Header (v2)
  *
  * Shared between kernel driver and user-mode service.
  * Defines communication structures for the filter port.
@@ -19,8 +19,8 @@
  * Communication Port Names
  * ──────────────────────────────────────────────────────────────────────────── */
 
-#define CS_FILTER_PORT_NAME     L"\\CyberSentinelPort"
-#define CS_FILTER_DRIVER_NAME   L"CyberSentinelFilter"
+#define CS_FILTER_PORT_NAME     L"\\SeceoKnightPort"
+#define CS_FILTER_DRIVER_NAME   L"SeceoKnightFilter"
 
 /* ────────────────────────────────────────────────────────────────────────────
  * Limits

@@ -39,6 +39,8 @@
  #include "screen_capture_monitor.h"
  #include "print_monitor.h"
  #include "network_exfil_monitor.h"
+ #include "policy_engine.h"
+ #include "kernel/filter_comm.h"
  #include <regex>
  #include <iomanip>
  #include <filesystem>
@@ -1417,6 +1419,14 @@ static ClassificationResult Classify(const std::string& content,
     std::mutex usbTransferMutex;
     std::atomic<bool> usbBlockingActive{false};  // Track if USB blocking is currently active
 
+    // ── Kernel minifilter integration ──────────────────────────────────────────
+    // These are default-constructed; kernelClient_ is only created in Start()
+    // if the driver port is actually available.
+    cs::ClassificationEngine kernelClassifier_;
+    cs::PolicyEngine         kernelPolicyEngine_;
+    std::unique_ptr<cs::FilterCommClient> kernelClient_;
+    // ──────────────────────────────────────────────────────────────────────────
+
      static DLPAgent* s_instance;
     
      static LRESULT CALLBACK UsbWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -2317,6 +2327,48 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              logger.Warning("==============================================");
          }
          
+         // ── Kernel minifilter: connect to SeceoKnightFilter driver ──────────
+         // Sets up PolicyEngine + ClassificationEngine for kernel-level
+         // file system enforcement.  Fails gracefully if driver not loaded.
+         kernelPolicyEngine_.SetClassifier(&kernelClassifier_);
+         kernelClient_ = std::make_unique<cs::FilterCommClient>(
+             &kernelPolicyEngine_, &kernelClassifier_);
+
+         // Wire logged kernel events to the server (async, non-blocking)
+         kernelClient_->SetEventLogCallback([this](const cs::LoggedEvent& ev) {
+             try {
+                 // Build a minimal event JSON and POST to /events
+                 std::string path = "";
+                 int wlen = WideCharToMultiByte(CP_UTF8, 0, ev.eventData.FilePath, -1, nullptr, 0, nullptr, nullptr);
+                 if (wlen > 1) {
+                     path.resize(wlen - 1);
+                     WideCharToMultiByte(CP_UTF8, 0, ev.eventData.FilePath, -1, &path[0], wlen, nullptr, nullptr);
+                 }
+                 std::string pid = std::to_string(ev.eventData.ProcessId);
+                 std::string blocked = (ev.decision.action == cs::Action::Block) ? "true" : "false";
+                 std::string evJson = "{\"event_type\":\"kernel_file\","
+                     "\"agent_id\":\"" + config.agentId + "\","
+                     "\"file_path\":\"" + path + "\","
+                     "\"process_id\":" + pid + ","
+                     "\"blocked\":" + blocked + "}";
+                 httpClient->Post("/events/kernel", evJson);
+             } catch (...) {}
+         });
+
+         bool kernelConnected = kernelClient_->Start();
+         if (kernelConnected) {
+             logger.Info("==============================================");
+             logger.Info("Kernel minifilter CONNECTED — kernel-level");
+             logger.Info("file system enforcement is ACTIVE.");
+             logger.Info("Driver: SeceoKnightFilter (\\SeceoKnightPort)");
+             logger.Info("==============================================");
+         } else {
+             logger.Warning("Kernel minifilter NOT loaded — running in");
+             logger.Warning("user-mode-only mode. To enable kernel-level");
+             logger.Warning("enforcement, install csfilter.sys (WDK build).");
+         }
+         // ─────────────────────────────────────────────────────────────────────
+
          workerThreads.emplace_back(&DLPAgent::HeartbeatLoop, this);
          workerThreads.emplace_back(&DLPAgent::PolicySyncLoop, this);
          workerThreads.emplace_back(&DLPAgent::ClipboardMonitor, this);
@@ -2758,6 +2810,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          
          logger.Info("Stopping agent...");
          running = false;
+
+         // Stop kernel minifilter client first (closes filter port)
+         if (kernelClient_) {
+             try { kernelClient_->Stop(); } catch (...) {}
+         }
 
          // Shut down the isolated network exfil monitor before joining the
          // DLPAgent worker threads so its background threads exit cleanly.

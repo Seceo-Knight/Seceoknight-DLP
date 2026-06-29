@@ -1,5 +1,5 @@
 ;;;
-;;; CyberSentinel DLP Minifilter Driver
+;;; SeceoKnight DLP Minifilter Driver
 ;;; Windows 10/11 x64
 ;;;
 
@@ -64,10 +64,10 @@ csfilter.sys = 1,,
 ;;; --- Strings ---
 
 [Strings]
-ProviderString      = "CyberSentinel"
-ServiceName         = "CyberSentinelFilter"
-ServiceDescription  = "CyberSentinel DLP File System Minifilter"
-DefaultInstance     = "CyberSentinel Default Instance"
-Instance1.Name      = "CyberSentinel Default Instance"
+ProviderString      = "SeceoKnight"
+ServiceName         = "SeceoKnightFilter"
+ServiceDescription  = "SeceoKnight DLP File System Minifilter"
+DefaultInstance     = "SeceoKnight Default Instance"
+Instance1.Name      = "SeceoKnight Default Instance"
 Instance1.Altitude  = "370100"     ; Activity Monitor altitude range
-DiskId1             = "CyberSentinel DLP Installation Disk"
+DiskId1             = "SeceoKnight DLP Installation Disk"

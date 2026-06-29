@@ -1,5 +1,5 @@
 /**
- * CyberSentinel DLP Minifilter Driver
+ * SeceoKnight DLP Minifilter Driver
  *
  * Kernel-mode file system minifilter for Windows 10/11 x64.
  * Intercepts file operations to removable media and communicates
@@ -30,8 +30,8 @@
  * Constants
  * ──────────────────────────────────────────────────────────────────────────── */
 
-#define CS_DRIVER_TAG           'slFC'   /* CyberSentinel Filter tag */
-#define CS_PORT_NAME            L"\\CyberSentinelPort"
+#define CS_DRIVER_TAG           'slFC'   /* SeceoKnight Filter tag */
+#define CS_PORT_NAME            L"\\SeceoKnightPort"
 #define CS_MAX_PATH             520
 #define CS_MAX_SID_LENGTH       128
 #define CS_MAX_PROCESS_NAME     260
@@ -210,19 +210,19 @@ NTSTATUS DriverEntry(
 
     UNREFERENCED_PARAMETER(RegistryPath);
 
-    DbgPrint("[CyberSentinel] DriverEntry: Loading minifilter\n");
+    DbgPrint("[SeceoKnight] DriverEntry: Loading minifilter\n");
 
     /* Step 1: Register the minifilter */
     status = FltRegisterFilter(DriverObject, &g_FilterRegistration, &g_FilterData.FilterHandle);
     if (!NT_SUCCESS(status)) {
-        DbgPrint("[CyberSentinel] FltRegisterFilter failed: 0x%08X\n", status);
+        DbgPrint("[SeceoKnight] FltRegisterFilter failed: 0x%08X\n", status);
         return status;
     }
 
     /* Step 2: Create the communication port for user-mode service */
     status = FltBuildDefaultSecurityDescriptor(&sd, FLT_PORT_ALL_ACCESS);
     if (!NT_SUCCESS(status)) {
-        DbgPrint("[CyberSentinel] FltBuildDefaultSecurityDescriptor failed: 0x%08X\n", status);
+        DbgPrint("[SeceoKnight] FltBuildDefaultSecurityDescriptor failed: 0x%08X\n", status);
         FltUnregisterFilter(g_FilterData.FilterHandle);
         return status;
     }
@@ -244,7 +244,7 @@ NTSTATUS DriverEntry(
     FltFreeSecurityDescriptor(sd);
 
     if (!NT_SUCCESS(status)) {
-        DbgPrint("[CyberSentinel] FltCreateCommunicationPort failed: 0x%08X\n", status);
+        DbgPrint("[SeceoKnight] FltCreateCommunicationPort failed: 0x%08X\n", status);
         FltUnregisterFilter(g_FilterData.FilterHandle);
         return status;
     }
@@ -252,13 +252,13 @@ NTSTATUS DriverEntry(
     /* Step 3: Start filtering */
     status = FltStartFiltering(g_FilterData.FilterHandle);
     if (!NT_SUCCESS(status)) {
-        DbgPrint("[CyberSentinel] FltStartFiltering failed: 0x%08X\n", status);
+        DbgPrint("[SeceoKnight] FltStartFiltering failed: 0x%08X\n", status);
         FltCloseCommunicationPort(g_FilterData.ServerPort);
         FltUnregisterFilter(g_FilterData.FilterHandle);
         return status;
     }
 
-    DbgPrint("[CyberSentinel] Minifilter loaded successfully\n");
+    DbgPrint("[SeceoKnight] Minifilter loaded successfully\n");
     return STATUS_SUCCESS;
 }
 
@@ -270,7 +270,7 @@ NTSTATUS CsFilterUnload(FLT_FILTER_UNLOAD_FLAGS Flags)
 {
     UNREFERENCED_PARAMETER(Flags);
 
-    DbgPrint("[CyberSentinel] Unloading minifilter\n");
+    DbgPrint("[SeceoKnight] Unloading minifilter\n");
 
     if (g_FilterData.ServerPort) {
         FltCloseCommunicationPort(g_FilterData.ServerPort);
@@ -309,7 +309,7 @@ NTSTATUS CsInstanceSetup(
         return STATUS_FLT_DO_NOT_ATTACH;
     }
 
-    DbgPrint("[CyberSentinel] Attaching to volume (type=%d, fs=%d)\n",
+    DbgPrint("[SeceoKnight] Attaching to volume (type=%d, fs=%d)\n",
              VolumeDeviceType, VolumeFilesystemType);
 
     return STATUS_SUCCESS;
@@ -335,7 +335,7 @@ NTSTATUS CsPortConnect(
     g_FilterData.ClientPort = ClientPort;
     g_FilterData.ServiceConnected = TRUE;
 
-    DbgPrint("[CyberSentinel] User-mode service connected\n");
+    DbgPrint("[SeceoKnight] User-mode service connected\n");
     return STATUS_SUCCESS;
 }
 
@@ -347,7 +347,7 @@ void CsPortDisconnect(_In_opt_ PVOID ConnectionCookie)
     g_FilterData.ClientPort = NULL;
     g_FilterData.ServiceConnected = FALSE;
 
-    DbgPrint("[CyberSentinel] User-mode service disconnected\n");
+    DbgPrint("[SeceoKnight] User-mode service disconnected\n");
 }
 
 NTSTATUS CsPortMessageNotify(
@@ -503,7 +503,7 @@ static CS_DECISION CsSendEventAndGetDecision(PCS_EVENT_MESSAGE EventMsg)
 
     if (!NT_SUCCESS(status)) {
         /* Timeout or error → fail-open (ALLOW) to prevent system deadlock */
-        DbgPrint("[CyberSentinel] FltSendMessage failed (0x%08X) — allowing operation\n", status);
+        DbgPrint("[SeceoKnight] FltSendMessage failed (0x%08X) — allowing operation\n", status);
         return CsDecisionAllow;
     }
 

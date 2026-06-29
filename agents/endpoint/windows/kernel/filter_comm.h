@@ -1,5 +1,5 @@
 /**
- * CyberSentinel DLP — User-Mode Filter Communication Client
+ * SeceoKnight DLP — User-Mode Filter Communication Client
  *
  * Connects to the kernel minifilter via FilterConnectCommunicationPort,
  * receives file operation events, evaluates policies, and sends
