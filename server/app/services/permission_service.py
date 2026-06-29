@@ -43,10 +43,15 @@ _ALL_PERMISSIONS: frozenset[str] = frozenset({
 })
 
 # Fallback defaults for users with a UserRole enum value but no role_id FK.
+# ANALYST and MANAGER carry view_all_departments so they bypass the ABAC
+# department filter and can see events across all endpoints/agents. Without
+# this, a newly created user whose department column is NULL triggers the
+# ABAC deny-all sentinel and sees zero events on the dashboard.
 _ROLE_DEFAULTS: dict[str, frozenset[str]] = {
     "ADMIN":   _ALL_PERMISSIONS,
-    "ANALYST": frozenset({"view_events", "view_alerts", "view_dashboard", "view_users"}),
-    "MANAGER": frozenset({"view_events", "export_events", "view_dashboard", "view_users"}),
+    "ANALYST": frozenset({"view_events", "view_alerts", "view_dashboard", "view_users", "view_all_departments"}),
+    "MANAGER": frozenset({"view_events", "export_events", "view_dashboard", "view_users", "view_all_departments",
+                          "create_policy", "update_policy", "assign_policy"}),
     "VIEWER":  frozenset({"view_events", "view_dashboard"}),
     "AGENT":   frozenset(),
 }

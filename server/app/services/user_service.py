@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
+from app.models.role import Role
 from app.core.security import get_password_hash, verify_password
 
 
@@ -114,6 +115,16 @@ class UserService:
         if existing_user:
             raise ValueError(f"User with email {email} already exists")
 
+        # Look up role_id from the roles table so the normalized
+        # role_permissions path is used by get_user_permissions().
+        # If the role row doesn't exist yet (e.g. test/migration runs),
+        # fall back gracefully — _ROLE_DEFAULTS covers the NULL role_id case.
+        role_row = await self.db.execute(
+            select(Role).where(Role.name == role.upper())
+        )
+        role_obj = role_row.scalar_one_or_none()
+        role_id = role_obj.id if role_obj else None
+
         # Create new user
         hashed_password = get_password_hash(password)
         user = User(
@@ -122,6 +133,7 @@ class UserService:
             hashed_password=hashed_password,
             full_name=full_name,
             role=role,
+            role_id=role_id,
             organization=organization,
             department=department,
             clearance_level=clearance_level if clearance_level is not None else 1,
@@ -166,6 +178,13 @@ class UserService:
             user.full_name = full_name
         if role is not None:
             user.role = role
+            # Keep role_id in sync so the normalized role_permissions path
+            # stays correct after a role change.
+            role_row = await self.db.execute(
+                select(Role).where(Role.name == role.upper())
+            )
+            role_obj = role_row.scalar_one_or_none()
+            user.role_id = role_obj.id if role_obj else None
         if organization is not None:
             user.organization = organization
         if is_active is not None:

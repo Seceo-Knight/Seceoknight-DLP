@@ -56,10 +56,14 @@ PERMISSIONS: list[tuple[str, str]] = [
 
 # ── System role → permission name assignments (spec PART 1 §D) ───────────
 # ADMIN gets everything (including view_all_departments → full ABAC bypass).
+# ANALYST and MANAGER also carry view_all_departments so they can see events
+# across all agents/departments. Without this, users created without a
+# department value trigger the ABAC deny-all and see zero dashboard events.
 ROLE_PERMISSIONS: dict[str, list[str]] = {
     "ADMIN":   [p[0] for p in PERMISSIONS],
-    "ANALYST": ["view_events", "view_alerts", "view_dashboard", "view_users"],
-    "MANAGER": ["view_events", "export_events", "view_dashboard", "view_users"],
+    "ANALYST": ["view_events", "view_alerts", "view_dashboard", "view_users", "view_all_departments"],
+    "MANAGER": ["view_events", "export_events", "view_dashboard", "view_users", "view_all_departments",
+                "create_policy", "update_policy", "assign_policy"],
     # VIEWER is kept for backwards-compat (existing default for new users).
     # Spec did not call it out; grant the minimum that lets a VIEWER see the
     # dashboard without surfacing admin-only actions.
