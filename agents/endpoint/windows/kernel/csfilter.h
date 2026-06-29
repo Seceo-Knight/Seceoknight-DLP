@@ -15,6 +15,18 @@
 #ifndef _CSFILTER_H_
 #define _CSFILTER_H_
 
+/* Ensure Windows types are available (ULONG, WCHAR, LONGLONG, LARGE_INTEGER) */
+#ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
+/* NTSTATUS is defined in <winternl.h> under MinGW */
+#ifndef _NTSTATUS_DEFINED
+#  define _NTSTATUS_DEFINED
+   typedef LONG NTSTATUS;
+#endif
+
 /* ────────────────────────────────────────────────────────────────────────────
  * Communication Port Names
  * ──────────────────────────────────────────────────────────────────────────── */

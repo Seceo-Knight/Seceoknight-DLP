@@ -17,7 +17,47 @@
 #pragma once
 
 #include <windows.h>
-#include <fltUser.h>
+
+/* fltUser.h is part of the WDK / Windows SDK.
+ * Under MinGW (MSYS2) it is not present, so we declare the three
+ * functions we need directly from the Windows documentation. */
+#if defined(_MSC_VER) && __has_include(<fltUser.h>)
+#  include <fltUser.h>
+#  pragma comment(lib, "fltlib.lib")
+#else
+/* MinGW — declare filter functions manually.
+   The import library (libfltlib.a) is generated at build time via dlltool. */
+#ifndef _FLTUSER_H_
+#define _FLTUSER_H_
+typedef struct _FILTER_MESSAGE_HEADER {
+    ULONG  ReplyLength;
+    ULONG  MessageId;
+} FILTER_MESSAGE_HEADER, *PFILTER_MESSAGE_HEADER;
+
+typedef struct _FILTER_REPLY_HEADER {
+    NTSTATUS Status;
+    ULONG    MessageId;
+} FILTER_REPLY_HEADER, *PFILTER_REPLY_HEADER;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+HRESULT WINAPI FilterConnectCommunicationPort(
+    LPCWSTR lpPortName, DWORD dwOptions, LPVOID lpContext,
+    WORD wSizeOfContext, LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+    HANDLE* hPort);
+HRESULT WINAPI FilterGetMessage(
+    HANDLE hPort, PFILTER_MESSAGE_HEADER lpMessageBuffer,
+    DWORD dwMessageBufferSize, LPOVERLAPPED lpOverlapped);
+HRESULT WINAPI FilterReplyMessage(
+    HANDLE hPort, PFILTER_REPLY_HEADER lpReplyBuffer,
+    DWORD dwReplyBufferSize);
+#ifdef __cplusplus
+}
+#endif
+#endif /* _FLTUSER_H_ */
+#endif /* MinGW */
+
 #include <string>
 #include <thread>
 #include <atomic>
@@ -29,8 +69,6 @@
 /* Include shared structures */
 #include "csfilter.h"
 #include "../policy_engine.h"
-
-#pragma comment(lib, "fltlib.lib")
 
 namespace cs {
 

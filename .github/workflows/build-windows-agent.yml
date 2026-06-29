@@ -34,6 +34,26 @@ jobs:
             mingw-w64-x86_64-headers-git
             mingw-w64-x86_64-windows-default-manifest
 
+      - name: Generate fltlib import library
+        run: |
+          echo "=== Generating fltlib import library from Windows system DLL ==="
+          # fltLib.dll is a Windows system DLL — MinGW has no pre-built .a for it.
+          # We create the .def file manually listing just the functions we use,
+          # then use dlltool to generate libfltlib.a so we can link with -lfltlib.
+          cat > /tmp/fltLib.def << 'EOF'
+          LIBRARY "fltLib.dll"
+          EXPORTS
+            FilterConnectCommunicationPort
+            FilterDisconnectCommunicationPort
+            FilterGetMessage
+            FilterReplyMessage
+            FilterSendMessage
+            FilterLoad
+            FilterUnload
+          EOF
+          dlltool -D fltLib.dll -d /tmp/fltLib.def -l /mingw64/lib/libfltlib.a
+          echo "libfltlib.a created: $(ls -lh /mingw64/lib/libfltlib.a)"
+
       - name: Build Windows agent
         working-directory: agents/endpoint/windows
         run: |
@@ -43,6 +63,7 @@ jobs:
           echo "=== Checking headers ==="
           ls /mingw64/include/wbemidl.h 2>/dev/null && echo "wbemidl.h found" || echo "wbemidl.h NOT found"
           ls /mingw64/include/winhttp.h 2>/dev/null && echo "winhttp.h found" || echo "winhttp.h NOT found"
+          ls /mingw64/lib/libfltlib.a 2>/dev/null && echo "libfltlib.a found" || echo "libfltlib.a NOT found"
 
           echo "=== Compiling ==="
           g++ -std=c++17 -O2 \
@@ -65,6 +86,7 @@ jobs:
             -lcomdlg32 \
             -lgdi32 \
             -lwinspool \
+            -lfltlib \
             -static-libgcc \
             -static-libstdc++ \
             -static -lpthread \
