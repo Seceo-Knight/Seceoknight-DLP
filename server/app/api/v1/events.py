@@ -250,6 +250,13 @@ async def create_event(
             from app.services.classification_engine import ClassificationEngine
             from app.policies.database_policy_evaluator import DatabasePolicyEvaluator
 
+            logger.info(
+                "Clipboard sync classification starting",
+                agent_id=event.agent_id,
+                content_length=len(event.content),
+                content_preview=event.content[:120],
+            )
+
             classification_engine = ClassificationEngine(db)
             classification_result = await classification_engine.classify_content(
                 event.content,

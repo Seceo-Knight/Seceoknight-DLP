@@ -3717,7 +3717,53 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 if (!windowTitle.empty()) {
                     pubJson.AddString("source_window", windowTitle);
                 }
-                SendEvent(pubJson.Build());
+                // Send to server and honour its synchronous block decision.
+                // Server-only keyword rules (e.g. "Study Report Detection") are
+                // not evaluated locally — the server is the authority for blocking.
+                {
+                    std::string pubPayload = pubJson.Build();
+                    try {
+                        if (!allowEvents) {
+                            logger.Debug("Dropping public clipboard event — no active policies");
+                        } else {
+                            auto [evStatus, evBody] = httpClient->Post("/events", pubPayload);
+                            if (evStatus == 200 || evStatus == 201) {
+                                logger.Debug("Event sent successfully (public path)");
+                                bool serverBlock =
+                                    evBody.find("\"block\":true")  != std::string::npos ||
+                                    evBody.find("\"block\": true") != std::string::npos;
+                                if (serverBlock) {
+                                    logger.Warning("  \xF0\x9F\x9A\xAB SERVER SYNC BLOCK on locally-Public content!");
+                                    if (OpenClipboard(NULL)) {
+                                        EmptyClipboard();
+                                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeof(wchar_t));
+                                        if (hMem) {
+                                            wchar_t* pMem = (wchar_t*)GlobalLock(hMem);
+                                            if (pMem) {
+                                                pMem[0] = L'\0';
+                                                GlobalUnlock(hMem);
+                                                SetClipboardData(CF_UNICODETEXT, hMem);
+                                            }
+                                        }
+                                        CloseClipboard();
+                                        logger.Warning("  Clipboard cleared by server block decision");
+                                    } else {
+                                        logger.Error("  Failed to open clipboard for clearing");
+                                    }
+                                    lastClipboard = "";
+                                } else {
+                                    logger.Debug("  Server decision: allow (public content)");
+                                }
+                            } else {
+                                logger.Warning("Failed to send event (public path): " + std::to_string(evStatus) + " — fail-open");
+                            }
+                        }
+                    } catch (const std::exception& e) {
+                        logger.Warning("Event send failed (public path): " + std::string(e.what()) + " — fail-open");
+                    } catch (...) {
+                        logger.Error("Error sending event (public path)");
+                    }
+                }
                 return;
             }
             
