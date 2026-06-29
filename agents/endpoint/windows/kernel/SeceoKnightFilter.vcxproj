@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SeceoKnight DLP — Kernel Minifilter Driver Project
+  Build with: Visual Studio 2022 + WDK 11 (Windows 11 SDK)
+
+  Required tools:
+    Visual Studio 2022  https://visualstudio.microsoft.com/
+    WDK for Windows 11  https://learn.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <!-- ── Configurations ───────────────────────────────────────────────────── -->
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <!-- ── Globals ──────────────────────────────────────────────────────────── -->
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
+    <MinimumVisualStudioVersion>17.0</MinimumVisualStudioVersion>
+    <RootNamespace>SeceoKnightFilter</RootNamespace>
+    <ProjectName>SeceoKnightFilter</ProjectName>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <!-- Minifilter altitude: 370100 (Activity Monitor range) -->
+    <DriverType>MiniFilter</DriverType>
+    <DriverTargetPlatform>Desktop</DriverTargetPlatform>
+  </PropertyGroup>
+
+  <!-- ── Default props (must come before Configuration props) ─────────────── -->
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <!-- ── Debug configuration ──────────────────────────────────────────────── -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Driver</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <DriverType>MiniFilter</DriverType>
+    <TargetVersion>Windows10</TargetVersion>
+    <!-- Test-sign in Debug builds -->
+    <SignMode>TestSign</SignMode>
+    <TestCertificate>$(MSBuildProjectDirectory)\SeceoKnightTest.cer</TestCertificate>
+    <EnableInf2cat>true</EnableInf2cat>
+  </PropertyGroup>
+
+  <!-- ── Release configuration ────────────────────────────────────────────── -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Driver</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <DriverType>MiniFilter</DriverType>
+    <TargetVersion>Windows10</TargetVersion>
+    <!-- Test-sign in Release builds too (change to ProductionSign for EV cert) -->
+    <SignMode>TestSign</SignMode>
+    <TestCertificate>$(MSBuildProjectDirectory)\SeceoKnightTest.cer</TestCertificate>
+    <EnableInf2cat>true</EnableInf2cat>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <!-- ── WDK extension settings ────────────────────────────────────────────── -->
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(WDKContentRoot)build\WindowsDriver.cpp.props" />
+  </ImportGroup>
+
+  <!-- ── Per-config property overrides ────────────────────────────────────── -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>csfilter</TargetName>
+    <TargetExt>.sys</TargetExt>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(Platform)\$(Configuration)\</IntDir>
+    <TargetName>csfilter</TargetName>
+    <TargetExt>.sys</TargetExt>
+  </PropertyGroup>
+
+  <!-- ── Compiler settings ─────────────────────────────────────────────────── -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
+      <PreprocessorDefinitions>DBG=1;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>FltMgr.lib;ntoskrnl.lib;BufferOverflowK.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ModuleDefinitionFile />
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <SubSystem>Native</SubSystem>
+      <Driver>WDM</Driver>
+      <EntryPointSymbol>DriverEntry</EntryPointSymbol>
+      <BaseAddress>0x10000</BaseAddress>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <Optimization>Speed</Optimization>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>FltMgr.lib;ntoskrnl.lib;BufferOverflowK.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ModuleDefinitionFile />
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <SubSystem>Native</SubSystem>
+      <Driver>WDM</Driver>
+      <EntryPointSymbol>DriverEntry</EntryPointSymbol>
+      <BaseAddress>0x10000</BaseAddress>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- ── Source files ──────────────────────────────────────────────────────── -->
+  <ItemGroup>
+    <ClCompile Include="csfilter.c" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="csfilter.h" />
+    <None Include="filter_comm.h" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Inf Include="csfilter.inf" />
+  </ItemGroup>
+
+  <!-- ── MSBuild targets ───────────────────────────────────────────────────── -->
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(WDKContentRoot)build\WindowsDriver.cpp.targets" />
+  </ImportGroup>
+
+</Project>
