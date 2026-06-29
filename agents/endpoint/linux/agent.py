@@ -868,7 +868,13 @@ class DLPAgent:
             if self.active_policy_version:
                 event_data["policy_version"] = self.active_policy_version
 
-            self.send_event(event_data)
+            server_block = self.send_event(event_data)
+
+            # If server-side classification says block (e.g. Study Report Detection)
+            # but local policy didn't catch it, block now.
+            if server_block and not blocked:
+                logger.warning(f"Server sync block — deleting file: {dest_path}")
+                self.block_file_transfer(dest_path)
 
         except Exception as e:
             logger.error(f"Error handling transfer destination event: {e}")
@@ -932,12 +938,12 @@ class DLPAgent:
         except:
             return ""
 
-    def send_event(self, event_data: Dict[str, Any]):
-        """Send event to server"""
+    def send_event(self, event_data: Dict[str, Any]) -> bool:
+        """Send event to server. Returns True if server says block."""
         try:
             if not self.allow_events:
                 logger.debug("Dropping event because no active policies")
-                return
+                return False
             if self.active_policy_version and "policy_version" not in event_data:
                 event_data["policy_version"] = self.active_policy_version
 
@@ -949,11 +955,20 @@ class DLPAgent:
 
             if response.status_code in [200, 201]:
                 logger.debug("Event sent successfully")
+                try:
+                    body = response.json()
+                    if body.get("block") is True:
+                        logger.warning("SERVER SYNC BLOCK — server-side classification policy matched!")
+                        return True
+                except Exception:
+                    pass
             else:
                 logger.warning(f"Failed to send event: {response.status_code}")
 
         except Exception as e:
             logger.error(f"Error sending event: {e}")
+
+        return False
 
     def heartbeat_loop(self):
         """Send periodic heartbeat to server"""
