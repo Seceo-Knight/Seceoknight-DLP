@@ -23,6 +23,7 @@ export interface AuthUser {
   department?: string | null
   organization?: string | null
   is_active?: boolean
+  mfa_enabled?: boolean
   permissions: string[]
 }
 
@@ -55,6 +56,7 @@ async function fetchMe(accessToken: string): Promise<AuthUser> {
     department: d.department ?? null,
     organization: d.organization ?? null,
     is_active: d.is_active !== false,
+    mfa_enabled: Boolean(d.mfa_enabled),
     permissions: Array.isArray(d.permissions) ? d.permissions.map(String) : [],
   }
 }

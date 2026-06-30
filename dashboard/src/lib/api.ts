@@ -724,8 +724,9 @@ export async function mfaSetup(): Promise<{ qr_code: string; secret: string }> {
   return data
 }
 
-/** Confirm MFA setup by verifying the first TOTP code — enables MFA on the account */
-export async function mfaVerifySetup(code: string): Promise<{ message: string }> {
+/** Confirm MFA setup by verifying the first TOTP code — enables MFA on the account.
+ *  Server returns new access + refresh tokens so the session stays alive. */
+export async function mfaVerifySetup(code: string): Promise<{ access_token: string; refresh_token: string; token_type: string }> {
   const { data } = await apiClient.post('/auth/mfa/verify-setup', { code })
   return data
 }

@@ -10,7 +10,7 @@ type MfaStep = 'idle' | 'setup_qr' | 'setup_verify' | 'disable_confirm'
 const defaultOpenSearchUrl = import.meta.env.VITE_OPENSEARCH_URL ?? 'https://localhost:9200'
 
 export default function Settings() {
-  const { user } = useAuthStore()
+  const { user, refreshMe } = useAuthStore()
   const [isConnectingDrive, setIsConnectingDrive] = useState(false)
   const [isConnectingOneDrive, setIsConnectingOneDrive] = useState(false)
   const [currentPassword, setCurrentPassword] = useState('')
@@ -18,8 +18,8 @@ export default function Settings() {
   const [confirmPassword, setConfirmPassword] = useState('')
   const [changingPassword, setChangingPassword] = useState(false)
 
-  // MFA state
-  const [mfaEnabled, setMfaEnabled] = useState(false)
+  // MFA state — seeded from the auth store so the badge is correct on load
+  const [mfaEnabled, setMfaEnabled] = useState(() => user?.mfa_enabled ?? false)
   const [mfaStep, setMfaStep] = useState<MfaStep>('idle')
   const [mfaLoading, setMfaLoading] = useState(false)
   const [mfaQrCode, setMfaQrCode] = useState('')
@@ -54,6 +54,7 @@ export default function Settings() {
       setMfaCode('')
       setMfaQrCode('')
       setMfaSecret('')
+      await refreshMe()
       toast.success('MFA enabled! Your account is now protected with two-factor authentication.')
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Invalid code — please try again')
@@ -72,6 +73,7 @@ export default function Settings() {
       setMfaStep('idle')
       setMfaCode('')
       setMfaPassword('')
+      await refreshMe()
       toast.success('MFA has been disabled.')
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Failed to disable MFA')

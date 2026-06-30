@@ -6,15 +6,17 @@ import DashboardLayout from '@/components/layout/DashboardLayout'
 import { Settings as SettingsIcon, Bell, Shield, Database, Globe, ShieldCheck, ShieldOff, Eye, EyeOff } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { initiateGoogleDriveConnection, initiateOneDriveConnection, mfaSetup, mfaVerifySetup, mfaDisable } from '@/lib/api'
+import { useAuthStore } from '@/lib/store/auth'
 
 type MfaStep = 'idle' | 'setup_qr' | 'setup_verify' | 'disable_confirm'
 
 export default function SettingsPage() {
+  const { user, refreshMe } = useAuthStore()
   const [isConnectingDrive, setIsConnectingDrive] = useState(false)
   const [isConnectingOneDrive, setIsConnectingOneDrive] = useState(false)
 
-  // MFA state
-  const [mfaEnabled, setMfaEnabled] = useState(false)
+  // MFA state — seeded from the auth store so the badge is correct on load
+  const [mfaEnabled, setMfaEnabled] = useState(() => user?.mfa_enabled ?? false)
   const [mfaStep, setMfaStep] = useState<MfaStep>('idle')
   const [mfaLoading, setMfaLoading] = useState(false)
   const [mfaQrCode, setMfaQrCode] = useState('')
@@ -54,6 +56,7 @@ export default function SettingsPage() {
       setMfaCode('')
       setMfaQrCode('')
       setMfaSecret('')
+      await refreshMe()
       toast.success('MFA enabled! Your account is now protected with two-factor authentication.')
     } catch (err: any) {
       toast.error(extractErrorDetail(err, 'Invalid code — please try again'))
@@ -72,6 +75,7 @@ export default function SettingsPage() {
       setMfaStep('idle')
       setMfaCode('')
       setMfaPassword('')
+      await refreshMe()
       toast.success('MFA has been disabled.')
     } catch (err: any) {
       toast.error(extractErrorDetail(err, 'Failed to disable MFA — check your password and code'))

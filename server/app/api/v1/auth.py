@@ -511,6 +511,7 @@ async def get_me(
         "department": current_user.department,
         "organization": current_user.organization,
         "is_active": current_user.is_active,
+        "mfa_enabled": getattr(current_user, "mfa_enabled", False) or False,
         "permissions": permissions,
     }
 

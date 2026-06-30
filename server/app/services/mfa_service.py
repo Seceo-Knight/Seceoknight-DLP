@@ -89,11 +89,13 @@ def generate_qr_code_base64(secret: str, email: str) -> str:
 
 # ── Verification ──────────────────────────────────────────────────────────────
 
-def verify_totp(secret: str, code: str, window: int = 1) -> bool:
+def verify_totp(secret: str, code: str, window: int = 2) -> bool:
     """
     Verify a 6-digit TOTP code against the given secret.
 
-    window=1 allows ±30 s clock drift (one period before/after current).
+    window=2 allows ±60 s clock drift (two periods before/after current).
+    This is wider than the RFC 6238 recommendation of 1, but necessary
+    for Docker deployments where the host clock can drift before NTP corrects it.
     Returns True on match, False otherwise. Never raises.
     """
     try:
