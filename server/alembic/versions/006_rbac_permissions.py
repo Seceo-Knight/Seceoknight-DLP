@@ -4,7 +4,7 @@ What this migration does (all inside the Alembic transaction):
 
 1. Adds ``MANAGER`` to the ``userrole`` Postgres enum.
 2. Creates the normalized ``permissions`` and ``role_permissions`` tables.
-3. Seeds the 15 canonical permission names.
+3. Seeds the 12 canonical permission names.
 4. Ensures the 4 system roles (ADMIN, ANALYST, MANAGER, VIEWER) exist in
    the ``roles`` table. ADMIN and ANALYST may already be present from the
    004 migration / prior seeding — we upsert by name and do not overwrite.
@@ -36,6 +36,8 @@ depends_on = None
 
 
 # ── Canonical permission set (spec PART 1 §C) ────────────────────────────
+# NOTE: create_dashboard, edit_dashboard, delete_dashboard were removed —
+# no dashboard creation/deletion UI exists in the product yet.
 PERMISSIONS: list[tuple[str, str]] = [
     ("view_events",             "Read DLP events"),
     ("view_alerts",             "Read DLP alerts"),
@@ -48,9 +50,6 @@ PERMISSIONS: list[tuple[str, str]] = [
     ("view_users",              "List users (no mutation)"),
     ("manage_roles",            "Create, update, delete roles and bindings"),
     ("view_dashboard",          "Load the dashboard UI and its tiles"),
-    ("create_dashboard",        "Create custom dashboards"),
-    ("edit_dashboard",          "Edit dashboards owned by the user"),
-    ("delete_dashboard",        "Delete dashboards owned by the user"),
     ("view_all_departments",    "ABAC override: bypass per-department visibility"),
 ]
 

@@ -34,12 +34,13 @@ from app.models.permission import Permission, RolePermission, UserPermission
 
 # Canonical full permission set. Must stay in sync with
 # migration 006_rbac_permissions' seed list.
+# NOTE: create_dashboard, edit_dashboard, delete_dashboard removed —
+# no dashboard creation/deletion UI exists in the product yet.
 _ALL_PERMISSIONS: frozenset[str] = frozenset({
     "view_events", "view_alerts", "export_events",
     "create_policy", "update_policy", "delete_policy", "assign_policy",
     "manage_users", "view_users", "manage_roles",
-    "view_dashboard", "create_dashboard", "edit_dashboard", "delete_dashboard",
-    "view_all_departments",
+    "view_dashboard", "view_all_departments",
 })
 
 # Fallback defaults for users with a UserRole enum value but no role_id FK.
