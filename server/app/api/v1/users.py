@@ -44,6 +44,7 @@ class UserOut(BaseModel):
     department: Optional[str] = None
     clearance_level: int = 1
     is_active: bool = True
+    mfa_enabled: bool = False
     created_at: Optional[datetime] = None
     # Effective permission set (role defaults ∪ direct grants). Sorted.
     permissions: List[str] = []
