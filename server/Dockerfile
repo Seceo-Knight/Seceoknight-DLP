@@ -50,8 +50,9 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application code
 COPY . .
 
-# Create necessary directories
-RUN mkdir -p /app/logs /app/quarantine /app/ml/models
+# Create necessary directories and make entrypoint executable
+RUN mkdir -p /app/logs /app/quarantine /app/ml/models && \
+    chmod +x /app/entrypoint.sh
 
 # Create non-root user
 RUN useradd -m -u 1000 dlpuser && \
@@ -71,5 +72,5 @@ ENV PORT=55000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# Run application (exec form so signals propagate correctly)
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-55000} --workers ${UVICORN_WORKERS}"]
+# Run migrations then start the application
+ENTRYPOINT ["/app/entrypoint.sh"]
