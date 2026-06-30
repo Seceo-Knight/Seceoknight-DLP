@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { Settings as SettingsIcon, Server, Database, Bell, Globe, Lock, ShieldCheck, ShieldOff, Eye, EyeOff } from 'lucide-react'
+import { Settings as SettingsIcon, Server, Database, Bell, Globe, Lock, ShieldCheck, Eye, EyeOff } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { initiateGoogleDriveConnection, initiateOneDriveConnection, changePassword, mfaSetup, mfaVerifySetup, mfaDisable } from '@/lib/api'
+import { initiateGoogleDriveConnection, initiateOneDriveConnection, changePassword, mfaSetup, mfaVerifySetup } from '@/lib/api'
 import { useAuthStore } from '@/lib/store/auth'
 import { API_URL } from '@/lib/config'
 
-type MfaStep = 'idle' | 'setup_qr' | 'setup_verify' | 'disable_confirm'
+type MfaStep = 'idle' | 'setup_qr' | 'setup_verify'
 
 const defaultOpenSearchUrl = import.meta.env.VITE_OPENSEARCH_URL ?? 'https://localhost:9200'
 
@@ -25,9 +25,7 @@ export default function Settings() {
   const [mfaQrCode, setMfaQrCode] = useState('')
   const [mfaSecret, setMfaSecret] = useState('')
   const [mfaCode, setMfaCode] = useState('')
-  const [mfaPassword, setMfaPassword] = useState('')
   const [showSecret, setShowSecret] = useState(false)
-  const [showMfaPassword, setShowMfaPassword] = useState(false)
 
   const handleMfaEnable = async () => {
     setMfaLoading(true)
@@ -64,29 +62,9 @@ export default function Settings() {
     }
   }
 
-  const handleMfaDisable = async () => {
-    if (!mfaPassword || mfaCode.length !== 6) return
-    setMfaLoading(true)
-    try {
-      await mfaDisable(mfaPassword, mfaCode)
-      setMfaEnabled(false)
-      setMfaStep('idle')
-      setMfaCode('')
-      setMfaPassword('')
-      await refreshMe()
-      toast.success('MFA has been disabled.')
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || 'Failed to disable MFA')
-      setMfaCode('')
-    } finally {
-      setMfaLoading(false)
-    }
-  }
-
   const cancelMfa = () => {
     setMfaStep('idle')
     setMfaCode('')
-    setMfaPassword('')
     setMfaQrCode('')
     setMfaSecret('')
   }
@@ -259,13 +237,9 @@ export default function Settings() {
                 {mfaLoading ? 'Setting up...' : 'Enable MFA'}
               </button>
             ) : (
-              <button
-                onClick={() => { setMfaStep('disable_confirm'); setMfaCode(''); setMfaPassword('') }}
-                className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg transition-colors text-sm"
-              >
-                <ShieldOff className="w-4 h-4" />
-                Disable MFA
-              </button>
+              <p className="text-sm text-gray-500">
+                MFA is active on your account. To disable it, contact your administrator.
+              </p>
             )
           )}
 
@@ -328,52 +302,6 @@ export default function Settings() {
             </div>
           )}
 
-          {/* Disable confirm */}
-          {mfaStep === 'disable_confirm' && (
-            <div className="space-y-4 max-w-xs">
-              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-                Enter your current password and a TOTP code to disable MFA.
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
-                <div className="relative">
-                  <input
-                    type={showMfaPassword ? 'text' : 'password'}
-                    value={mfaPassword}
-                    onChange={(e) => setMfaPassword(e.target.value)}
-                    className="input pr-10"
-                    placeholder="Enter your password"
-                  />
-                  <button type="button" onClick={() => setShowMfaPassword(!showMfaPassword)}
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
-                    {showMfaPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Authenticator Code</label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={mfaCode}
-                  onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ''))}
-                  className="input text-center text-xl tracking-[0.4em] font-mono"
-                  placeholder="000000"
-                />
-              </div>
-              <div className="flex gap-3">
-                <button
-                  onClick={handleMfaDisable}
-                  disabled={mfaLoading || !mfaPassword || mfaCode.length !== 6}
-                  className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {mfaLoading ? 'Disabling...' : 'Confirm Disable'}
-                </button>
-                <button onClick={cancelMfa} className="btn-secondary">Cancel</button>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* System Settings */}

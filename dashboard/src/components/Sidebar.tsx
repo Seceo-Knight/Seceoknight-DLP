@@ -40,7 +40,7 @@ const navigation: NavItem[] = [
   { name: 'Rules',        to: '/rules',        icon: List,            requires: ['create_policy', 'update_policy'] },
   { name: 'Policies',        to: '/policies',     icon: Shield,     requires: ['create_policy', 'update_policy'] },
   { name: 'User Management', to: '/admin/users',  icon: UserCog,    requires: ['manage_users'] },
-  { name: 'Settings',        to: '/settings',     icon: Settings,   requires: ['manage_users', 'manage_roles'] },
+  { name: 'Settings',        to: '/settings',     icon: Settings,   requires: [] },
 ]
 
 export default function Sidebar() {

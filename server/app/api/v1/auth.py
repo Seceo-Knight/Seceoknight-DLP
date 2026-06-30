@@ -911,53 +911,13 @@ async def mfa_disable(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Disable MFA for the authenticated user.
+    Self-service MFA disable is intentionally disabled.
 
-    Requires both the current password AND a valid TOTP code to prevent
-    an attacker with a stolen session token from silently removing MFA.
+    Only administrators can disable MFA for a user via
+    POST /api/v1/users/{user_id}/mfa/reset. This prevents users from
+    weakening their own account security.
     """
-    if not getattr(current_user, "mfa_enabled", False):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="MFA is not enabled for this account.",
-        )
-
-    # Re-verify password
-    if not verify_password(body.password, current_user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect password.",
-        )
-
-    # Verify TOTP
-    encrypted = getattr(current_user, "mfa_secret", None)
-    if not encrypted:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="MFA secret missing.",
-        )
-
-    try:
-        secret = mfa_service.decrypt_secret(encrypted)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="MFA secret could not be read.",
-        )
-
-    if not mfa_service.verify_totp(secret, body.code):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authenticator code.",
-        )
-
-    user_service = UserService(db)
-    user = await user_service.get_user_by_id(str(current_user.id))
-    user.mfa_enabled = False
-    user.mfa_secret = None
-    await db.commit()
-
-    await audit_log(current_user.id, "auth.mfa_disabled", {})
-    logger.info("MFA disabled", user_id=str(current_user.id))
-
-    return {"message": "MFA has been disabled for your account."}
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Self-service MFA disable is not permitted. Contact your administrator.",
+    )
