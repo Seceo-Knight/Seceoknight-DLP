@@ -330,27 +330,53 @@ async def get_policies(
         enabled_only=enabled_only,
     )
 
-    # Build per-policy violation counts from PostgreSQL alerts (last 24h)
-    # PostgreSQL is the authoritative store for alert-policy relationships.
-    from sqlalchemy import text
+    # Build per-policy violation counts from MongoDB events (last 24h).
+    # Using matched_policies is more accurate than counting PostgreSQL alerts
+    # because policies with only a "log" action (filtered out during action
+    # execution) never create alert records — their violations would show as 0
+    # even though the policy did match the event.
     lookback = datetime.now(timezone.utc) - timedelta(hours=24)
     violation_counts: Dict[str, int] = {}
     try:
-        result = await db.execute(
-            text("""
-                SELECT policy_id::text, COUNT(id) AS cnt
-                FROM alerts
-                WHERE policy_id IS NOT NULL
-                AND created_at >= :lookback
-                GROUP BY policy_id
-            """),
-            {"lookback": lookback},
-        )
-        for row in result:
-            violation_counts[row[0]] = row[1]
-        logger.info("Per-policy violation counts", counts=violation_counts)
+        mongo = get_mongodb()
+        pipeline = [
+            {
+                "$match": {
+                    "matched_policies": {"$exists": True, "$ne": []},
+                    "timestamp": {"$gte": lookback},
+                }
+            },
+            {"$unwind": "$matched_policies"},
+            {
+                "$group": {
+                    "_id": "$matched_policies.policy_id",
+                    "count": {"$sum": 1},
+                }
+            },
+        ]
+        async for doc in mongo["dlp_events"].aggregate(pipeline):
+            if doc.get("_id"):
+                violation_counts[doc["_id"]] = doc["count"]
+        logger.info("Per-policy violation counts (MongoDB matched_policies)", counts=violation_counts)
     except Exception as _e:
-        logger.warning("Failed to compute per-policy violation counts", error=str(_e))
+        logger.warning("Failed to compute per-policy violation counts from MongoDB, falling back to PostgreSQL alerts", error=str(_e))
+        # Fallback: count from PostgreSQL alerts table
+        from sqlalchemy import text
+        try:
+            result = await db.execute(
+                text("""
+                    SELECT policy_id::text, COUNT(id) AS cnt
+                    FROM alerts
+                    WHERE policy_id IS NOT NULL
+                    AND created_at >= :lookback
+                    GROUP BY policy_id
+                """),
+                {"lookback": lookback},
+            )
+            for row in result:
+                violation_counts[row[0]] = row[1]
+        except Exception as _pg_e:
+            logger.warning("Failed to compute per-policy violation counts from PostgreSQL", error=str(_pg_e))
 
     return [
         {

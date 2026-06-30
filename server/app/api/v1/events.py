@@ -575,6 +575,11 @@ def _build_processor_payload(event: EventCreate) -> Dict[str, Any]:
 
     if event.usb_event_type:
         payload.setdefault("usb", {})["event_type"] = event.usb_event_type
+    elif event.event_type.lower() == "usb" and event.event_subtype:
+        # Agent sends event_subtype as "usb_connect" / "usb_disconnect" — strip the
+        # "usb_" prefix so policy conditions can match on "connect" / "disconnect".
+        raw = event.event_subtype.lower()
+        payload.setdefault("usb", {})["event_type"] = raw[4:] if raw.startswith("usb_") else raw
 
     if event.blocked is not None:
         payload["blocked"] = event.blocked

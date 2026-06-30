@@ -90,6 +90,17 @@ def _transform_clipboard_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any],
                 }
             )
 
+    # If no pattern rules were configured, still match all clipboard events so
+    # the policy fires on every clipboard copy (useful for audit/log policies).
+    if not rules:
+        rules.append(
+            {
+                "field": "event_type",
+                "operator": "equals",
+                "value": "clipboard",
+            }
+        )
+
     # Build conditions
     conditions = {
         "match": "any" if len(rules) > 1 else "all",
