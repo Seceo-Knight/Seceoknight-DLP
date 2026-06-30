@@ -396,7 +396,7 @@ async def delete_user(
 @router.post("/{user_id}/mfa/reset", status_code=200)
 async def admin_reset_user_mfa(
     user_id: str,
-    current_user: User = Depends(require_role("ADMIN")),
+    current_user: dict = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_db),
 ):
     """
