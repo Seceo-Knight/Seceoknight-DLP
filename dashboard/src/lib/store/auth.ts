@@ -123,6 +123,9 @@ export const useAuthStore = create<AuthState>()(
             user,
           })
         } catch (error: any) {
+          // Re-throw MfaRequiredError as-is so LoginForm can catch it and show the TOTP step.
+          // Without this, the catch block converts it to a plain Error and MFA never triggers.
+          if (error instanceof MfaRequiredError) throw error
           const errorMessage =
             error.response?.data?.detail || 'Invalid email or password'
           throw new Error(errorMessage)
