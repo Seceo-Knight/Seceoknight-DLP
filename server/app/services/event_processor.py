@@ -594,12 +594,36 @@ class EventProcessor:
                 }
             )
 
-            if not match.actions:
+            # Guarantee every policy match produces an alert record so it
+            # appears in the Alerts tab regardless of the configured action.
+            # Policies whose only action is "log" have that action filtered
+            # out by _prepare_actions, leaving match.actions empty — so the
+            # implicit alert below is the ONLY path that writes to the alerts
+            # collection for those policies.
+            has_alert_action = any(
+                a.get("type") == "alert" for a in match.actions
+            )
+            effective_actions = list(match.actions)
+            _sev = match.severity or event.get("event", {}).get("severity", "medium")
+            _skip_implicit = _sev in ("low", "info")
+            if not has_alert_action and not _skip_implicit:
+                effective_actions.insert(0, {
+                    "type": "alert",
+                    "severity": _sev,
+                    "metadata": {
+                        "policy_id": match.policy_id,
+                        "policy_name": match.policy_name,
+                        "policy_severity": match.severity,
+                        "implicit": True,
+                    },
+                })
+
+            if not effective_actions:
                 continue
 
             summary: ExecutionSummary = await self.action_executor.execute_actions(
                 event,
-                match.actions,
+                effective_actions,
                 policy_id=match.policy_id,
                 rule_id=match.rule_id,
             )

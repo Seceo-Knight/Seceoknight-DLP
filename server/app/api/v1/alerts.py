@@ -73,10 +73,14 @@ async def get_alerts(
     counts = {"new": 0, "acknowledged": 0, "resolved": 0, "total": 0}
 
     if alert_count > 0:
-        # Query alerts from database
-        query_filter: Dict[str, Any] = {}
-        if severity:
-            query_filter["severity"] = severity
+        # Query alerts from database.
+        # Default: exclude low/info severity — consistent with the event-fallback
+        # path below which only surfaces critical/high events.
+        query_filter: Dict[str, Any] = (
+            {"severity": severity}
+            if severity
+            else {"severity": {"$nin": ["low", "info"]}}
+        )
         if status:
             query_filter["status"] = status
 
