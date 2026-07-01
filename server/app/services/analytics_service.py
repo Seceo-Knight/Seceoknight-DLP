@@ -816,9 +816,11 @@ class AnalyticsService:
             # Enrich agent_id → agent name from MongoDB (PG has no agent names)
             agent_ids = list({r.agent_id for r in rows_sorted if r.agent_id})
             agent_name_map: dict = {}
-            if agent_ids and self.mongo_db is not None:
+            if agent_ids:
                 try:
-                    mongo_agents = await self.mongo_db.agents.find(
+                    from app.core.database import get_mongodb
+                    mongo_db = get_mongodb()
+                    mongo_agents = await mongo_db.agents.find(
                         {"agent_id": {"$in": agent_ids}}
                     ).to_list(None)
                     agent_name_map = {
