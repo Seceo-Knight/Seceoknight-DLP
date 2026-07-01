@@ -18,8 +18,6 @@ SeceoKnight DLP is an enterprise Data Loss Prevention platform. It monitors your
 - Ubuntu 20.04, 22.04, or 24.04 LTS
 - 8 GB RAM minimum (16 GB recommended)
 - 50 GB free disk space
-- Docker Engine 24+ with Docker Compose v2
-- Git
 - Ports 80 and 443 open in your firewall
 
 ### Windows Agent
@@ -35,119 +33,36 @@ SeceoKnight DLP is an enterprise Data Loss Prevention platform. It monitors your
 
 ## Step 1 — Deploy the Server
 
-### Install Docker (if not already installed)
+Run this single command on your Ubuntu server. It installs Docker automatically if needed, generates all passwords, detects your server IP, and starts everything:
 
 ```bash
-curl -fsSL https://get.docker.com | sudo bash
-sudo systemctl enable docker
-sudo systemctl start docker
+curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install.sh | sudo bash
 ```
 
-Verify:
-```bash
-docker --version
-docker compose version
-```
-
-### Clone the Repository
-
-```bash
-git clone https://github.com/Seceo-Knight/Seceoknight-DLP.git /opt/seceoknight/app-src
-cd /opt/seceoknight/app-src
-```
-
-### Configure Environment
-
-```bash
-cp .env.example /opt/seceoknight/.env
-```
-
-Edit the file and set all required values:
-```bash
-nano /opt/seceoknight/.env
-```
-
-At minimum, replace every placeholder value — the required fields are:
-
-```
-SECRET_KEY=          # random string, min 32 characters
-JWT_SECRET=          # random string, min 32 characters
-POSTGRES_PASSWORD=   # strong password
-MONGODB_PASSWORD=    # strong password
-REDIS_PASSWORD=      # strong password
-OPENSEARCH_PASSWORD= # strong password (must contain uppercase, number, special char)
-CORS_ORIGINS=["http://YOUR_SERVER_IP","https://YOUR_SERVER_IP"]
-```
-
-Generate secure random values with:
-```bash
-openssl rand -base64 48 | tr -d '/+='
-```
-
-### Generate TLS Certificates
-
-```bash
-mkdir -p /opt/seceoknight/certs
-chmod 700 /opt/seceoknight/certs
-
-# Replace YOUR_SERVER_IP with your actual server IP
-SERVER_IP=$(hostname -I | awk '{print $1}')
-
-openssl req -x509 -nodes -newkey rsa:4096 -days 825 \
-  -keyout /opt/seceoknight/certs/privkey.pem \
-  -out /opt/seceoknight/certs/fullchain.pem \
-  -subj "/CN=seceoknight.local/O=SeceoKnight DLP" \
-  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:${SERVER_IP}"
-
-chmod 600 /opt/seceoknight/certs/privkey.pem
-chmod 644 /opt/seceoknight/certs/fullchain.pem
-```
-
-### Copy the Compose File
-
-```bash
-cp /opt/seceoknight/app-src/docker-compose.prod.yml /opt/seceoknight/docker-compose.prod.yml
-mkdir -p /opt/seceoknight/nginx
-cp /opt/seceoknight/app-src/nginx/nginx.conf /opt/seceoknight/nginx/nginx.conf
-```
-
-### Build and Start
-
-```bash
-cd /opt/seceoknight
-
-# Build images from source
-docker compose -f docker-compose.prod.yml build
-
-# Start all services
-docker compose -f docker-compose.prod.yml up -d
-```
-
-### Verify Everything is Running
-
-```bash
-docker compose -f /opt/seceoknight/docker-compose.prod.yml ps
-```
-
-All containers should show **healthy** or **running**. This takes about 2–3 minutes on first start.
-
-```bash
-# Test the API is up
-curl -k https://localhost/api/v1/health
-```
+**What happens automatically:**
+- Docker Engine is installed if not already present
+- All database passwords and secret keys are randomly generated — you do not need to set them
+- Your server IP is detected automatically for the CORS and allowed hosts configuration
+- A self-signed SSL certificate is created so the dashboard uses HTTPS
+- All services start (database, search engine, dashboard, API)
 
 **At the end you will see:**
 
 ```
-Dashboard (HTTPS) : https://YOUR_SERVER_IP
-API Docs          : https://YOUR_SERVER_IP/api/v1/docs
+================================================================
+  Installation Complete
+================================================================
+
+Endpoints:
+  Dashboard (HTTPS) : https://192.168.1.50
+  API Docs          : https://192.168.1.50/api/v1/docs
 
 First-login credentials:
   Username : admin
   Password : Admin@1234
 ```
 
-Open the Dashboard URL in your browser. Your browser will show a **security warning** — this is normal for a self-signed certificate. Click **"Advanced"** then **"Proceed"** to continue.
+Open the Dashboard URL in your browser. Your browser will show a **security warning** about the certificate — this is normal for a self-signed certificate. Click **"Advanced"** then **"Proceed"** to continue.
 
 > **Important:** Change the admin password immediately after first login.
 > Go to: **Settings → Profile → Change Password**
@@ -165,7 +80,7 @@ powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.c
 The script will ask you three questions:
 
 1. **Server IP or hostname** — Enter the IP address of your Ubuntu server (e.g. `192.168.1.50`)
-2. **Agent Name** — Press Enter to use your computer name, or type a custom name
+2. **Agent Name** — Press Enter to use your computer name (recommended), or type a custom name
 3. **Confirm** — Type `Y` and press Enter
 
 The agent installs as a background scheduled task and starts monitoring immediately. You will see it appear in the dashboard under **Agents**.
@@ -220,33 +135,13 @@ sudo systemctl status seceoknight-agent
 
 ## Updating to a New Version
 
-When new code is pushed to the repo, update the server with:
-
-```bash
-# 1. Pull latest code
-cd /opt/seceoknight/app-src
-git pull origin main
-
-# 2. Copy changed files into running containers
-docker cp server/app/services/export_service.py seceoknight-manager:/app/app/services/export_service.py
-docker cp server/app/services/analytics_service.py seceoknight-manager:/app/app/services/analytics_service.py
-docker cp server/app/services/analytics_service.py seceoknight-celery-worker:/app/app/services/analytics_service.py
-docker cp server/app/tasks/reporting_tasks.py seceoknight-celery-worker:/app/app/tasks/reporting_tasks.py
-docker cp server/app/api/v1/reports.py seceoknight-manager:/app/app/api/v1/reports.py
-docker cp dashboard/dist/. seceoknight-dashboard:/usr/share/nginx/html/
-
-# 3. Restart to pick up changes
-cd /opt/seceoknight
-docker compose -f docker-compose.prod.yml restart manager celery-worker
-```
-
-For a **full rebuild** (e.g. after dependency or Dockerfile changes):
-
 ```bash
 cd /opt/seceoknight
-docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 ```
+
+This pulls the latest pre-built images from GHCR and restarts all services with zero downtime.
 
 ---
 
@@ -255,18 +150,18 @@ docker compose -f docker-compose.prod.yml up -d
 The self-signed certificate installed by default causes browser warnings. To get a free trusted certificate from Let's Encrypt you need a **domain name** pointed at your server.
 
 ```bash
-sudo bash /opt/seceoknight/app-src/scripts/generate-certs.sh \
+sudo bash /opt/seceoknight/scripts/generate-certs.sh \
   --domain dlp.yourcompany.com \
   --email admin@yourcompany.com
 ```
 
-Then update `/opt/seceoknight/.env`:
+Then edit `/opt/seceoknight/.env`:
 ```
 CORS_ORIGINS=["https://dlp.yourcompany.com"]
 ALLOWED_HOSTS=dlp.yourcompany.com
 ```
 
-Restart:
+Restart nginx:
 ```bash
 cd /opt/seceoknight
 docker compose -f docker-compose.prod.yml restart nginx
@@ -286,30 +181,36 @@ docker compose -f docker-compose.prod.yml ps
 **Login fails**
 - Default credentials: `admin` / `Admin@1234`
 
-**Container shows "unhealthy"**
+**Container shows "unhealthy" — check its logs**
 ```bash
-# Check logs for the unhealthy container (e.g. manager)
 docker compose -f /opt/seceoknight/docker-compose.prod.yml logs manager
+docker compose -f /opt/seceoknight/docker-compose.prod.yml logs celery-worker
 ```
 
 **Disk full — containers fail to start**
 ```bash
-# Free up unused Docker resources
 docker system prune -f
 ```
 
 **Agent not appearing in dashboard**
 ```bash
-# Test from the agent machine
+# Test from the agent machine — must return {"status":"healthy"}
 curl -k https://YOUR_SERVER_IP/api/v1/health
-# Must return {"status":"healthy"}
 # If it fails, check port 443 is open in the server firewall
 ```
 
-**View live server logs**
+**Always run docker compose from the install directory**
+
+The `.env` file lives in `/opt/seceoknight`. Running `docker compose` from any other directory will fail with "no configuration file provided".
+
 ```bash
-docker compose -f /opt/seceoknight/docker-compose.prod.yml logs -f manager
-docker compose -f /opt/seceoknight/docker-compose.prod.yml logs -f celery-worker
+# Correct
+cd /opt/seceoknight
+docker compose -f docker-compose.prod.yml restart manager
+
+# Wrong — will error
+cd /opt/seceoknight/app-src
+docker compose restart manager
 ```
 
 **Restart everything**
@@ -322,20 +223,6 @@ docker compose -f docker-compose.prod.yml restart
 ```bash
 cd /opt/seceoknight
 docker compose -f docker-compose.prod.yml down
-```
-
-**Run from the wrong directory (common error)**
-
-Always run `docker compose` from `/opt/seceoknight` where the `.env` file lives. Running from `/opt/seceoknight/app-src` will fail with "no configuration file provided" because the `.env` is not there.
-
-```bash
-# Correct
-cd /opt/seceoknight
-docker compose -f docker-compose.prod.yml restart manager
-
-# Wrong — will error
-cd /opt/seceoknight/app-src
-docker compose restart manager
 ```
 
 ---
