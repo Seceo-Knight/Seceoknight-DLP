@@ -102,7 +102,12 @@ def mongo_doc_to_pg_event(doc: dict) -> dict:
 
     event_type = _first_str(doc, "event_type", default="unknown")
     source_type = _first_str(doc, "source_type", "source", default="agent")
-    action = _first_str(doc, "action_taken", "action", default="logged")
+    # Read action_taken / action from the doc, then override to "blocked" if
+    # the MongoDB document has blocked=True.  Agents and the background
+    # processor set `blocked` as a boolean flag independently from
+    # `action_taken`, so we must reconcile both signals.
+    _action_raw = _first_str(doc, "action_taken", "action", default="logged")
+    action = "blocked" if doc.get("blocked") is True else _action_raw
 
     description = _first_str(
         doc,
