@@ -171,7 +171,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-manager:latest
+    image: ghcr.io/seceo-knight/dlp-manager:latest
     container_name: seceoknight-manager
     environment:
       # Server
@@ -269,7 +269,7 @@ services:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
-    image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-dashboard:latest
+    image: ghcr.io/seceo-knight/dlp-dashboard:latest
     container_name: seceoknight-dashboard
     # No host port binding — dashboard is served via Nginx on :443.
     # Access it at https://<your-domain>/
@@ -314,7 +314,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-manager:latest
+    image: ghcr.io/seceo-knight/dlp-manager:latest
     container_name: seceoknight-celery-worker
     command: celery -A app.tasks worker --loglevel=info --concurrency=4
     environment:
@@ -389,7 +389,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    image: ghcr.io/seceo-knight/seceoknight-dlp/dlp-manager:latest
+    image: ghcr.io/seceo-knight/dlp-manager:latest
     container_name: seceoknight-celery-beat
     # --pidfile and --schedule both point at /tmp which is always
     # writable by any container user. Previously beat tried to write
