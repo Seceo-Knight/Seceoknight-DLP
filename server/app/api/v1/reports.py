@@ -146,7 +146,7 @@ async def generate_report(
     if body.start_date >= body.end_date:
         raise HTTPException(status_code=400, detail="start_date must be before end_date")
 
-    user_email = current_user.get("email", "unknown")
+    user_email = getattr(current_user, "email", None) or "unknown"
 
     # Create a DB record for each report_type so the UI can track them individually
     report_ids = []
@@ -335,7 +335,8 @@ async def delete_report(
 ):
     """Delete a report record and its associated files."""
     # Only admins can delete reports
-    if current_user.get("role") not in ("admin", "ADMIN"):
+    user_role = str(getattr(current_user.role, "value", current_user.role)).upper()
+    if user_role != "ADMIN":
         raise HTTPException(status_code=403, detail="Admin access required")
 
     try:
