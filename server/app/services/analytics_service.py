@@ -384,7 +384,8 @@ class AnalyticsService:
                     {
                         "agent_id": row.agent_id,
                         "agent_name": agent_map.get(row.agent_id, {}).get("name") or row.agent_id,
-                        "hostname": agent_map.get(row.agent_id, {}).get("hostname") or "Unknown",
+                        "os": agent_map.get(row.agent_id, {}).get("os", ""),
+                        "ip_address": agent_map.get(row.agent_id, {}).get("ip_address", ""),
                         "incident_count": row.incident_count,
                         "critical_count": row.critical_count
                     }

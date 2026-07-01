@@ -515,20 +515,19 @@ class ExportService:
         # Determine columns based on first row
         first_row = data[0]
         if "agent_id" in first_row:
-            # Omit raw Agent ID — it's a long machine string not useful in a PDF.
-            # Name falls back to agent_id when the agent isn't registered; truncate
-            # and wrap via Paragraph so long strings don't overflow the column.
-            table_data = [["Agent Name", "Hostname", "Incidents", "Critical"]]
+            # Agent name IS the hostname — no separate hostname field exists.
+            # Omit raw Agent ID (long UUID) and redundant Hostname column.
+            table_data = [["Agent Name", "OS / IP", "Incidents", "Critical"]]
             for row in data:
                 name = str(row.get("agent_name") or row.get("agent_id") or "Unknown")
-                host = str(row.get("hostname") or "Unknown")
+                os_ip = str(row.get("os", "")).title()
                 table_data.append([
                     Paragraph(name[:60], styles['Normal']),
-                    Paragraph(host[:40], styles['Normal']),
+                    Paragraph(os_ip[:30], styles['Normal']),
                     row.get("incident_count", 0),
                     row.get("critical_count", 0)
                 ])
-            col_widths = [2.8*inch, 2.2*inch, 1.0*inch, 0.8*inch]
+            col_widths = [3.0*inch, 2.0*inch, 1.0*inch, 0.8*inch]
 
         elif "username" in first_row:
             table_data = [["Username", "Incidents", "Critical"]]
