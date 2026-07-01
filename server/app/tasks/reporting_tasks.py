@@ -154,9 +154,9 @@ async def _fetch_report_data(
     if analytics is None:
         return {}
 
-    if report_type == "summary":
+    if report_type in ("summary", "compliance"):
         return await analytics.get_summary_statistics(start_date, end_date)
-    elif report_type in ("violations", "policies", "compliance"):
+    elif report_type in ("violations", "policies"):
         return await analytics.get_policy_violation_breakdown(start_date, end_date)
     elif report_type == "trends":
         return await analytics.get_incident_trends(start_date, end_date, "day", group_by="severity")
