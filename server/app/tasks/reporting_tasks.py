@@ -261,7 +261,12 @@ async def _run_custom_reports(
                     }
                     title = f"{report_name} — {type_titles.get(report_type, report_type.title() + ' Report')}"
                     try:
-                        pdf_bytes = service.export.export_to_pdf(title, data, report_type)
+                        pdf_bytes = service.export.export_to_pdf(
+                            title, data, report_type,
+                            period_start=start_date.strftime("%Y-%m-%d"),
+                            period_end=end_date.strftime("%Y-%m-%d"),
+                            generated_by=report_row.generated_by if report_row else None,
+                        )
                         if pdf_bytes:
                             fname = f"{report_id_str or str(uuid.uuid4())}_{report_type}.pdf"
                             abs_path = os.path.join(settings.REPORTS_DIR, fname)
