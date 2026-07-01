@@ -13,6 +13,7 @@ import {
   List,
   AlertTriangle,
   Search,
+  BarChart2,
   ClipboardList,
   UserCog,
 } from 'lucide-react'
@@ -39,6 +40,7 @@ const navigation: NavItem[] = [
   { name: 'Log Explorer', to: '/log-explorer', icon: Search,          requires: ['view_events'] },
   { name: 'Rules',        to: '/rules',        icon: List,            requires: ['create_policy', 'update_policy'] },
   { name: 'Policies',        to: '/policies',     icon: Shield,     requires: ['create_policy', 'update_policy'] },
+  { name: 'Reports',         to: '/reports',      icon: BarChart2,  requires: ['view_events'] },
   { name: 'User Management', to: '/admin/users',  icon: UserCog,    requires: ['manage_users'] },
   { name: 'Settings',        to: '/settings',     icon: Settings,   requires: [] },
 ]
