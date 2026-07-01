@@ -75,20 +75,42 @@ celery_app.conf.beat_schedule = {
 
 # ── DB / OpenSearch bootstrap helper ─────────────────────────────────────────
 
+# Track the event loop that the current DB connection pool was created on.
+# Each asyncio.run() call creates a NEW event loop — asyncpg connections
+# from a previous loop are attached to that loop and cannot be reused.
+# Comparing loop IDs lets us detect this and reinitialize cleanly.
+_celery_loop_id: int | None = None
+
+
 async def _ensure_connections() -> object:
     """
-    Initialize Postgres and OpenSearch if not already done.
-    Safe to call multiple times — checks the global before reinitializing.
+    Initialize Postgres and OpenSearch, reinitializing if the event loop has
+    changed (which happens on every asyncio.run() call in Celery prefork workers).
+
     Returns the opensearch client (may be None if unavailable).
     """
+    global _celery_loop_id
     import app.core.database as _db_mod
     import app.core.opensearch as _os_mod
     from app.core.database import init_databases
     from app.core.opensearch import init_opensearch
 
-    if _db_mod.postgres_session_factory is None:
+    loop_id = id(asyncio.get_running_loop())
+    need_db_reinit = (_db_mod.postgres_session_factory is None or loop_id != _celery_loop_id)
+
+    if need_db_reinit:
+        # Dispose the old engine (ignore errors — the old loop may already be gone)
+        if _db_mod.postgres_engine is not None:
+            try:
+                await _db_mod.postgres_engine.dispose()
+            except Exception:
+                pass
+            _db_mod.postgres_session_factory = None
+            _db_mod.postgres_engine = None
+
         logger.logger.info("celery_worker_init_databases")
         await init_databases()
+        _celery_loop_id = loop_id
 
     if _os_mod.opensearch_client is None:
         logger.logger.info("celery_worker_init_opensearch")
