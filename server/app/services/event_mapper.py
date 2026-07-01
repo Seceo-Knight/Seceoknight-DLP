@@ -154,9 +154,21 @@ def mongo_doc_to_pg_event(doc: dict) -> dict:
             or None
         ),
         "confidence_score": confidence_score,
-        "policy_id": _to_uuid(doc.get("policy_id")),
-        "policy_name": _first_str(doc, "policy_name", default="") or None,
-        "policy_violated": _first_str(doc, "policy_violated", default="") or None,
+        # Policy data: the background processor stores matches in the
+        # `matched_policies` list (each entry is a dict with policy_id /
+        # policy_name). Fall back to top-level fields for legacy docs.
+        "policy_id": _to_uuid(
+            doc.get("policy_id")
+            or (((doc.get("matched_policies") or [{}])[0]).get("policy_id"))
+        ),
+        "policy_name": (
+            _first_str(doc, "policy_name", default="")
+            or (((doc.get("matched_policies") or [{}])[0]).get("policy_name") or "")
+        ) or None,
+        "policy_violated": (
+            _first_str(doc, "policy_violated", default="")
+            or (((doc.get("matched_policies") or [{}])[0]).get("policy_name") or "")
+        ) or None,
         "channel": _first_str(doc, "channel", default="") or None,
         "decision": _first_str(doc, "decision", default="") or None,
         "destination": _first_str(doc, "destination", default="") or None,
