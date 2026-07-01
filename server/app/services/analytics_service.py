@@ -342,10 +342,11 @@ class AnalyticsService:
         """
         try:
             if by == "agent":
-                # Query by agent
+                # Query by agent — LEFT JOIN so events without a matching Agent
+                # row still appear (agent may exist in MongoDB but not PG agents table).
                 query = select(
                     Event.agent_id,
-                    Agent.name.label('agent_name'),
+                    func.coalesce(Agent.name, Event.agent_id).label('agent_name'),
                     Agent.hostname,
                     func.count(Event.id).label('incident_count'),
                     func.count(
@@ -357,15 +358,12 @@ class AnalyticsService:
                         )
                     ).label('critical_count')
                 ).join(
-                    # Agent has both `id` (UUID PK) and `agent_id` (String
-                    # external identifier). Events carry the String external
-                    # identifier, so the join predicate must compare like
-                    # types. Comparing String → UUID fails at the planner.
-                    Agent, Event.agent_id == Agent.agent_id
+                    Agent, Event.agent_id == Agent.agent_id, isouter=True
                 ).where(
                     and_(
                         Event.timestamp >= start_date,
-                        Event.timestamp <= end_date
+                        Event.timestamp <= end_date,
+                        Event.agent_id.isnot(None),
                     )
                 ).group_by(
                     Event.agent_id, Agent.name, Agent.hostname
@@ -379,8 +377,8 @@ class AnalyticsService:
                 return [
                     {
                         "agent_id": row.agent_id,
-                        "agent_name": row.agent_name,
-                        "hostname": row.hostname,
+                        "agent_name": row.agent_name or row.agent_id,
+                        "hostname": row.hostname or "Unknown",
                         "incident_count": row.incident_count,
                         "critical_count": row.critical_count
                     }
