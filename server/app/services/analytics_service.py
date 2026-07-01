@@ -813,6 +813,22 @@ class AnalyticsService:
             truncated = len(rows_sorted) > limit
             rows_sorted = rows_sorted[:limit]
 
+            # Enrich agent_id → agent name from MongoDB (PG has no agent names)
+            agent_ids = list({r.agent_id for r in rows_sorted if r.agent_id})
+            agent_name_map: dict = {}
+            if agent_ids and self.mongo_db is not None:
+                try:
+                    mongo_agents = await self.mongo_db.agents.find(
+                        {"agent_id": {"$in": agent_ids}}
+                    ).to_list(None)
+                    agent_name_map = {
+                        a["agent_id"]: a.get("name") or a.get("hostname") or a["agent_id"]
+                        for a in mongo_agents
+                        if a.get("agent_id")
+                    }
+                except Exception:
+                    pass  # fallback to agent_id if mongo lookup fails
+
             incidents = []
             for r in rows_sorted:
                 # Extract detected sensitive data label from classification JSON
@@ -825,6 +841,10 @@ class AnalyticsService:
                         detected_data = cl.get("label") or cl.get("type") or cl.get("name")
                     elif isinstance(cl, str):
                         detected_data = cl
+
+                # Resolve display name: user_email > username > mongo agent name > agent_id
+                agent_name = agent_name_map.get(r.agent_id or "", "") or r.agent_id or ""
+                display_name = r.user_email or r.username or agent_name or "—"
 
                 incidents.append({
                     "timestamp": r.timestamp.isoformat() if r.timestamp else "",
@@ -842,7 +862,7 @@ class AnalyticsService:
                     "policy_name": r.policy_name or r.policy_violated or "",
                     "agent_id": r.agent_id or "",
                     "user_email": r.user_email or "",
-                    "username": r.username or r.agent_id or "",
+                    "username": display_name,
                     "source_ip": str(r.source_ip) if r.source_ip else "",
                     "destination": r.destination or "",
                 })
