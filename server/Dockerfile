@@ -51,7 +51,10 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY . .
 
 # Create necessary directories and make entrypoint executable
-RUN mkdir -p /app/logs /app/quarantine /app/ml/models && \
+# /app/reports must be created here (before chown) so the named Docker volume
+# inherits dlpuser ownership on first mount — otherwise Docker creates it as root
+# and the Celery worker cannot write PDF/CSV files into it.
+RUN mkdir -p /app/logs /app/quarantine /app/ml/models /app/reports && \
     chmod +x /app/entrypoint.sh
 
 # Create non-root user
