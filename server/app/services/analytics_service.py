@@ -527,9 +527,13 @@ class AnalyticsService:
             List of policies with violation counts
         """
         try:
+            from sqlalchemy import func as _func, or_ as _or, case as _case
+            # Group by policy_name (preferred) — this works even when policy_id
+            # is NULL because agents send non-UUID IDs that _to_uuid() drops.
+            name_col = func.coalesce(Event.policy_name, Event.policy_violated, 'Unknown')
             query = select(
                 Event.policy_id,
-                Policy.name.label('policy_name'),
+                name_col.label('policy_name'),
                 func.count(Event.id).label('violation_count'),
                 func.count(
                     func.distinct(
@@ -539,16 +543,18 @@ class AnalyticsService:
                         )
                     )
                 ).label('blocked_count')
-            ).join(
-                Policy, Event.policy_id == Policy.id, isouter=True
             ).where(
                 and_(
                     Event.timestamp >= start_date,
                     Event.timestamp <= end_date,
-                    Event.policy_id.isnot(None)
+                    or_(
+                        Event.policy_name.isnot(None),
+                        Event.policy_violated.isnot(None),
+                        Event.policy_id.isnot(None),
+                    )
                 )
             ).group_by(
-                Event.policy_id, Policy.name
+                Event.policy_id, name_col
             ).order_by(
                 desc('violation_count')
             )
@@ -558,7 +564,7 @@ class AnalyticsService:
 
             return [
                 {
-                    "policy_id": row.policy_id,
+                    "policy_id": str(row.policy_id) if row.policy_id else "",
                     "policy_name": row.policy_name or "Unknown",
                     "violation_count": row.violation_count,
                     "blocked_count": row.blocked_count,
