@@ -16,6 +16,7 @@ from app.api.v1 import (
     classification,
     analytics,
     export,
+    reports,
     siem,
     google_drive,
     onedrive,
@@ -51,6 +52,7 @@ api_router.include_router(alerts.router, prefix="/alerts", tags=["Alerts"])
 api_router.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 api_router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
 api_router.include_router(export.router, prefix="/export", tags=["Export"])
+api_router.include_router(reports.router, prefix="/reports", tags=["Reports"])
 api_router.include_router(siem.router, prefix="/siem", tags=["SIEM"])
 api_router.include_router(google_drive.router, tags=["Google Drive"])
 api_router.include_router(onedrive.router, tags=["OneDrive"])

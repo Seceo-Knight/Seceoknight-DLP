@@ -13,13 +13,72 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import (
     SimpleDocTemplate, Table, TableStyle, Paragraph,
-    Spacer, PageBreak, Image
+    Spacer, PageBreak, Image, HRFlowable, KeepTogether,
 )
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.pdfgen import canvas as pdfgen_canvas
 
 from app.core.observability import StructuredLogger
 
 logger = StructuredLogger(__name__)
+
+# ── Brand colours ─────────────────────────────────────────────────────────────
+BRAND_DARK   = colors.HexColor('#0f172a')   # slate-900
+BRAND_NAVY   = colors.HexColor('#1e3a8a')   # blue-900
+BRAND_BLUE   = colors.HexColor('#2563eb')   # blue-600
+BRAND_LIGHT  = colors.HexColor('#eff6ff')   # blue-50
+BRAND_ACCENT = colors.HexColor('#6366f1')   # indigo-500
+GRAY_100     = colors.HexColor('#f3f4f6')
+GRAY_700     = colors.HexColor('#374151')
+RED_BG       = colors.HexColor('#fee2e2')
+RED_HDR      = colors.HexColor('#dc2626')
+
+
+class _NumberedCanvas(pdfgen_canvas.Canvas):
+    """Canvas subclass that stamps page number and footer on every page."""
+
+    def __init__(self, *args, report_title: str = "", generated_at: str = "", **kwargs):
+        super().__init__(*args, **kwargs)
+        self._saved_page_states: list = []
+        self._report_title = report_title
+        self._generated_at = generated_at
+
+    def showPage(self):
+        self._saved_page_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        total = len(self._saved_page_states)
+        for state in self._saved_page_states:
+            self.__dict__.update(state)
+            self._draw_page_decorations(total)
+            pdfgen_canvas.Canvas.showPage(self)
+        pdfgen_canvas.Canvas.save(self)
+
+    def _draw_page_decorations(self, page_count: int):
+        page_num = self._pageNumber
+        w, h = letter
+
+        # ── Top brand bar (skip cover page = page 1) ──────────────────────────
+        if page_num > 1:
+            self.setFillColor(BRAND_NAVY)
+            self.rect(0, h - 0.45 * inch, w, 0.45 * inch, fill=1, stroke=0)
+            self.setFillColor(colors.white)
+            self.setFont("Helvetica-Bold", 8)
+            self.drawString(0.5 * inch, h - 0.28 * inch, "SeceoKnight DLP")
+            self.setFont("Helvetica", 8)
+            self.drawRightString(w - 0.5 * inch, h - 0.28 * inch, self._report_title)
+
+        # ── Bottom footer ─────────────────────────────────────────────────────
+        self.setFillColor(GRAY_700)
+        self.rect(0, 0, w, 0.38 * inch, fill=1, stroke=0)
+        self.setFillColor(colors.white)
+        self.setFont("Helvetica", 7)
+        self.drawString(0.5 * inch, 0.13 * inch,
+                        f"Generated: {self._generated_at}  |  CONFIDENTIAL — Internal Use Only")
+        self.setFont("Helvetica-Bold", 7)
+        self.drawRightString(w - 0.5 * inch, 0.13 * inch,
+                             f"Page {page_num} of {page_count}")
 
 
 class ExportService:
@@ -144,88 +203,167 @@ class ExportService:
         title: str,
         data: Dict[str, Any],
         report_type: str,
-        logo_path: Optional[str] = None
+        logo_path: Optional[str] = None,
+        period_start: Optional[str] = None,
+        period_end: Optional[str] = None,
+        generated_by: Optional[str] = None,
     ) -> bytes:
         """
-        Export data to PDF format
+        Export data to PDF with branded cover page, header/footer, and page numbers.
 
         Args:
             title: Report title
             data: Data to export
-            report_type: Type of report
+            report_type: Type of report (summary, trends, violators, …)
             logo_path: Optional path to company logo
+            period_start: Human-readable report period start
+            period_end: Human-readable report period end
+            generated_by: Who requested this report
 
         Returns:
             PDF bytes
         """
+        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter,
-                               rightMargin=0.75*inch, leftMargin=0.75*inch,
-                               topMargin=1*inch, bottomMargin=0.75*inch)
 
-        # Container for PDF elements
-        elements = []
+        # Extra bottom margin to clear the footer bar
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=letter,
+            rightMargin=0.65 * inch,
+            leftMargin=0.65 * inch,
+            topMargin=0.65 * inch,
+            bottomMargin=0.6 * inch,
+        )
 
-        # Styles
+        # ── Styles ──────────────────────────────────────────────────────────────
         styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=24,
-            textColor=colors.HexColor('#1e3a8a'),
-            spaceAfter=30,
-            alignment=TA_CENTER
+
+        cover_title_style = ParagraphStyle(
+            'CoverTitle',
+            parent=styles['Title'],
+            fontSize=28,
+            textColor=colors.white,
+            spaceAfter=16,
+            alignment=TA_CENTER,
+            fontName='Helvetica-Bold',
+        )
+        cover_sub_style = ParagraphStyle(
+            'CoverSub',
+            parent=styles['Normal'],
+            fontSize=12,
+            textColor=colors.HexColor('#bfdbfe'),  # blue-200
+            spaceAfter=8,
+            alignment=TA_CENTER,
         )
         heading_style = ParagraphStyle(
-            'CustomHeading',
+            'SKHeading',
             parent=styles['Heading2'],
-            fontSize=16,
-            textColor=colors.HexColor('#1e40af'),
-            spaceAfter=12
+            fontSize=13,
+            textColor=BRAND_NAVY,
+            spaceBefore=18,
+            spaceAfter=8,
+            fontName='Helvetica-Bold',
+        )
+        body_style = ParagraphStyle(
+            'SKBody',
+            parent=styles['Normal'],
+            fontSize=9,
+            textColor=GRAY_700,
+            spaceAfter=4,
         )
 
-        # Add logo if provided
-        if logo_path:
-            try:
-                logo = Image(logo_path, width=2*inch, height=1*inch)
-                elements.append(logo)
-                elements.append(Spacer(1, 0.3*inch))
-            except:
-                pass  # Skip logo if file not found
+        elements: list = []
 
-        # Add title
-        elements.append(Paragraph(title, title_style))
-        elements.append(Spacer(1, 0.2*inch))
+        # ── Cover page ──────────────────────────────────────────────────────────
+        # Full-page dark background achieved via a 1-row table spanning the page
+        page_w = letter[0] - 1.3 * inch  # usable width
+        cover_bg_color = BRAND_DARK
 
-        # Add generation timestamp
-        timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        elements.append(Paragraph(f"Generated: {timestamp}", styles['Normal']))
-        elements.append(Spacer(1, 0.3*inch))
+        cover_inner: list = [Spacer(1, 1.2 * inch)]
 
-        # Add content based on report type
-        if report_type == "summary":
-            elements.extend(ExportService._create_summary_pdf_content(data, styles, heading_style))
+        # Brand pill
+        pill_style = ParagraphStyle('Pill', parent=styles['Normal'],
+                                    fontSize=9, textColor=BRAND_ACCENT,
+                                    alignment=TA_CENTER, fontName='Helvetica-Bold')
+        cover_inner.append(Paragraph("▶  SECEOKNIGHT  DLP  PLATFORM", pill_style))
+        cover_inner.append(Spacer(1, 0.25 * inch))
 
-        elif report_type == "trends":
-            elements.extend(ExportService._create_trends_pdf_content(data, styles, heading_style))
+        # Title
+        cover_inner.append(Paragraph(title, cover_title_style))
+        cover_inner.append(Spacer(1, 0.1 * inch))
 
-        elif report_type == "violators":
-            elements.extend(ExportService._create_violators_pdf_content(data, styles, heading_style))
+        # Divider line
+        cover_inner.append(HRFlowable(width="80%", thickness=1,
+                                       color=BRAND_ACCENT, spaceAfter=16, spaceBefore=0,
+                                       hAlign='CENTER'))
 
-        elif report_type == "data_types":
-            elements.extend(ExportService._create_data_types_pdf_content(data, styles, heading_style))
+        # Meta block
+        meta_lines = []
+        if period_start and period_end:
+            meta_lines.append(f"Period: {period_start}  →  {period_end}")
+        meta_lines.append(f"Report Type: {report_type.replace('_', ' ').title()}")
+        meta_lines.append(f"Generated: {timestamp}")
+        if generated_by:
+            meta_lines.append(f"Requested by: {generated_by}")
 
-        elif report_type == "policy_violations":
-            elements.extend(ExportService._create_policy_violations_pdf_content(data, styles, heading_style))
+        for line in meta_lines:
+            cover_inner.append(Paragraph(line, cover_sub_style))
 
-        elif report_type == "incidents":
-            elements.extend(ExportService._create_incidents_pdf_content(data, styles, heading_style))
+        cover_inner.append(Spacer(1, 1.5 * inch))
 
-        # Build PDF
-        doc.build(elements)
+        # Confidentiality notice at bottom of cover
+        conf_style = ParagraphStyle('Conf', parent=styles['Normal'],
+                                    fontSize=8, textColor=colors.HexColor('#64748b'),
+                                    alignment=TA_CENTER)
+        cover_inner.append(HRFlowable(width="60%", thickness=0.5,
+                                       color=colors.HexColor('#334155'),
+                                       spaceAfter=12, hAlign='CENTER'))
+        cover_inner.append(Paragraph(
+            "CONFIDENTIAL — For internal use only. Do not distribute without authorization.",
+            conf_style,
+        ))
+
+        # Wrap in a dark-background table
+        cover_table = Table([[cover_inner]], colWidths=[page_w])
+        cover_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), cover_bg_color),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        elements.append(cover_table)
+        elements.append(PageBreak())
+
+        # ── Content ─────────────────────────────────────────────────────────────
+        dispatch = {
+            "summary":           ExportService._create_summary_pdf_content,
+            "violations":        ExportService._create_policy_violations_pdf_content,
+            "trends":            ExportService._create_trends_pdf_content,
+            "violators":         ExportService._create_violators_pdf_content,
+            "data_types":        ExportService._create_data_types_pdf_content,
+            "policy_violations": ExportService._create_policy_violations_pdf_content,
+            "incidents":         ExportService._create_incidents_pdf_content,
+            "compliance":        ExportService._create_summary_pdf_content,
+            "policies":          ExportService._create_policy_violations_pdf_content,
+        }
+        builder = dispatch.get(report_type, ExportService._create_summary_pdf_content)
+        elements.extend(builder(data, styles, heading_style))
+
+        # ── Build ────────────────────────────────────────────────────────────────
+        def make_canvas(filename, **kwargs):
+            return _NumberedCanvas(
+                filename,
+                report_title=title,
+                generated_at=timestamp,
+                **kwargs,
+            )
+
+        doc.build(elements, canvasmaker=make_canvas)
         pdf_bytes = buffer.getvalue()
         buffer.close()
-
         return pdf_bytes
 
     @staticmethod
@@ -270,7 +408,7 @@ class ExportService:
         ]
         metrics_table = Table(metrics_data, colWidths=[3*inch, 3*inch])
         metrics_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND_NAVY),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
@@ -279,7 +417,7 @@ class ExportService:
             ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
             ('TOPPADDING', (0, 0), (-1, -1), 10),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f3f4f6')])
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, GRAY_100])
         ]))
         elements.append(metrics_table)
 
@@ -314,14 +452,14 @@ class ExportService:
 
                 table = Table(table_data, colWidths=[3.5*inch, 2.5*inch])
                 table.setStyle(TableStyle([
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+                    ('BACKGROUND', (0, 0), (-1, 0), BRAND_NAVY),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                     ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                     ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                     ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
                     ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f3f4f6')])
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, GRAY_100])
                 ]))
                 elements.append(table)
                 elements.append(Spacer(1, 0.2*inch))
@@ -340,14 +478,14 @@ class ExportService:
 
             table = Table(table_data, colWidths=[3.5*inch, 2.5*inch])
             table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+                ('BACKGROUND', (0, 0), (-1, 0), BRAND_NAVY),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
                 ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
                 ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f3f4f6')])
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, GRAY_100])
             ]))
             elements.append(table)
 
@@ -410,7 +548,7 @@ class ExportService:
 
         table = Table(table_data, colWidths=col_widths)
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#dc2626')),
+            ('BACKGROUND', (0, 0), (-1, 0), RED_HDR),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('ALIGN', (-2, 0), (-1, -1), 'CENTER'),
@@ -418,7 +556,7 @@ class ExportService:
             ('FONTSIZE', (0, 0), (-1, -1), 9),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#fee2e2')])
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, RED_BG])
         ]))
         elements.append(table)
 
@@ -450,14 +588,14 @@ class ExportService:
 
         table = Table(table_data, colWidths=[2*inch, 1.5*inch, 1.5*inch, 1.5*inch])
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND_NAVY),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (0, -1), 'LEFT'),
             ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f3f4f6')])
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, GRAY_100])
         ]))
         elements.append(table)
 
@@ -490,7 +628,7 @@ class ExportService:
 
         table = Table(table_data, colWidths=[1.3*inch, 2*inch, 1*inch, 1*inch, 1*inch])
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND_NAVY),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (1, -1), 'LEFT'),
             ('ALIGN', (2, 0), (-1, -1), 'CENTER'),
@@ -498,7 +636,7 @@ class ExportService:
             ('FONTSIZE', (0, 0), (-1, -1), 8),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f3f4f6')])
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, GRAY_100])
         ]))
         elements.append(table)
 
@@ -535,7 +673,7 @@ class ExportService:
 
         table = Table(table_data, colWidths=[1.2*inch, 1.3*inch, 0.8*inch, 1.2*inch, 1.2*inch, 0.7*inch])
         table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e3a8a')),
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND_NAVY),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('ALIGN', (-1, 0), (-1, -1), 'CENTER'),
@@ -543,7 +681,7 @@ class ExportService:
             ('FONTSIZE', (0, 0), (-1, -1), 7),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f3f4f6')])
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, GRAY_100])
         ]))
         elements.append(table)
 

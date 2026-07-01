@@ -755,4 +755,50 @@ export async function mfaDisable(
   return data
 }
 
+// ── Reports ───────────────────────────────────────────────────────────────────
+
+export async function getReports(params?: {
+  status?: string
+  report_type?: string
+  frequency?: string
+  limit?: number
+  offset?: number
+}) {
+  const { data } = await apiClient.get('/reports/', { params })
+  return data
+}
+
+export async function getReportsSummary() {
+  const { data } = await apiClient.get('/reports/summary')
+  return data
+}
+
+export async function getReport(id: string) {
+  const { data } = await apiClient.get(`/reports/${id}`)
+  return data
+}
+
+export async function generateReport(payload: {
+  name: string
+  report_types: string[]
+  start_date: string
+  end_date: string
+  formats: string[]
+  recipients: string[]
+}) {
+  const { data } = await apiClient.post('/reports/generate', payload)
+  return data
+}
+
+export async function downloadReportBlob(reportId: string, fmt: 'pdf' | 'csv') {
+  const response = await apiClient.get(`/reports/${reportId}/download/${fmt}`, {
+    responseType: 'blob',
+  })
+  return response
+}
+
+export async function deleteReport(id: string) {
+  await apiClient.delete(`/reports/${id}`)
+}
+
 export default apiClient

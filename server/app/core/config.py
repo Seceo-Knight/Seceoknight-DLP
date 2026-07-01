@@ -140,14 +140,18 @@ class Settings(BaseSettings):
     LOG_FORMAT: str = Field(default="json")
     LOG_FILE: Optional[str] = Field(default=None)
 
-    # Email Configuration (for alerts and reports)
+    # Email Configuration (for alerts and scheduled reports)
     SMTP_HOST: str = Field(default="smtp.gmail.com")
     SMTP_PORT: int = Field(default=587)
     SMTP_TLS: bool = Field(default=True)
     SMTP_USER: Optional[str] = Field(default=None)
     SMTP_PASSWORD: Optional[str] = Field(default=None)
-    SMTP_FROM: str = Field(default="dlp@seceoknight.local")
-    SMTP_FROM_EMAIL: str = Field(default="dlp@seceoknight.local")
+    SMTP_FROM: str = Field(default="noreply@seceoknight.com")
+    SMTP_FROM_EMAIL: str = Field(default="noreply@seceoknight.com")
+    SMTP_FROM_NAME: str = Field(default="SeceoKnight DLP")
+
+    # Reports Storage
+    REPORTS_DIR: str = Field(default="/app/reports")
 
     # Wazuh Integration
     WAZUH_HOST: str = Field(default="localhost")

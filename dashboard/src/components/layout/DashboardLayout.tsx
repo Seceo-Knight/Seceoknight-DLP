@@ -19,6 +19,7 @@ import {
   Search,
   ClipboardList,
   Flame,
+  BarChart2,
 } from 'lucide-react'
 import Link from 'next/link'
 
@@ -55,6 +56,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     { name: 'Log Explorer', href: '/dashboard/log-explorer', icon: Search },
     { name: 'Classification', href: '/dashboard/classification', icon: FolderTree },
     { name: 'Policies', href: '/dashboard/policies', icon: FileText },
+    { name: 'Reports', href: '/dashboard/reports', icon: BarChart2 },
     { name: 'Users', href: '/dashboard/users', icon: Users },
     { name: 'Settings', href: '/dashboard/settings', icon: Settings },
   ]

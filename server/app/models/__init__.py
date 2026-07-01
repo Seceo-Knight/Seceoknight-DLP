@@ -27,6 +27,7 @@ from app.models.scan_result import ScanResult
 from app.models.audit_log import AuditLog
 from app.models.google_drive import GoogleDriveConnection, GoogleDriveProtectedFolder
 from app.models.onedrive import OneDriveConnection, OneDriveProtectedFolder
+from app.models.report import Report
 
 __all__ = [
     "Role",
@@ -58,4 +59,5 @@ __all__ = [
     "GoogleDriveProtectedFolder",
     "OneDriveConnection",
     "OneDriveProtectedFolder",
+    "Report",
 ]
