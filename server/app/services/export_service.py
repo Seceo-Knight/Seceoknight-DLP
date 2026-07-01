@@ -515,16 +515,20 @@ class ExportService:
         # Determine columns based on first row
         first_row = data[0]
         if "agent_id" in first_row:
-            table_data = [["Agent ID", "Name", "Hostname", "Incidents", "Critical"]]
+            # Omit raw Agent ID — it's a long machine string not useful in a PDF.
+            # Name falls back to agent_id when the agent isn't registered; truncate
+            # and wrap via Paragraph so long strings don't overflow the column.
+            table_data = [["Agent Name", "Hostname", "Incidents", "Critical"]]
             for row in data:
+                name = str(row.get("agent_name") or row.get("agent_id") or "Unknown")
+                host = str(row.get("hostname") or "Unknown")
                 table_data.append([
-                    row.get("agent_id", ""),
-                    row.get("agent_name", ""),
-                    row.get("hostname", ""),
+                    Paragraph(name[:60], styles['Normal']),
+                    Paragraph(host[:40], styles['Normal']),
                     row.get("incident_count", 0),
                     row.get("critical_count", 0)
                 ])
-            col_widths = [1.2*inch, 1.5*inch, 1.8*inch, 0.8*inch, 0.7*inch]
+            col_widths = [2.8*inch, 2.2*inch, 1.0*inch, 0.8*inch]
 
         elif "username" in first_row:
             table_data = [["Username", "Incidents", "Critical"]]
