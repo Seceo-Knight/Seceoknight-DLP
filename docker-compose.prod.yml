@@ -231,6 +231,7 @@ services:
       - ./config:/etc/seceoknight:ro
       - ./server/logs:/var/log/seceoknight
       - ./quarantine:/app/quarantine
+      - reports_data:/app/reports
     # No host port binding — manager is reachable only via Nginx on :443.
     # Agents connect to https://<your-domain>/api/v1 — not :55000 directly.
     expose:
@@ -355,6 +356,7 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set (JSON list of allowed origins)}
     volumes:
       - ./server/logs:/var/log/seceoknight
+      - reports_data:/app/reports
     depends_on:
       postgres:
         condition: service_healthy
@@ -475,6 +477,10 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  # Shared volume for generated report files (PDF/CSV) — must be mounted
+  # by both manager (serves downloads) and celery-worker (writes files)
+  reports_data:
     driver: local
   # Shared volume for Let's Encrypt ACME challenge files (certbot webroot method)
   certbot_webroot:
