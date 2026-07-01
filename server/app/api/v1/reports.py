@@ -168,7 +168,7 @@ async def generate_report(
 
     await db.commit()
 
-    # Dispatch Celery task
+    # Dispatch Celery task — pass report_ids so the worker can update each row
     generate_custom_report.delay(
         report_name=body.name,
         report_types=body.report_types,
@@ -176,6 +176,7 @@ async def generate_report(
         start_date_iso=body.start_date.isoformat(),
         end_date_iso=body.end_date.isoformat(),
         formats=body.formats,
+        report_ids=report_ids,
     )
 
     logger.logger.info(

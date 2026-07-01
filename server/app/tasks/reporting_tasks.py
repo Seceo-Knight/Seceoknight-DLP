@@ -1,14 +1,18 @@
 """
-Celery Tasks for Scheduled Reporting
-Background tasks for automated report generation and delivery.
+Celery Tasks for Scheduled and On-Demand Reporting
 
-BUG FIX: All tasks previously called the async generate_scheduled_report()
-without await/asyncio.run(), so the coroutine was created but never executed.
-Fixed by introducing _run_schedules() async helper and wrapping each task
-body in asyncio.run().
+Key design decisions:
+- Celery workers are separate processes that never go through FastAPI's lifespan
+  startup, so postgres_session_factory and opensearch_client module globals are
+  None in worker context. Each task must call init_databases() / init_opensearch()
+  before using them.
+- generate_custom_report accepts report_ids so it can update the Report DB records
+  (status, file paths, error) that the API pre-creates before dispatching the task.
 """
 
 import asyncio
+import os
+import uuid
 from datetime import datetime, timedelta
 
 from celery import Celery
@@ -69,7 +73,31 @@ celery_app.conf.beat_schedule = {
 }
 
 
-# ── Async helper ──────────────────────────────────────────────────────────────
+# ── DB / OpenSearch bootstrap helper ─────────────────────────────────────────
+
+async def _ensure_connections() -> object:
+    """
+    Initialize Postgres and OpenSearch if not already done.
+    Safe to call multiple times — checks the global before reinitializing.
+    Returns the opensearch client (may be None if unavailable).
+    """
+    import app.core.database as _db_mod
+    import app.core.opensearch as _os_mod
+    from app.core.database import init_databases
+    from app.core.opensearch import init_opensearch
+
+    if _db_mod.postgres_session_factory is None:
+        logger.logger.info("celery_worker_init_databases")
+        await init_databases()
+
+    if _os_mod.opensearch_client is None:
+        logger.logger.info("celery_worker_init_opensearch")
+        await init_opensearch()   # never raises; logs warning on failure
+
+    return _os_mod.opensearch_client  # may be None — that's OK
+
+
+# ── Scheduled-report helper ───────────────────────────────────────────────────
 
 async def _run_schedules(
     schedules: list,
@@ -77,19 +105,17 @@ async def _run_schedules(
     end_date: datetime,
 ) -> list:
     """
-    Execute a list of ReportSchedule objects asynchronously.
-
-    Opens a fresh async DB session per report to avoid cross-task state
-    contamination. Called via asyncio.run() from sync Celery task functions.
+    Execute a list of ReportSchedule objects (used by daily/weekly/monthly tasks).
+    Opens a fresh DB session per report to avoid cross-task state contamination.
     """
-    from app.core.database import postgres_session_factory
-    from app.core.opensearch import get_opensearch_client
+    import app.core.database as _db_mod
+
+    opensearch = await _ensure_connections()
 
     results = []
     for schedule in schedules:
-        async with postgres_session_factory() as db:
+        async with _db_mod.postgres_session_factory() as db:
             try:
-                opensearch = get_opensearch_client()
                 service = ReportingService(db_session=db, opensearch=opensearch)
                 result = await service.generate_scheduled_report(
                     schedule=schedule,
@@ -112,7 +138,185 @@ async def _run_schedules(
     return results
 
 
-# ── Tasks ─────────────────────────────────────────────────────────────────────
+# ── On-demand report data fetcher ─────────────────────────────────────────────
+
+async def _fetch_report_data(
+    service: ReportingService,
+    report_type: str,
+    start_date: datetime,
+    end_date: datetime,
+) -> dict:
+    """
+    Fetch analytics data for a single report type.
+    Maps the API's report_types to AnalyticsService methods.
+    """
+    analytics = service.analytics
+    if analytics is None:
+        return {}
+
+    if report_type == "summary":
+        return await analytics.get_summary_statistics(start_date, end_date)
+    elif report_type in ("violations", "policies", "compliance"):
+        return await analytics.get_policy_violation_breakdown(start_date, end_date)
+    elif report_type == "trends":
+        return await analytics.get_incident_trends(start_date, end_date, "day", group_by="severity")
+    elif report_type == "violators":
+        return await analytics.get_top_violators(start_date, end_date, limit=20, by="agent")
+    else:
+        return {}
+
+
+# ── On-demand report core async logic ────────────────────────────────────────
+
+async def _run_custom_reports(
+    report_name: str,
+    report_types: list,
+    recipients: list,
+    start_date: datetime,
+    end_date: datetime,
+    formats: list,
+    report_ids: list,  # one UUID str per report_type, same order
+) -> list:
+    """
+    Generate on-demand reports, save files to disk, and update Report DB records.
+    """
+    from sqlalchemy import select
+    import app.core.database as _db_mod
+    from app.models.report import Report
+
+    opensearch = await _ensure_connections()
+
+    # Ensure reports directory exists
+    os.makedirs(settings.REPORTS_DIR, exist_ok=True)
+
+    # Map report_type → report_id string (same ordering as the API created them)
+    id_map: dict[str, str] = {}
+    for i, rtype in enumerate(report_types):
+        if i < len(report_ids):
+            id_map[rtype] = report_ids[i]
+
+    results = []
+
+    for report_type in report_types:
+        report_id_str = id_map.get(report_type)
+
+        async with _db_mod.postgres_session_factory() as db:
+            # Fetch the pre-created Report row
+            report_row = None
+            if report_id_str:
+                try:
+                    res = await db.execute(
+                        select(Report).where(Report.id == uuid.UUID(report_id_str))
+                    )
+                    report_row = res.scalar_one_or_none()
+                except Exception:
+                    pass
+
+            # Mark as generating so the UI shows progress
+            if report_row:
+                report_row.status = "generating"
+                await db.commit()
+
+            try:
+                service = ReportingService(db_session=db, opensearch=opensearch)
+
+                # Fetch analytics data
+                data = await _fetch_report_data(service, report_type, start_date, end_date)
+
+                pdf_path: str | None = None
+                csv_path: str | None = None
+                file_size = None
+
+                # ── Generate PDF ──────────────────────────────────────────────
+                if "pdf" in formats:
+                    type_titles = {
+                        "summary": "DLP Summary Report",
+                        "violations": "Policy Violations Report",
+                        "trends": "Incident Trends Report",
+                        "violators": "Top Violators Report",
+                        "policies": "Policy Analysis Report",
+                        "compliance": "Compliance Overview Report",
+                    }
+                    title = f"{report_name} — {type_titles.get(report_type, report_type.title() + ' Report')}"
+                    try:
+                        pdf_bytes = service.export.export_to_pdf(title, data, report_type)
+                        if pdf_bytes:
+                            fname = f"{report_id_str or str(uuid.uuid4())}_{report_type}.pdf"
+                            abs_path = os.path.join(settings.REPORTS_DIR, fname)
+                            with open(abs_path, "wb") as fh:
+                                fh.write(pdf_bytes)
+                            pdf_path = fname
+                            file_size = os.path.getsize(abs_path)
+                    except Exception as pdf_exc:
+                        logger.log_error(pdf_exc, {"step": "pdf_generation", "report_type": report_type})
+
+                # ── Generate CSV ──────────────────────────────────────────────
+                if "csv" in formats:
+                    try:
+                        csv_str = service.export.export_analytics_to_csv(data, report_type)
+                        if csv_str:
+                            fname = f"{report_id_str or str(uuid.uuid4())}_{report_type}.csv"
+                            abs_path = os.path.join(settings.REPORTS_DIR, fname)
+                            with open(abs_path, "w", encoding="utf-8") as fh:
+                                fh.write(csv_str)
+                            csv_path = fname
+                    except Exception as csv_exc:
+                        logger.log_error(csv_exc, {"step": "csv_generation", "report_type": report_type})
+
+                # ── Update DB record ──────────────────────────────────────────
+                if report_row:
+                    report_row.status = "completed"
+                    report_row.file_path_pdf = pdf_path
+                    report_row.file_path_csv = csv_path
+                    report_row.completed_at = datetime.utcnow()
+                    report_row.file_size_bytes = file_size
+                    # Store a compact summary dict (for the UI stats cards)
+                    if isinstance(data, dict):
+                        report_row.summary = {
+                            k: v for k, v in data.items()
+                            if isinstance(v, (int, float, str, bool, type(None)))
+                        }
+                    await db.commit()
+
+                logger.logger.info(
+                    "custom_report_completed",
+                    report_type=report_type,
+                    report_id=report_id_str,
+                    pdf=pdf_path,
+                    csv=csv_path,
+                )
+                results.append({
+                    "success": True,
+                    "report_type": report_type,
+                    "report_id": report_id_str,
+                    "pdf": pdf_path,
+                    "csv": csv_path,
+                })
+
+            except Exception as exc:
+                logger.log_error(exc, {
+                    "report_type": report_type,
+                    "report_id": report_id_str,
+                })
+                # Mark the DB record as failed
+                if report_row:
+                    try:
+                        report_row.status = "failed"
+                        report_row.error_message = str(exc)[:1000]
+                        await db.commit()
+                    except Exception:
+                        pass
+                results.append({
+                    "success": False,
+                    "report_type": report_type,
+                    "report_id": report_id_str,
+                    "error": str(exc),
+                })
+
+    return results
+
+
+# ── Celery tasks ──────────────────────────────────────────────────────────────
 
 @celery_app.task(
     name="app.tasks.reporting_tasks.generate_daily_reports",
@@ -120,10 +324,7 @@ async def _run_schedules(
     max_retries=2,
 )
 def generate_daily_reports(self):
-    """
-    Generate and email daily reports covering the previous day's activity.
-    Scheduled: 8:00 AM UTC every day.
-    """
+    """Generate and email daily reports (previous day). Runs at 8:00 AM UTC."""
     try:
         end_date = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         start_date = end_date - timedelta(days=1)
@@ -136,7 +337,6 @@ def generate_daily_reports(self):
             end=end_date.isoformat(),
         )
 
-        # FIX: asyncio.run() correctly executes the async helper from sync Celery context
         results = asyncio.run(_run_schedules(schedules, start_date, end_date))
 
         logger.logger.info(
@@ -161,10 +361,7 @@ def generate_daily_reports(self):
     max_retries=2,
 )
 def generate_weekly_reports(self):
-    """
-    Generate and email weekly reports covering the previous Mon–Sun.
-    Scheduled: Monday 9:00 AM UTC.
-    """
+    """Generate and email weekly reports (previous Mon–Sun). Runs Monday 9:00 AM UTC."""
     try:
         today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         days_since_monday = today.weekday() % 7
@@ -203,10 +400,7 @@ def generate_weekly_reports(self):
     max_retries=2,
 )
 def generate_monthly_reports(self):
-    """
-    Generate and email monthly reports covering the previous calendar month.
-    Scheduled: 1st of each month at 10:00 AM UTC.
-    """
+    """Generate and email monthly reports (previous calendar month). Runs 1st at 10:00 AM UTC."""
     try:
         today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
         first_of_month = today.replace(day=1)
@@ -252,39 +446,50 @@ def generate_custom_report(
     start_date_iso: str,
     end_date_iso: str,
     formats: list = None,
+    report_ids: list = None,   # UUIDs of pre-created Report rows (same order as report_types)
 ):
     """
-    Generate a custom on-demand report and optionally email it.
-    Called from the /api/v1/reports/generate endpoint.
+    Generate an on-demand report set and update the pre-created Report DB records.
+    Called from POST /api/v1/reports/generate.
     """
     try:
         start_date = datetime.fromisoformat(start_date_iso.replace("Z", "+00:00")).replace(tzinfo=None)
         end_date = datetime.fromisoformat(end_date_iso.replace("Z", "+00:00")).replace(tzinfo=None)
-
-        schedule = ReportSchedule(
-            name=report_name,
-            frequency="custom",
-            report_types=report_types,
-            recipients=recipients,
-            formats=formats or ["pdf"],
-            enabled=True,
-        )
+        _formats = formats or ["pdf"]
+        _report_ids = report_ids or []
 
         logger.logger.info(
             "starting_custom_report",
             report_name=report_name,
-            recipients=recipients,
+            report_types=report_types,
+            report_ids=_report_ids,
+            formats=_formats,
         )
 
-        results = asyncio.run(_run_schedules([schedule], start_date, end_date))
-        result = results[0] if results else {"success": False, "error": "No results returned"}
+        results = asyncio.run(
+            _run_custom_reports(
+                report_name=report_name,
+                report_types=report_types,
+                recipients=recipients,
+                start_date=start_date,
+                end_date=end_date,
+                formats=_formats,
+                report_ids=_report_ids,
+            )
+        )
 
+        ok_count = sum(1 for r in results if r.get("success"))
         logger.logger.info(
             "custom_report_done",
             report_name=report_name,
-            success=result.get("success"),
+            successful=ok_count,
+            total=len(results),
         )
-        return result
+        return {
+            "success": ok_count == len(results),
+            "report_name": report_name,
+            "results": results,
+        }
 
     except Exception as exc:
         logger.log_error(exc, {"task": "generate_custom_report", "report_name": report_name})
