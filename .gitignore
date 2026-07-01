@@ -103,12 +103,15 @@ pids
 .yarn-integrity
 .cache
 
-# Build outputs
+# Build outputs (exclude Python/generic dist but keep dashboard pre-build)
 dist/
 build/
 out/
 .next/
 .nuxt/
+# Exception: keep the pre-built dashboard so server can deploy without Node.js
+!dashboard/dist/
+!dashboard/dist/**
 
 # Testing
 coverage/
