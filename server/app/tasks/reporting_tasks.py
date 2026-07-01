@@ -184,6 +184,8 @@ async def _fetch_report_data(
         return await analytics.get_incident_trends(start_date, end_date, "day", group_by="severity")
     elif report_type == "violators":
         return await analytics.get_top_violators(start_date, end_date, limit=20, by="agent")
+    elif report_type == "incident_detail":
+        return await analytics.get_incident_detail(start_date, end_date, limit=500)
     else:
         return {}
 
@@ -255,6 +257,7 @@ async def _run_custom_reports(
                         "summary": "DLP Summary Report",
                         "violations": "Policy Violations Report",
                         "trends": "Incident Trends Report",
+                        "incident_detail": "Incident Detail Report",
                         "violators": "Top Violators Report",
                         "policies": "Policy Analysis Report",
                         "compliance": "Compliance Overview Report",

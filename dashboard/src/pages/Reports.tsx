@@ -65,6 +65,7 @@ const REPORT_TYPES = [
   { value: 'violators', label: 'Top Violators' },
   { value: 'policies', label: 'Policy Effectiveness' },
   { value: 'compliance', label: 'Compliance Report' },
+  { value: 'incident_detail', label: 'Incident Detail Report' },
 ]
 
 const STATUS_CONFIG = {

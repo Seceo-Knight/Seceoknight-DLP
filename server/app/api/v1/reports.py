@@ -126,7 +126,7 @@ async def generate_report(
     immediately so the frontend can poll /reports/{id} for status.
     """
     # Validate report_types
-    valid_types = {"summary", "violations", "trends", "violators", "policies", "compliance"}
+    valid_types = {"summary", "violations", "trends", "violators", "policies", "compliance", "incident_detail"}
     invalid = [t for t in body.report_types if t not in valid_types]
     if invalid:
         raise HTTPException(

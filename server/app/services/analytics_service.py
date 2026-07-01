@@ -742,3 +742,118 @@ class AnalyticsService:
         except Exception as e:
             logger.log_error(e, {"operation": "get_summary_statistics"})
             raise
+
+    async def get_incident_detail(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        limit: int = 2000,
+    ) -> dict:
+        """
+        Return full individual alert records for the Incident Detail Report.
+
+        Sorted by severity (critical → high → medium → low → info) then
+        timestamp descending within each severity group.
+
+        Returns a dict with:
+          - summary:  aggregated counts (reuses get_summary_statistics shape)
+          - incidents: list of individual alert dicts
+          - truncated: bool — True when result was capped at `limit`
+        """
+        _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+        try:
+            # Pull summary counts first (reuse existing method)
+            summary = await self.get_summary_statistics(start_date, end_date)
+
+            # Fetch individual events — no hard limit in DB query; we cap in Python
+            # so we can still count totals accurately before truncation.
+            query = select(
+                Event.id,
+                Event.event_id,
+                Event.timestamp,
+                Event.severity,
+                Event.action,
+                Event.event_type,
+                Event.event_subtype,
+                Event.file_name,
+                Event.file_path,
+                Event.description,
+                Event.classification_level,
+                Event.confidence_score,
+                Event.classification,
+                Event.policy_name,
+                Event.policy_violated,
+                Event.agent_id,
+                Event.user_email,
+                Event.username,
+                Event.source_ip,
+                Event.destination,
+            ).where(
+                and_(
+                    Event.timestamp >= start_date,
+                    Event.timestamp <= end_date,
+                )
+            ).order_by(
+                Event.timestamp.desc()
+            )
+
+            result = await self.db.execute(self._apply_abac(query))
+            rows = result.all()
+
+            # Sort by severity order then timestamp desc
+            rows_sorted = sorted(
+                rows,
+                key=lambda r: (
+                    _SEVERITY_ORDER.get(r.severity, 5),
+                    -(r.timestamp.timestamp() if r.timestamp else 0),
+                )
+            )
+
+            truncated = len(rows_sorted) > limit
+            rows_sorted = rows_sorted[:limit]
+
+            incidents = []
+            for r in rows_sorted:
+                # Extract detected sensitive data label from classification JSON
+                detected_data = None
+                if r.classification:
+                    cl = r.classification
+                    if isinstance(cl, list) and cl:
+                        detected_data = cl[0] if isinstance(cl[0], str) else str(cl[0])
+                    elif isinstance(cl, dict):
+                        detected_data = cl.get("label") or cl.get("type") or cl.get("name")
+                    elif isinstance(cl, str):
+                        detected_data = cl
+
+                incidents.append({
+                    "timestamp": r.timestamp.isoformat() if r.timestamp else "",
+                    "severity": r.severity or "info",
+                    "action": r.action or "logged",
+                    "event_type": r.event_type or "",
+                    "event_subtype": r.event_subtype or "",
+                    "file_name": r.file_name or "",
+                    "file_path": r.file_path or "",
+                    "description": r.description or "",
+                    "classification_level": r.classification_level or "",
+                    "confidence_score": round(float(r.confidence_score) * 100, 1)
+                        if r.confidence_score is not None else None,
+                    "detected_data": detected_data or "",
+                    "policy_name": r.policy_name or r.policy_violated or "",
+                    "agent_id": r.agent_id or "",
+                    "user_email": r.user_email or "",
+                    "username": r.username or r.agent_id or "",
+                    "source_ip": str(r.source_ip) if r.source_ip else "",
+                    "destination": r.destination or "",
+                })
+
+            return {
+                "summary": summary,
+                "incidents": incidents,
+                "truncated": truncated,
+                "total_in_range": len(rows),
+            }
+
+        except Exception as e:
+            logger.log_error(e, {"operation": "get_incident_detail"})
+            raise
