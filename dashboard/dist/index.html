@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Content-Security-Policy is also set by nginx in dashboard/nginx.conf,
+      but mirroring it as a <meta> tag means the policy is enforced even
+      when the SPA is served by `vite preview`, `npm start`, a developer
+      machine, or any deployment that does not front the build with this
+      exact nginx config. Without this, an XSS during dev would have full
+      power.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" />
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <title>CyberSentinel DLP</title>
+    <script type="module" crossorigin src="/assets/index-Cf_Ptdnt.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BKhyY3pn.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
