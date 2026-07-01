@@ -674,12 +674,20 @@ class AnalyticsService:
             agents_result = await self.db.execute(self._apply_abac(agents_query))
             active_agents = agents_result.scalar()
 
-            # Policy violations
+            # Policy violations — count events that reference any policy.
+            # policy_id is a UUID column: agents may send non-UUID string IDs
+            # which _to_uuid() normalises to NULL, so policy_id IS NOT NULL
+            # under-counts. Use policy_name/policy_violated (string columns)
+            # which are always preserved regardless of ID format.
+            from sqlalchemy import or_ as _or
             policy_query = select(func.count(Event.id)).where(
                 and_(
                     Event.timestamp >= start_date,
                     Event.timestamp <= end_date,
-                    Event.policy_id.isnot(None)
+                    _or(
+                        Event.policy_name.isnot(None),
+                        Event.policy_violated.isnot(None),
+                    )
                 )
             )
             policy_result = await self.db.execute(self._apply_abac(policy_query))
