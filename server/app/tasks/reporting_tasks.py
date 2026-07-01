@@ -482,6 +482,11 @@ def generate_custom_report(
     try:
         start_date = datetime.fromisoformat(start_date_iso.replace("Z", "+00:00")).replace(tzinfo=None)
         end_date = datetime.fromisoformat(end_date_iso.replace("Z", "+00:00")).replace(tzinfo=None)
+        # Normalize to full day range regardless of what time the frontend sends.
+        # The frontend may send the current time on the selected date rather than
+        # midnight, which would exclude events that occurred later in the day.
+        start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_date = end_date.replace(hour=23, minute=59, second=59, microsecond=999999)
         _formats = formats or ["pdf"]
         _report_ids = report_ids or []
 
