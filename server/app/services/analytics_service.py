@@ -342,12 +342,11 @@ class AnalyticsService:
         """
         try:
             if by == "agent":
-                # Query by agent — LEFT JOIN so events without a matching Agent
-                # row still appear (agent may exist in MongoDB but not PG agents table).
+                # Agents are authoritative in MongoDB, not mirrored to PG.
+                # Group events by agent_id in PG, then enrich with name/hostname
+                # from MongoDB.
                 query = select(
                     Event.agent_id,
-                    func.coalesce(Agent.name, Event.agent_id).label('agent_name'),
-                    Agent.hostname,
                     func.count(Event.id).label('incident_count'),
                     func.count(
                         func.distinct(
@@ -357,8 +356,6 @@ class AnalyticsService:
                             )
                         )
                     ).label('critical_count')
-                ).join(
-                    Agent, Event.agent_id == Agent.agent_id, isouter=True
                 ).where(
                     and_(
                         Event.timestamp >= start_date,
@@ -366,7 +363,7 @@ class AnalyticsService:
                         Event.agent_id.isnot(None),
                     )
                 ).group_by(
-                    Event.agent_id, Agent.name, Agent.hostname
+                    Event.agent_id
                 ).order_by(
                     desc('incident_count')
                 ).limit(limit)
@@ -374,11 +371,20 @@ class AnalyticsService:
                 result = await self.db.execute(self._apply_abac(query))
                 rows = result.all()
 
+                # Look up agent details from MongoDB
+                from app.core.database import get_mongodb
+                mongo_db = get_mongodb()
+                agent_ids = [row.agent_id for row in rows]
+                mongo_agents = await mongo_db.agents.find(
+                    {"agent_id": {"$in": agent_ids}}
+                ).to_list(None)
+                agent_map = {a["agent_id"]: a for a in mongo_agents}
+
                 return [
                     {
                         "agent_id": row.agent_id,
-                        "agent_name": row.agent_name or row.agent_id,
-                        "hostname": row.hostname or "Unknown",
+                        "agent_name": agent_map.get(row.agent_id, {}).get("name") or row.agent_id,
+                        "hostname": agent_map.get(row.agent_id, {}).get("hostname") or "Unknown",
                         "incident_count": row.incident_count,
                         "critical_count": row.critical_count
                     }
