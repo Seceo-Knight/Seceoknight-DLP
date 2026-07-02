@@ -27,11 +27,17 @@ export interface AuthUser {
   permissions: string[]
 }
 
+// Maximum session age in milliseconds — 8 hours.
+// After this the user must re-authenticate regardless of token validity.
+// This defeats Chrome's "Continue where you left off" restoring a stale session.
+const SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000
+
 interface AuthState {
   isAuthenticated: boolean
   user: AuthUser | null
   accessToken: string | null
   refreshToken: string | null
+  loginAt: number | null  // Unix ms timestamp — set on every successful login
   login: (email: string, password: string) => Promise<void>
   /** Called after a successful MFA validate — sets tokens and fetches /me */
   loginWithTokens: (accessToken: string, refreshToken: string) => Promise<void>
@@ -68,6 +74,7 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       accessToken: null,
       refreshToken: null,
+      loginAt: null,
 
       login: async (email: string, password: string) => {
         const cleanEmail = email.trim()
@@ -121,6 +128,7 @@ export const useAuthStore = create<AuthState>()(
             accessToken: access_token,
             refreshToken: refresh_token,
             user,
+            loginAt: Date.now(),
           })
         } catch (error: any) {
           // Re-throw MfaRequiredError as-is so LoginForm can catch it and show the TOTP step.
@@ -190,11 +198,27 @@ export const useAuthStore = create<AuthState>()(
       },
     }),
     {
-      // Use sessionStorage so tokens are cleared when the browser tab/window
-      // closes. localStorage would keep the user logged in indefinitely across
-      // browser restarts — unacceptable for an enterprise security product.
       name: 'dlp-auth-v3',
       storage: createJSONStorage(() => sessionStorage),
+      // On every page load: if the stored session is older than SESSION_MAX_AGE_MS
+      // (8 hours), clear it immediately and force re-login.
+      // This defeats Chrome's "Continue where you left off" restoring a stale
+      // session even when sessionStorage is preserved across browser restarts.
+      onRehydrateStorage: () => (state) => {
+        if (!state) return
+        if (
+          state.isAuthenticated &&
+          state.loginAt &&
+          Date.now() - state.loginAt > SESSION_MAX_AGE_MS
+        ) {
+          state.isAuthenticated = false
+          state.accessToken = null
+          state.refreshToken = null
+          state.user = null
+          state.loginAt = null
+          sessionStorage.removeItem('dlp-auth-v3')
+        }
+      },
     }
   )
 )
