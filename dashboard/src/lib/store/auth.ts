@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
 import axios from 'axios'
 import { API_URL } from '../config'
 import { decodeJwt } from '../auth/jwt'
@@ -190,9 +190,11 @@ export const useAuthStore = create<AuthState>()(
       },
     }),
     {
-      // Bumped storage key so stale "role: 'admin'" sessions from the previous
-      // hardcoded-admin code don't leak into the new permission-aware store.
+      // Use sessionStorage so tokens are cleared when the browser tab/window
+      // closes. localStorage would keep the user logged in indefinitely across
+      // browser restarts — unacceptable for an enterprise security product.
       name: 'dlp-auth-v3',
+      storage: createJSONStorage(() => sessionStorage),
     }
   )
 )

@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     ENCRYPTION_KEY: str = Field(default="")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 1  # 24 hours — enterprise security policy
     PASSWORD_MIN_LENGTH: int = 7
 
     # SSO — shared secret for verifying exchange tokens from the SIEM.
