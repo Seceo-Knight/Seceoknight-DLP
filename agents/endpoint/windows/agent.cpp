@@ -6268,24 +6268,18 @@ if (shouldMonitor) {
                            " pre-existing monitored files on USB: " + drivePath);
             }
 
-            // Also mark all USB files with classif: prefix for classification-based policies
-            // (policies with empty monitoredPaths). This prevents false alerts for files
-            // already on the USB when the drive is first connected.
-            bool hasClassificationPolicies = false;
-            for (const auto& policy : usbTransferPolicies) {
-                if (policy.enabled && policy.monitoredPaths.empty()) {
-                    hasClassificationPolicies = true;
-                    break;
-                }
+            // FIX: Always mark ALL existing USB files with classif: prefix, regardless of
+            // policy type. PASS 2 in CheckUSBDriveForMonitoredFiles runs unconditionally
+            // (it is not guarded by hasClassificationOnlyPolicies), so without this
+            // pre-marking every file already on the drive was seen as a "new transfer"
+            // the first time the drive was scanned — generating false positive events for
+            // files the user never copied.
+            for (const auto& filePair : existingFiles) {
+                std::string classifKey = std::string("classif:") + drivePath + ":" + filePair.first;
+                currentUSBFileState[classifKey] = true;
             }
-            if (hasClassificationPolicies) {
-                for (const auto& filePair : existingFiles) {
-                    std::string classifKey = std::string("classif:") + drivePath + ":" + filePair.first;
-                    currentUSBFileState[classifKey] = true;
-                }
-                logger.Info("[INFO] Marked " + std::to_string(existingFiles.size()) +
-                           " pre-existing USB files (classification-based monitoring): " + drivePath);
-            }
+            logger.Info("[INFO] Marked " + std::to_string(existingFiles.size()) +
+                       " pre-existing USB files (all policies): " + drivePath);
 
         } catch (const fs::filesystem_error& e) {
             logger.Debug("Drive not accessible for pre-existing file scan: " + drivePath);
@@ -6664,7 +6658,12 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
             }
         }
 
-        // PASS 2: Classify ALL new files on USB — catches files not in monitoredFiles
+        // PASS 2: Classify ALL new files on USB — only for policies that have no
+        // monitoredPaths (classification-only / "scan everything" policies).
+        // Path-based policies are handled exclusively in PASS 1 above.
+        // Without this guard PASS 2 was firing for path-based policies too,
+        // producing duplicate / false-positive events.
+        if (hasClassificationOnlyPolicies)
         {
             int newFileCount = 0;
             int skippedCount = 0;
