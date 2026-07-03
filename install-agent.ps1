@@ -394,23 +394,8 @@ $config | ConvertTo-Json -Depth 4 | Out-File -FilePath $configPath -Encoding UTF
 Write-ColorOutput "Configuration created: $configPath" -Type "Success"
 Write-Host ""
 
-# Step 8: Create VBScript launcher for hidden background execution
-Write-ColorOutput "Step 8: Creating background launcher..." -Type "Info"
-
-$vbsPath = Join-Path $INSTALL_DIR "launch_agent.vbs"
-$vbsContent = @"
-' Only start agent if not already running
-Dim objWMI, colProcesses
-Set objWMI = GetObject("winmgmts:\\.\root\cimv2")
-Set colProcesses = objWMI.ExecQuery("SELECT * FROM Win32_Process WHERE Name = 'seceoknight_agent.exe'")
-If colProcesses.Count = 0 Then
-    Dim objShell
-    Set objShell = CreateObject("Wscript.Shell")
-    objShell.Run """$exePath""", 0, False
-End If
-"@
-$vbsContent | Out-File -FilePath $vbsPath -Encoding ASCII -Force
-Write-ColorOutput "Background launcher created: $vbsPath" -Type "Success"
+# Step 8: (Skipped — no VBScript launcher needed; exe has built-in --bg mode)
+Write-ColorOutput "Step 8: Skipping VBScript launcher (exe has built-in background mode)..." -Type "Info"
 Write-Host ""
 
 # Step 9: Configure scheduled task
@@ -423,19 +408,31 @@ try {
         Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false
     }
 
-    # Action: run VBScript launcher (hidden, no CMD window)
-    $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$vbsPath`"" -WorkingDirectory $INSTALL_DIR
+    # Action: run the exe directly with --bg flag (hides console window).
+    # Running directly (not via VBScript) means the scheduled task stays in
+    # state "Running" for as long as the exe is alive.  When the exe exits
+    # (crash / network failure / OS update), Task Scheduler sees the task
+    # complete and the RestartCount setting automatically relaunches it.
+    # The old VBScript pattern launched the exe asynchronously, exited
+    # immediately, put the task in "Ready" state, and left nothing to
+    # restart the exe if it crashed.
+    $action = New-ScheduledTaskAction -Execute $exePath -Argument "--bg" -WorkingDirectory $INSTALL_DIR
 
-    # Triggers: at logon, at startup, and repeat every 5 min as watchdog
+    # Triggers: at logon, at startup (30-second boot delay)
     $triggerLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $triggerStartup = New-ScheduledTaskTrigger -AtStartup
     $triggerStartup.Delay = "PT30S"
-    $triggerRepeat = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes 5) -Once -At (Get-Date "00:00")
 
-    # Principal: run with highest privileges as current user
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+    # Principal: run at normal user privilege (Interactive, RunLevel Limited).
+    # This is essential — clipboard hooks and keyboard/mouse event monitoring
+    # require the process to run in the same security context as the desktop.
+    # Running elevated (RunLevel Highest) isolates the process from non-elevated
+    # apps and silently breaks all hook-based monitoring.  USB block via registry
+    # is the only feature that needs elevation; it is handled by a separate
+    # one-shot elevated task below.
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 
-    # Settings: always running, auto-restart, no time limit
+    # Settings: no execution time limit, restart automatically on crash
     $settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries `
@@ -443,13 +440,13 @@ try {
         -DontStopOnIdleEnd `
         -RestartCount 999 `
         -RestartInterval (New-TimeSpan -Minutes 1) `
-        -ExecutionTimeLimit (New-TimeSpan -Days 9999) `
+        -ExecutionTimeLimit ([System.TimeSpan]::Zero) `
         -MultipleInstances IgnoreNew
 
     Register-ScheduledTask `
         -TaskName $TASK_NAME `
         -Action $action `
-        -Trigger @($triggerLogon, $triggerStartup, $triggerRepeat) `
+        -Trigger @($triggerLogon, $triggerStartup) `
         -Principal $principal `
         -Settings $settings `
         -Description "SeceoKnight DLP Agent - Data Loss Prevention monitoring (clipboard, USB, files, screen capture)" `
@@ -457,11 +454,48 @@ try {
 
     Write-ColorOutput "Scheduled task created successfully!" -Type "Success"
     Write-ColorOutput "Task Name: $TASK_NAME" -Type "Info"
-    Write-ColorOutput "Agent will start automatically at logon (hidden, no CMD window)" -Type "Success"
+    Write-ColorOutput "Agent will start automatically at logon and restart if it ever stops." -Type "Success"
+
+    # ── USB block: one-shot elevated task at startup ─────────────────────────
+    # The main agent runs at normal privilege (required for clipboard/hooks).
+    # USB drive blocking via the USBSTOR registry key needs elevation.
+    # Register a separate task that runs once at startup as SYSTEM to set it.
+    $usbTaskName = "SeceoKnight DLP USB Block"
+    try {
+        $usbAction = New-ScheduledTaskAction `
+            -Execute "reg.exe" `
+            -Argument 'add "HKLM\SYSTEM\CurrentControlSet\Services\USBSTOR" /v Start /t REG_DWORD /d 4 /f'
+
+        $usbTrigger = New-ScheduledTaskTrigger -AtStartup
+        $usbTrigger.Delay = "PT10S"
+
+        $usbPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+        $usbSettings = New-ScheduledTaskSettingsSet `
+            -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries `
+            -ExecutionTimeLimit (New-TimeSpan -Minutes 1)
+
+        $existingUsb = Get-ScheduledTask -TaskName $usbTaskName -ErrorAction SilentlyContinue
+        if ($existingUsb) { Unregister-ScheduledTask -TaskName $usbTaskName -Confirm:$false }
+
+        Register-ScheduledTask `
+            -TaskName $usbTaskName `
+            -Action $usbAction `
+            -Trigger $usbTrigger `
+            -Principal $usbPrincipal `
+            -Settings $usbSettings `
+            -Description "SeceoKnight DLP - Disable USB storage at boot (requires SYSTEM elevation)" `
+            -Force | Out-Null
+
+        Write-ColorOutput "USB block task created: $usbTaskName" -Type "Success"
+    } catch {
+        Write-ColorOutput "Could not create USB block task (non-fatal): $($_.Exception.Message)" -Type "Warning"
+    }
 
 } catch {
     Write-ColorOutput "Error creating scheduled task: $($_.Exception.Message)" -Type "Error"
-    Write-ColorOutput "You can manually start the agent with: wscript.exe `"$vbsPath`"" -Type "Warning"
+    Write-ColorOutput "You can manually start it: Start-ScheduledTask -TaskName '$TASK_NAME'" -Type "Info"
 }
 
 Write-Host ""
@@ -501,9 +535,8 @@ Write-Host "Installation Details:" -ForegroundColor Yellow
 Write-Host "  Location:        $INSTALL_DIR"
 Write-Host "  Executable:      $EXE_NAME"
 Write-Host "  Configuration:   $CONFIG_NAME"
-Write-Host "  Launcher:        launch_agent.vbs (hidden execution)"
 Write-Host "  Scheduled Task:  $TASK_NAME"
-Write-Host "  Runs As:         $env:USERNAME (for clipboard/screen access)"
+Write-Host "  Runs As:         $env:USERNAME (normal user - required for clipboard/screen monitoring)"
 Write-Host "  Server:          $serverURL"
 Write-Host ""
 Write-Host "Management Commands:" -ForegroundColor Yellow
@@ -516,6 +549,7 @@ Write-Host "  Enable Auto:     Enable-ScheduledTask -TaskName '$TASK_NAME'"
 Write-Host ""
 Write-Host "Uninstall:" -ForegroundColor Yellow
 Write-Host "  Unregister-ScheduledTask -TaskName '$TASK_NAME' -Confirm:`$false"
+Write-Host "  Unregister-ScheduledTask -TaskName 'SeceoKnight DLP USB Block' -Confirm:`$false"
 Write-Host "  Stop-Process -Name 'seceoknight_agent' -Force"
 Write-Host "  Remove-Item '$INSTALL_DIR' -Recurse -Force"
 Write-Host "  Remove-Item '$DATA_DIR' -Recurse -Force"
