@@ -237,7 +237,12 @@ class Settings(BaseSettings):
     @classmethod
     def parse_alert_email_recipients(cls, v):
         """Parse alert email recipients from env (comma-separated or JSON list)."""
-        if v is None or (isinstance(v, str) and not v.strip()):
+        # PydanticUndefined is passed when the env var is not set at all
+        if not isinstance(v, (str, list)):
+            return []
+        if isinstance(v, list):
+            return v
+        if not v.strip():
             return []
         return cls._parse_list_env(v, field_name="ALERT_EMAIL_RECIPIENTS")
 
