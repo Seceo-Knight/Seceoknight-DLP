@@ -1255,242 +1255,215 @@ std::string FindFileNameFromDialog(IUIAutomation* uia, IUIAutomationElement* roo
     return result;
 }
 
-class BrowserDialogHandler : public IUIAutomationEventHandler {
-    LONG m_ref = 0;
-    IUIAutomation* m_uia = nullptr;
-public:
-    explicit BrowserDialogHandler(IUIAutomation* uia) : m_uia(uia) {
-        if (m_uia) m_uia->AddRef();
-    }
-    virtual ~BrowserDialogHandler() { if (m_uia) m_uia->Release(); }
+// Global UIAutomation pointer used by HandleBrowserDialogFromHwnd threads.
+// Written only by BrowserDetectorThread; read-only by detached threads (MTA safe).
+static IUIAutomation* g_browserUia = nullptr;
 
-    ULONG STDMETHODCALLTYPE AddRef() override {
-        return InterlockedIncrement(&m_ref);
-    }
-    ULONG STDMETHODCALLTYPE Release() override {
-        LONG r = InterlockedDecrement(&m_ref);
-        if (r == 0) delete this;
-        return r;
-    }
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
-        if (!ppv) return E_POINTER;
-        if (riid == IID_IUnknown || riid == IID_IUIAutomationEventHandler) {
-            *ppv = static_cast<IUIAutomationEventHandler*>(this);
-            AddRef();
-            return S_OK;
-        }
-        *ppv = nullptr;
-        return E_NOINTERFACE;
-    }
+// Forward declaration
+static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
+                                        const std::string& browserExe,
+                                        DWORD browserPid);
 
-    HRESULT STDMETHODCALLTYPE HandleAutomationEvent(
-        IUIAutomationElement* sender, EVENTID eventId) override {
-        if (g_stopRequested.load() || !sender ||
-            eventId != UIA_Window_WindowOpenedEventId) return S_OK;
+// WinEvent callback — fires on the BrowserDetectorThread message loop
+// whenever ANY window is created in the system (WINEVENT_OUTOFCONTEXT).
+// Unlike UIA WindowOpenedEventId, this fires for Chrome's sandboxed helper
+// processes that host the file-upload dialog.
+void CALLBACK BrowserWinEventProc(
+    HWINEVENTHOOK /*hook*/, DWORD event,
+    HWND hwnd, LONG idObject, LONG /*idChild*/,
+    DWORD /*eventThread*/, DWORD /*msEventTime*/)
+{
+    if (event    != EVENT_OBJECT_CREATE) return;
+    if (idObject != OBJID_WINDOW)        return;
+    if (!hwnd)                           return;
+    if (g_stopRequested.load())          return;
 
-        // Get dialog class and title first
-        BSTR className = nullptr;
-        sender->get_CurrentClassName(&className);
-        std::string cls = className ? WideToUtf8(className) : std::string{};
-        if (className) SysFreeString(className);
+    // Only care about Win32 common file dialog windows (class #32770)
+    char cls[64] = {};
+    if (!GetClassNameA(hwnd, cls, sizeof(cls))) return;
+    if (strcmp(cls, "#32770") != 0) return;
 
-        BSTR name = nullptr;
-        sender->get_CurrentName(&name);
-        std::string winName = name ? WideToUtf8(name) : std::string{};
-        if (name) SysFreeString(name);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    std::string exe = pid > 0 ? ProcessImageName(pid) : "unknown";
 
-        // Only care about #32770 dialogs (Win32 common file dialog)
-        // Log all of them for diagnostics so we can see what's firing
-        if (cls == "#32770") {
-            int pid = 0;
-            sender->get_CurrentProcessId(&pid);
-            std::string exe = pid > 0 ? ProcessImageName((DWORD)pid) : "unknown";
-            LogDbg("UIA #32770 dialog opened: exe=" + exe + " title=" + winName);
-        }
+    char title[512] = {};
+    GetWindowTextA(hwnd, title, sizeof(title));
+    LogDbg("WinEvent #32770 created: exe=" + exe +
+           " hwnd=" + std::to_string(reinterpret_cast<size_t>(hwnd)) +
+           " title=" + std::string(title));
 
-        // Filter: owning process must be a browser
-        int pid = 0;
-        sender->get_CurrentProcessId(&pid);
-        if (pid <= 0) return S_OK;
-        std::string exe = ProcessImageName((DWORD)pid);
+    // Check if the creating process is a browser
+    bool fromBrowser = IsBrowserExe(exe);
+    DWORD browserPid = pid;
 
-        // Chrome's file dialog may be hosted in a helper process (not chrome.exe).
-        // Also check the owner window's process.
-        bool fromBrowser = IsBrowserExe(exe);
-        if (!fromBrowser) {
-            // Get HWND of this dialog and check its owner window's process
-            HWND dialogHwndCheck = nullptr;
-            sender->get_CurrentNativeWindowHandle(
-                reinterpret_cast<UIA_HWND*>(&dialogHwndCheck));
-            if (dialogHwndCheck) {
-                HWND owner = GetWindow(dialogHwndCheck, GW_OWNER);
-                if (owner) {
-                    DWORD ownerPid = 0;
-                    GetWindowThreadProcessId(owner, &ownerPid);
-                    std::string ownerExe = ProcessImageName(ownerPid);
-                    if (IsBrowserExe(ownerExe)) {
-                        fromBrowser = true;
-                        exe = ownerExe; // use browser name for logging
-                        LogDbg("Dialog owner is browser: " + ownerExe);
-                    }
-                }
+    if (!fromBrowser) {
+        // Chrome's file dialog is hosted in a utility/helper process (not chrome.exe).
+        // Check the owner window's process instead.
+        HWND owner = GetWindow(hwnd, GW_OWNER);
+        if (!owner) owner = GetParent(hwnd);
+        if (owner) {
+            DWORD ownerPid = 0;
+            GetWindowThreadProcessId(owner, &ownerPid);
+            std::string ownerExe = ProcessImageName(ownerPid);
+            LogDbg("WinEvent #32770 owner: exe=" + ownerExe);
+            if (IsBrowserExe(ownerExe)) {
+                fromBrowser = true;
+                exe        = ownerExe;
+                browserPid = ownerPid;
+                LogDbg("WinEvent: dialog owner is browser: " + ownerExe);
             }
         }
-        if (!fromBrowser) return S_OK;
-
-        // Filter: window is a dialog (class #32770) or name indicates file picker
-        std::string nlc = ToLower(winName);
-        bool isFileDialog =
-            cls == "#32770" ||
-            nlc.find("open") != std::string::npos ||
-            nlc.find("upload") != std::string::npos ||
-            nlc.find("choose file") != std::string::npos ||
-            nlc.find("select file") != std::string::npos;
-        if (!isFileDialog) return S_OK;
-
-        LogDbg("Browser file dialog opened exe=" + exe +
-               " class=" + cls + " title=" + winName);
-
-        // We don't know the selected file yet (user hasn't clicked Open).
-        // Poll the dialog for up to 60 seconds looking for a filename and
-        // dialog-close signal. Detached thread so we don't block UIA.
-        IUIAutomation* uia = m_uia;
-        // Cache the HWND NOW while the element is valid — the UIA element
-        // becomes unreliable once the dialog starts closing, but the HWND
-        // stays valid for Win32 calls until the window is fully destroyed.
-        HWND dialogHwnd = nullptr;
-        sender->get_CurrentNativeWindowHandle(
-            reinterpret_cast<UIA_HWND*>(&dialogHwnd));
-
-        if (uia) uia->AddRef();
-        IUIAutomationElement* senderCopy = sender;
-        senderCopy->AddRef();
-
-        std::thread([uia, senderCopy, exe, pid, dialogHwnd]() {
-            std::unique_ptr<IUIAutomationElement,
-                            void(*)(IUIAutomationElement*)>
-                elGuard(senderCopy, [](IUIAutomationElement* p){ if (p) p->Release(); });
-            std::unique_ptr<IUIAutomation,
-                            void(*)(IUIAutomation*)>
-                uiaGuard(uia, [](IUIAutomation* p){ if (p) p->Release(); });
-
-            // Helper: try Win32 GetWindowText on all Edit children of the dialog
-            auto tryWin32 = [&]() -> std::string {
-                if (!dialogHwnd || !IsWindow(dialogHwnd)) return {};
-                EditControlFinder finder;
-                EnumChildWindows(dialogHwnd, EditControlFinder::Callback,
-                                 reinterpret_cast<LPARAM>(&finder));
-                return finder.result;
-            };
-
-            std::string captured;
-            // Try immediately (dialog may already have a filename, e.g. drag-drop)
-            {
-                std::string fn = FindFileNameFromDialog(uia, senderCopy);
-                if (fn.empty()) fn = tryWin32();
-                if (!fn.empty()) captured = fn;
-            }
-            // Poll every 50ms for up to 60s (fast poll catches brief filename window)
-            for (int i = 0; i < 1200; ++i) {
-                if (g_stopRequested.load()) return;
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-                // Check if dialog is gone via Win32 (more reliable than UIA)
-                bool dialogGone = !dialogHwnd ||
-                                  !IsWindow(dialogHwnd) ||
-                                  !IsWindowVisible(dialogHwnd);
-
-                // Try both approaches before deciding to stop
-                std::string fn = FindFileNameFromDialog(uia, senderCopy);
-                if (fn.empty()) fn = tryWin32();
-                if (!fn.empty()) captured = fn;
-
-                if (dialogGone) break;
-            }
-
-            if (captured.empty()) return;
-
-            // Resolve to full path (the Edit control often has just a name)
-            std::string resolved = ResolveExistingPath(captured);
-            if (resolved.empty()) {
-                // Try common download / doc locations
-                wchar_t pathBuf[MAX_PATH] = {0};
-                if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PROFILE, nullptr,
-                                               0, pathBuf))) {
-                    std::string home = WideToUtf8(pathBuf);
-                    for (const char* sub : {"\\Downloads\\", "\\Documents\\",
-                                            "\\Desktop\\", "\\"}) {
-                        std::string attempt = home + sub + captured;
-                        if (fs::exists(attempt)) { resolved = attempt; break; }
-                    }
-                }
-            }
-            if (resolved.empty()) resolved = captured;
-
-            // Read + classify (BEST EFFORT - we don't block browsers)
-            std::string content;
-            size_t      sz = 0;
-            try {
-                content = ReadFileSafely(resolved, g_cfg.maxFileBytes);
-                sz = fs::exists(resolved) ? (size_t)fs::file_size(resolved) : 0;
-            } catch (...) {}
-
-            if (content.empty()) {
-                LogWarn("CONTENT_EXTRACTION_FAILED browser path=" + resolved);
-                // Still emit a low-severity ALERT for visibility
-                EventFields f;
-                f.eventSubtype = "browser_file_selection";
-                f.channel = "BROWSER";
-                f.processName = exe;
-                f.pid = (DWORD)pid;
-                f.fileName = fs::path(resolved).filename().string();
-                f.filePath = resolved;
-                f.fileSize = sz;
-                f.action = "ALERT";
-                f.severity = "low";
-                f.reason = "Browser file selection detected (content not readable)";
-                EmitEvent(f);
-                return;
-            }
-
-            ClassifyResult cls;
-            try { cls = g_cfg.classify(content, "network_exfil"); } catch(...) {}
-
-            LogInfo("CLASSIFICATION_RESULT browser pid=" + std::to_string(pid) +
-                    " category=" + (cls.category.empty() ? "none" : cls.category));
-
-            std::string catLower = ToLower(cls.category);
-            bool sensitive = (catLower == "confidential" || catLower == "restricted");
-
-            EventFields f;
-            f.eventSubtype = "browser_file_selection";
-            f.channel = "BROWSER";
-            f.processName = exe;
-            f.pid = (DWORD)pid;
-            f.fileName = fs::path(resolved).filename().string();
-            f.filePath = resolved;
-            f.fileSize = sz;
-            f.category = cls.category;
-            f.classificationScore = cls.score;
-            f.matchedRule = cls.matchedRule;
-            f.labels = cls.labels;
-
-            if (sensitive) {
-                f.action   = "ALERT";            // Per spec: never block browsers
-                f.severity = (catLower == "restricted") ? "critical" : "high";
-                f.reason   = "Sensitive file selected for upload in " + exe +
-                             " (" + cls.category + "). Alert only - not blocked.";
-                LogWarn("POLICY_DECISION browser decision=ALERT category=" +
-                        cls.category);
-                EmitEvent(f);
-            } else if (!cls.category.empty()) {
-                LogDbg("Browser file selection non-sensitive; no event emitted");
-            }
-        }).detach();
-
-        return S_OK;
     }
-};
+
+    if (!fromBrowser) return;
+
+    LogInfo("Browser file dialog detected: exe=" + exe);
+
+    // Dispatch file polling to a background thread so we don't block the
+    // message loop (and therefore don't miss subsequent WinEvents).
+    std::thread([hwnd, exe, browserPid]() {
+        HandleBrowserDialogFromHwnd(hwnd, exe, browserPid);
+    }).detach();
+}
+
+// Polls the file dialog until the user picks a file (or closes it),
+// then classifies content and emits an event.  Runs on a detached thread.
+static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
+                                        const std::string& browserExe,
+                                        DWORD browserPid)
+{
+    // Join the MTA so we can use g_browserUia from this thread
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool comInited = (hr == S_OK || hr == S_FALSE);
+
+    IUIAutomation* uia = g_browserUia;
+    if (uia) uia->AddRef();
+
+    // Get a fresh UIA element from the HWND each poll (stale after navigation)
+    auto getEl = [&]() -> IUIAutomationElement* {
+        if (!uia || !dialogHwnd || !IsWindow(dialogHwnd)) return nullptr;
+        IUIAutomationElement* el = nullptr;
+        uia->ElementFromHandle(dialogHwnd, &el);
+        return el;
+    };
+
+    // Win32 fallback: walk child windows for filename text
+    auto tryWin32 = [&]() -> std::string {
+        if (!dialogHwnd || !IsWindow(dialogHwnd)) return {};
+        EditControlFinder finder;
+        EnumChildWindows(dialogHwnd, EditControlFinder::Callback,
+                         reinterpret_cast<LPARAM>(&finder));
+        return finder.result;
+    };
+
+    std::string captured;
+
+    // Try immediately (dialog may be pre-populated, e.g. drag-drop)
+    {
+        IUIAutomationElement* el = getEl();
+        std::string fn = FindFileNameFromDialog(uia, el);
+        if (el) el->Release();
+        if (fn.empty()) fn = tryWin32();
+        if (!fn.empty()) captured = fn;
+    }
+
+    // Poll every 50ms for up to 60s
+    for (int i = 0; i < 1200 && !g_stopRequested.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        bool dialogGone = !dialogHwnd ||
+                          !IsWindow(dialogHwnd) ||
+                          !IsWindowVisible(dialogHwnd);
+
+        IUIAutomationElement* el = getEl();
+        std::string fn = FindFileNameFromDialog(uia, el);
+        if (el) el->Release();
+        if (fn.empty()) fn = tryWin32();
+        if (!fn.empty()) captured = fn;
+
+        if (dialogGone) break;
+    }
+
+    if (uia) uia->Release();
+    if (comInited) CoUninitialize();
+
+    if (captured.empty()) return;
+
+    // Resolve to full path
+    std::string resolved = ResolveExistingPath(captured);
+    if (resolved.empty()) {
+        wchar_t pathBuf[MAX_PATH] = {0};
+        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PROFILE, nullptr,
+                                       0, pathBuf))) {
+            std::string home = WideToUtf8(pathBuf);
+            for (const char* sub : {"\\Downloads\\", "\\Documents\\",
+                                    "\\Desktop\\", "\\"}) {
+                std::string attempt = home + sub + captured;
+                if (fs::exists(attempt)) { resolved = attempt; break; }
+            }
+        }
+    }
+    if (resolved.empty()) resolved = captured;
+
+    // Read + classify (BEST EFFORT — we never block browsers)
+    std::string content;
+    size_t      sz = 0;
+    try {
+        content = ReadFileSafely(resolved, g_cfg.maxFileBytes);
+        sz = fs::exists(resolved) ? (size_t)fs::file_size(resolved) : 0;
+    } catch (...) {}
+
+    if (content.empty()) {
+        LogWarn("CONTENT_EXTRACTION_FAILED browser path=" + resolved);
+        EventFields f;
+        f.eventSubtype = "browser_file_selection";
+        f.channel      = "BROWSER";
+        f.processName  = browserExe;
+        f.pid          = browserPid;
+        f.fileName     = fs::path(resolved).filename().string();
+        f.filePath     = resolved;
+        f.fileSize     = sz;
+        f.action       = "ALERT";
+        f.severity     = "low";
+        f.reason       = "Browser file selection detected (content not readable)";
+        EmitEvent(f);
+        return;
+    }
+
+    ClassifyResult cls;
+    try { cls = g_cfg.classify(content, "network_exfil"); } catch (...) {}
+
+    LogInfo("CLASSIFICATION_RESULT browser pid=" + std::to_string(browserPid) +
+            " category=" + (cls.category.empty() ? "none" : cls.category));
+
+    std::string catLower = ToLower(cls.category);
+    bool sensitive = (catLower == "confidential" || catLower == "restricted");
+
+    EventFields f;
+    f.eventSubtype        = "browser_file_selection";
+    f.channel             = "BROWSER";
+    f.processName         = browserExe;
+    f.pid                 = browserPid;
+    f.fileName            = fs::path(resolved).filename().string();
+    f.filePath            = resolved;
+    f.fileSize            = sz;
+    f.category            = cls.category;
+    f.classificationScore = cls.score;
+    f.matchedRule         = cls.matchedRule;
+    f.labels              = cls.labels;
+
+    if (sensitive) {
+        f.action   = "ALERT";
+        f.severity = (catLower == "restricted") ? "critical" : "high";
+        f.reason   = "Sensitive file selected for upload in " + browserExe +
+                     " (" + cls.category + "). Alert only - not blocked.";
+        LogWarn("POLICY_DECISION browser decision=ALERT category=" + cls.category);
+        EmitEvent(f);
+    } else if (!cls.category.empty()) {
+        LogDbg("Browser file selection non-sensitive; no event emitted");
+    }
+}
 
 void BrowserDetectorThread() {
     LogInfo("NetworkExfilMonitor: browser detector thread starting");
@@ -1502,53 +1475,49 @@ void BrowserDetectorThread() {
         return;
     }
 
-    IUIAutomation* uia = nullptr;
+    // UIA for file name extraction (optional — detection itself uses WinEvent hook)
     hr = CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
-                          IID_IUIAutomation, (void**)&uia);
-    if (FAILED(hr) || !uia) {
-        LogWarn("UIAutomation unavailable; browser detection disabled");
+                          IID_IUIAutomation, (void**)&g_browserUia);
+    if (FAILED(hr) || !g_browserUia) {
+        LogWarn("UIAutomation unavailable; file name extraction may be limited");
+        g_browserUia = nullptr;
+    }
+
+    // SetWinEventHook(EVENT_OBJECT_CREATE) fires for ALL window creations
+    // including Chrome's sandboxed helper-process file dialogs, where
+    // UIA_Window_WindowOpenedEventId silently fails.
+    HWINEVENTHOOK hook = SetWinEventHook(
+        EVENT_OBJECT_CREATE, EVENT_OBJECT_CREATE,
+        NULL, BrowserWinEventProc,
+        0, 0,
+        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+    );
+
+    if (!hook) {
+        LogWarn("SetWinEventHook failed; browser detection disabled");
+        if (g_browserUia) { g_browserUia->Release(); g_browserUia = nullptr; }
         CoUninitialize();
         return;
     }
 
-    IUIAutomationElement* rootEl = nullptr;
-    uia->GetRootElement(&rootEl);
-    if (!rootEl) {
-        LogWarn("UIA root element unavailable");
-        uia->Release(); CoUninitialize(); return;
-    }
+    LogInfo("NetworkExfilMonitor: browser dialog detector active (WinEvent hook)");
 
-    BrowserDialogHandler* handler = new BrowserDialogHandler(uia);
-    handler->AddRef();
-
-    hr = uia->AddAutomationEventHandler(UIA_Window_WindowOpenedEventId,
-                                        rootEl, TreeScope_Subtree,
-                                        nullptr, handler);
-    if (FAILED(hr)) {
-        LogWarn("AddAutomationEventHandler failed; browser detection disabled");
-        handler->Release();
-        rootEl->Release(); uia->Release(); CoUninitialize();
-        return;
-    }
-
-    LogInfo("NetworkExfilMonitor: browser dialog detector active");
-
-    // Pump a message loop - UIA events are delivered on MTA threads but some
-    // implementations still rely on a message pump for child windows.
+    // Message loop — required for WINEVENT_OUTOFCONTEXT callback delivery.
+    // MsgWaitForMultipleObjects wakes immediately when a WinEvent is posted,
+    // avoiding the 200ms latency of the old PeekMessage+sleep loop.
+    MSG msg;
     while (!g_stopRequested.load()) {
-        MSG msg;
-        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+        DWORD r = MsgWaitForMultipleObjects(0, nullptr, FALSE, 200, QS_ALLINPUT);
+        if (r == WAIT_OBJECT_0 || r == WAIT_TIMEOUT) {
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
 
-    uia->RemoveAutomationEventHandler(UIA_Window_WindowOpenedEventId,
-                                      rootEl, handler);
-    handler->Release();
-    rootEl->Release();
-    uia->Release();
+    UnhookWinEvent(hook);
+    if (g_browserUia) { g_browserUia->Release(); g_browserUia = nullptr; }
     CoUninitialize();
 
     LogInfo("NetworkExfilMonitor: browser detector stopped");
