@@ -41,6 +41,7 @@ const FIELD_OPTIONS = [
   { value: 'event_type', label: 'Event Type', type: 'select', options: ['file_transfer', 'clipboard', 'file_create', 'file_modify', 'file_delete', 'usb_connect'] },
   { value: 'destination_type', label: 'Destination Type', type: 'select', options: ['removable_drive', 'email', 'cloud_storage', 'network'] },
   { value: 'file_extension', label: 'File Extension', type: 'text' },
+  { value: 'event_subtype', label: 'Event Subtype', type: 'select', options: ['browser_file_selection', 'file_upload', 'paste', 'drag_drop'] },
 ]
 
 const OPERATOR_OPTIONS = [

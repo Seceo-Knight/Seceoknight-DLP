@@ -38,7 +38,8 @@ interface PolicyCreatorModalProps {
 const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | GoogleDriveLocalConfig | GoogleDriveCloudConfig | OneDriveCloudConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
-      // Classification-aware policies don't use config, they use conditions/actions
+    case 'browser_upload_monitoring':
+      // These policies don't use config, they use conditions/actions
       return {}
 
     case 'clipboard_monitoring':
@@ -233,6 +234,19 @@ export default function PolicyCreatorModal({
   useEffect(() => {
     if (policyType && !editingPolicy) {
       setConfig(getDefaultConfig(policyType))
+      // Pre-populate conditions for browser_upload_monitoring
+      if (policyType === 'browser_upload_monitoring') {
+        setClassificationPolicy({
+          conditions: {
+            match: 'all',
+            rules: [
+              { field: 'event_subtype', operator: 'equals', value: 'browser_file_selection' },
+              { field: 'classification_level', operator: 'in', value: 'Confidential,Restricted' },
+            ],
+          },
+          actions: { alert: { severity: 'high' } },
+        })
+      }
     }
   }, [policyType])
 
@@ -280,10 +294,10 @@ export default function PolicyCreatorModal({
 
     let policy: Partial<Policy>
 
-    if (policyType === 'classification_aware_policy') {
-      // Classification-aware policy uses conditions/actions format
+    if (policyType === 'classification_aware_policy' || policyType === 'browser_upload_monitoring') {
+      // Condition-based policies use conditions/actions format
       if (classificationPolicy.conditions.rules.length === 0) {
-        toast.error('At least one condition is required for classification-aware policies')
+        toast.error('At least one condition is required')
         return
       }
 
@@ -340,8 +354,9 @@ export default function PolicyCreatorModal({
   }
 
   const canProceedFromStep1 = policyType !== null
+  const isConditionBased = policyType === 'classification_aware_policy' || policyType === 'browser_upload_monitoring'
   const canProceedFromStep2 = policyType !== null && (
-    policyType === 'classification_aware_policy'
+    isConditionBased
       ? classificationPolicy.conditions.rules.length > 0 && Object.keys(classificationPolicy.actions).length > 0
       : config !== null
   )
@@ -562,7 +577,7 @@ export default function PolicyCreatorModal({
                   />
                 )}
 
-                {policyType === 'classification_aware_policy' && (
+                {(policyType === 'classification_aware_policy' || policyType === 'browser_upload_monitoring') && (
                   <ClassificationPolicyForm
                     policy={classificationPolicy}
                     onChange={(newPolicy) => setClassificationPolicy(newPolicy)}

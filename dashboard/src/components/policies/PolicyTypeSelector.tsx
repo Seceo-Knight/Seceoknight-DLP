@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield, Globe } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -67,6 +67,12 @@ const policyTypes: Array<{
     label: 'Classification-Aware Policy',
     description: 'Advanced policy based on content classification and confidence scores',
     icon: Shield
+  },
+  {
+    type: 'browser_upload_monitoring',
+    label: 'Browser Upload Monitoring',
+    description: 'Detect and alert when files are uploaded via browser file dialog',
+    icon: Globe
   }
 ]
 

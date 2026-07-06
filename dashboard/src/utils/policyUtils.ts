@@ -34,6 +34,8 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return Cloud
     case 'google_drive_cloud_monitoring':
       return Cloud
+    case 'browser_upload_monitoring':
+      return Cloud
     default:
       return FileText
   }
@@ -58,6 +60,8 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Google Drive (Local)'
     case 'google_drive_cloud_monitoring':
       return 'Google Drive (Cloud)'
+    case 'browser_upload_monitoring':
+      return 'Browser Upload Monitoring'
     default:
       return 'Unknown'
   }
