@@ -1288,14 +1288,7 @@ public:
         if (g_stopRequested.load() || !sender ||
             eventId != UIA_Window_WindowOpenedEventId) return S_OK;
 
-        // Filter: owning process must be a browser
-        int pid = 0;
-        sender->get_CurrentProcessId(&pid);
-        if (pid <= 0) return S_OK;
-        std::string exe = ProcessImageName((DWORD)pid);
-        if (!IsBrowserExe(exe)) return S_OK;
-
-        // Filter: window is a dialog (class #32770) or name indicates file picker
+        // Get dialog class and title first
         BSTR className = nullptr;
         sender->get_CurrentClassName(&className);
         std::string cls = className ? WideToUtf8(className) : std::string{};
@@ -1306,6 +1299,46 @@ public:
         std::string winName = name ? WideToUtf8(name) : std::string{};
         if (name) SysFreeString(name);
 
+        // Only care about #32770 dialogs (Win32 common file dialog)
+        // Log all of them for diagnostics so we can see what's firing
+        if (cls == "#32770") {
+            int pid = 0;
+            sender->get_CurrentProcessId(&pid);
+            std::string exe = pid > 0 ? ProcessImageName((DWORD)pid) : "unknown";
+            LogDbg("UIA #32770 dialog opened: exe=" + exe + " title=" + winName);
+        }
+
+        // Filter: owning process must be a browser
+        int pid = 0;
+        sender->get_CurrentProcessId(&pid);
+        if (pid <= 0) return S_OK;
+        std::string exe = ProcessImageName((DWORD)pid);
+
+        // Chrome's file dialog may be hosted in a helper process (not chrome.exe).
+        // Also check the owner window's process.
+        bool fromBrowser = IsBrowserExe(exe);
+        if (!fromBrowser) {
+            // Get HWND of this dialog and check its owner window's process
+            HWND dialogHwndCheck = nullptr;
+            sender->get_CurrentNativeWindowHandle(
+                reinterpret_cast<UIA_HWND*>(&dialogHwndCheck));
+            if (dialogHwndCheck) {
+                HWND owner = GetWindow(dialogHwndCheck, GW_OWNER);
+                if (owner) {
+                    DWORD ownerPid = 0;
+                    GetWindowThreadProcessId(owner, &ownerPid);
+                    std::string ownerExe = ProcessImageName(ownerPid);
+                    if (IsBrowserExe(ownerExe)) {
+                        fromBrowser = true;
+                        exe = ownerExe; // use browser name for logging
+                        LogDbg("Dialog owner is browser: " + ownerExe);
+                    }
+                }
+            }
+        }
+        if (!fromBrowser) return S_OK;
+
+        // Filter: window is a dialog (class #32770) or name indicates file picker
         std::string nlc = ToLower(winName);
         bool isFileDialog =
             cls == "#32770" ||
