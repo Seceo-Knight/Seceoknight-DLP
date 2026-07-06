@@ -149,6 +149,11 @@ class Settings(BaseSettings):
     SMTP_FROM: str = Field(default="noreply@seceoknight.com")
     SMTP_FROM_EMAIL: str = Field(default="noreply@seceoknight.com")
     SMTP_FROM_NAME: str = Field(default="SeceoKnight DLP")
+    # Alert email recipients — comma-separated list loaded from env var ALERT_EMAIL_RECIPIENTS
+    # e.g.  ALERT_EMAIL_RECIPIENTS=admin@company.com,security@company.com
+    ALERT_EMAIL_RECIPIENTS: List[str] = Field(default_factory=list)
+    # Minimum severity that triggers an automatic email: critical | high | medium | low
+    ALERT_EMAIL_MIN_SEVERITY: str = Field(default="high")
 
     # Reports Storage
     REPORTS_DIR: str = Field(default="/app/reports")
@@ -227,6 +232,14 @@ class Settings(BaseSettings):
             default = cls.model_fields["ALLOWED_HOSTS"].default
             return list(default) if isinstance(default, list) else default
         return cls._parse_list_env(v, field_name="ALLOWED_HOSTS")
+
+    @field_validator("ALERT_EMAIL_RECIPIENTS", mode="before")
+    @classmethod
+    def parse_alert_email_recipients(cls, v):
+        """Parse alert email recipients from env (comma-separated or JSON list)."""
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return []
+        return cls._parse_list_env(v, field_name="ALERT_EMAIL_RECIPIENTS")
 
     @classmethod
     def _parse_list_env(cls, v, *, field_name: str) -> List[str]:

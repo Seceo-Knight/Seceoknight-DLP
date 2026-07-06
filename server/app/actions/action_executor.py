@@ -256,6 +256,16 @@ class ActionExecutor:
                 error=str(e)
             )
 
+        # Auto-send email if severity meets threshold and recipients are configured
+        try:
+            severity_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+            min_severity = getattr(settings, "ALERT_EMAIL_MIN_SEVERITY", "high")
+            alert_recipients = list(getattr(settings, "ALERT_EMAIL_RECIPIENTS", []))
+            if severity_rank.get(severity, 0) >= severity_rank.get(min_severity, 3) and alert_recipients:
+                await self._send_email(event, alert_recipients, None, action)
+        except Exception as e:
+            logger.logger.warning("auto_email_alert_failed", error=str(e))
+
         # Log policy violation for metrics
         logger.log_policy_violation(
             event.get("event_id"),
@@ -559,39 +569,123 @@ class ActionExecutor:
         )
 
     async def _send_email(self, event: Dict, recipients: List[str], template: Optional[str], action: Dict) -> bool:
-        """Send email notification"""
+        """Send email alert via SMTP."""
+        if not recipients:
+            return False
+        if not settings.SMTP_USER or not settings.SMTP_PASSWORD:
+            logger.logger.warning("email_skipped_no_smtp_credentials")
+            return False
         try:
-            subject = action.get("subject", f"DLP Alert: {event.get('event', {}).get('type', 'Unknown')} event")
+            severity = event.get("event", {}).get("severity", "unknown")
+            event_type = event.get("event", {}).get("type", "unknown")
+            subject = action.get("subject") or f"[SeceoKnight DLP] Policy Violation — {severity.upper()} severity"
 
-            # Build email body
-            body = f"""
-            DLP Policy Violation Detected
+            plain = (
+                f"SeceoKnight DLP — Policy Violation Alert\n\n"
+                f"Event ID : {event.get('event_id', 'N/A')}\n"
+                f"Agent    : {event.get('agent', {}).get('name', 'N/A')}\n"
+                f"Type     : {event_type}\n"
+                f"Severity : {severity.upper()}\n"
+                f"Time     : {event.get('@timestamp', 'N/A')}\n"
+            )
+            classification_meta = event.get("classification_metadata", {})
+            if classification_meta:
+                plain += (
+                    f"Classification : {classification_meta.get('classification_level', 'Unknown')}\n"
+                    f"Confidence     : {int(classification_meta.get('confidence_score', 0) * 100)}%\n"
+                )
+            if event.get("file_path"):
+                plain += f"File           : {event['file_path']}\n"
+            policy_id = action.get("metadata", {}).get("policy_id", "N/A")
+            plain += f"\nPolicy ID : {policy_id}\n\n-- SeceoKnight DLP Security Platform\n"
 
-            Event ID: {event.get('event_id')}
-            Agent: {event.get('agent', {}).get('name')}
-            Type: {event.get('event', {}).get('type')}
-            Severity: {event.get('event', {}).get('severity')}
-            Timestamp: {event.get('@timestamp')}
+            severity_color = {
+                "critical": "#dc2626", "high": "#ea580c",
+                "medium": "#d97706", "low": "#16a34a"
+            }.get(severity, "#6b7280")
 
-            Classification: {event.get('classification', [])}
+            matched = [r.get("label", "") for r in event.get("classification", []) if r.get("label")]
+            matched_html = (
+                f"<tr><td style='padding:6px 12px;color:#6b7280;font-size:13px'>Sensitive Data</td>"
+                f"<td style='padding:6px 12px;font-size:13px'>{', '.join(matched[:5])}</td></tr>"
+            ) if matched else ""
+            classif_html = (
+                f"<tr><td style='padding:6px 12px;color:#6b7280;font-size:13px'>Classification</td>"
+                f"<td style='padding:6px 12px;font-size:13px'>"
+                f"{classification_meta.get('classification_level','Unknown')} "
+                f"({int(classification_meta.get('confidence_score',0)*100)}%)</td></tr>"
+            ) if classification_meta else ""
+            file_html = (
+                f"<tr style='background:#f9fafb'>"
+                f"<td style='padding:6px 12px;color:#6b7280;font-size:13px'>File</td>"
+                f"<td style='padding:6px 12px;font-size:13px;font-family:monospace'>{event.get('file_path','')}</td></tr>"
+            ) if event.get("file_path") else ""
 
-            Policy: {action.get('metadata', {}).get('policy_id')}
-            Regulation: {action.get('metadata', {}).get('regulation')}
-            """
+            html = f"""<!DOCTYPE html><html><body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 0">
+<tr><td align="center"><table width="560" cellpadding="0" cellspacing="0"
+  style="background:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)">
+  <tr><td style="background:{severity_color};padding:20px 28px">
+    <p style="margin:0;color:#fff;font-size:11px;letter-spacing:.1em;text-transform:uppercase">SeceoKnight DLP</p>
+    <h1 style="margin:4px 0 0;color:#fff;font-size:22px;font-weight:700">Policy Violation Detected</h1>
+  </td></tr>
+  <tr><td style="padding:24px 28px">
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden">
+      <tr style="background:#f9fafb"><td style="padding:6px 12px;color:#6b7280;font-size:13px">Severity</td>
+        <td style="padding:6px 12px"><span style="background:{severity_color};color:#fff;border-radius:4px;padding:2px 8px;font-size:12px;font-weight:600">{severity.upper()}</span></td></tr>
+      <tr><td style="padding:6px 12px;color:#6b7280;font-size:13px">Event ID</td>
+        <td style="padding:6px 12px;font-size:13px;font-family:monospace">{event.get("event_id","N/A")}</td></tr>
+      <tr style="background:#f9fafb"><td style="padding:6px 12px;color:#6b7280;font-size:13px">Agent</td>
+        <td style="padding:6px 12px;font-size:13px">{event.get("agent",{{}}).get("name","N/A")}</td></tr>
+      <tr><td style="padding:6px 12px;color:#6b7280;font-size:13px">Event Type</td>
+        <td style="padding:6px 12px;font-size:13px">{event_type}</td></tr>
+      <tr style="background:#f9fafb"><td style="padding:6px 12px;color:#6b7280;font-size:13px">Timestamp</td>
+        <td style="padding:6px 12px;font-size:13px">{event.get("@timestamp","N/A")}</td></tr>
+      {classif_html}{matched_html}{file_html}
+      <tr style="background:#f9fafb"><td style="padding:6px 12px;color:#6b7280;font-size:13px">Policy ID</td>
+        <td style="padding:6px 12px;font-size:13px;font-family:monospace">{policy_id}</td></tr>
+    </table>
+    <p style="margin:20px 0 0;font-size:12px;color:#9ca3af">Automated alert from SeceoKnight DLP. Do not reply.</p>
+  </td></tr>
+</table></td></tr></table></body></html>"""
 
-            # In production, would actually send email via SMTP
+            import asyncio
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._smtp_send, recipients, subject, plain, html)
+
             logger.logger.info(
-                "email_notification_sent",
+                "email_alert_sent",
                 event_id=event.get("event_id"),
                 recipients=recipients,
-                subject=subject
+                subject=subject,
             )
-
             return True
 
         except Exception as e:
             logger.log_error(e, {"action": "send_email"})
             return False
+
+    def _smtp_send(self, recipients: List[str], subject: str, plain: str, html: str) -> None:
+        """Blocking SMTP send — called via run_in_executor."""
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
+        msg["To"] = ", ".join(recipients)
+        msg.attach(MIMEText(plain, "plain"))
+        msg.attach(MIMEText(html, "html"))
+
+        if settings.SMTP_TLS:
+            server = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT)
+            server.ehlo()
+            server.starttls()
+        else:
+            server = smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT)
+        try:
+            if settings.SMTP_USER and settings.SMTP_PASSWORD:
+                server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.sendmail(settings.SMTP_FROM_EMAIL, recipients, msg.as_string())
+        finally:
+            server.quit()
 
     async def _send_slack(self, event: Dict, webhook_url: str, template: Optional[str]) -> bool:
         """Send Slack notification"""

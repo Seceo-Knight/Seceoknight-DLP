@@ -27,6 +27,7 @@ from app.api.v1 import (
     scans,
     decision,
     permissions,
+    email_settings,
 )
 
 api_router = APIRouter()
@@ -61,3 +62,4 @@ api_router.include_router(incidents.router, prefix="/incidents", tags=["Incident
 api_router.include_router(fingerprints.router, prefix="/fingerprints", tags=["Fingerprints"])
 api_router.include_router(scans.router, prefix="/scans", tags=["Scans"])
 api_router.include_router(decision.router, prefix="/decision", tags=["Decision"])
+api_router.include_router(email_settings.router, prefix="/settings", tags=["Settings"])

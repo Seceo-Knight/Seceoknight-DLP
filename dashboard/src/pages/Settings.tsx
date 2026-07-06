@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import {
   Lock, ShieldCheck, Eye, EyeOff, Server, Database,
   Bell, Globe, Info, ChevronRight, CheckCircle2, AlertCircle,
-  Cloud, HardDrive, User, Wifi, WifiOff,
+  Cloud, HardDrive, User, Wifi, WifiOff, Mail, Plus, X, Send,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { initiateGoogleDriveConnection, initiateOneDriveConnection, changePassword, mfaSetup, mfaVerifySetup } from '@/lib/api'
@@ -53,6 +53,99 @@ export default function Settings() {
   // Integration state
   const [isConnectingDrive, setIsConnectingDrive] = useState(false)
   const [isConnectingOneDrive, setIsConnectingOneDrive] = useState(false)
+
+  // ── Email alert settings state ───────────────────────────────────────────
+  const [emailSettings, setEmailSettings] = useState({
+    smtp_host: 'smtp.gmail.com',
+    smtp_port: 587,
+    smtp_tls: true,
+    smtp_user: '',
+    smtp_password: '',
+    smtp_from_name: 'SeceoKnight DLP',
+    smtp_from_email: 'noreply@seceoknight.com',
+    alert_recipients: [] as string[],
+    min_severity: 'high',
+    enabled: true,
+  })
+  const [emailSettingsLoading, setEmailSettingsLoading] = useState(false)
+  const [emailSettingsSaving, setEmailSettingsSaving] = useState(false)
+  const [testEmailAddress, setTestEmailAddress] = useState('')
+  const [testEmailSending, setTestEmailSending] = useState(false)
+  const [newRecipient, setNewRecipient] = useState('')
+
+  useEffect(() => {
+    if (activeTab !== 'notifications') return
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token') || ''
+    setEmailSettingsLoading(true)
+    fetch(`${API_URL}/api/v1/settings/email`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(data => setEmailSettings(s => ({
+        ...s,
+        smtp_host: data.smtp_host ?? s.smtp_host,
+        smtp_port: data.smtp_port ?? s.smtp_port,
+        smtp_tls: data.smtp_tls ?? s.smtp_tls,
+        smtp_user: data.smtp_user ?? s.smtp_user,
+        smtp_from_name: data.smtp_from_name ?? s.smtp_from_name,
+        smtp_from_email: data.smtp_from_email ?? s.smtp_from_email,
+        alert_recipients: data.alert_recipients ?? s.alert_recipients,
+        min_severity: data.min_severity ?? s.min_severity,
+        enabled: data.enabled ?? s.enabled,
+      })))
+      .catch(() => {})
+      .finally(() => setEmailSettingsLoading(false))
+  }, [activeTab])
+
+  const handleSaveEmailSettings = async () => {
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token') || ''
+    setEmailSettingsSaving(true)
+    try {
+      const res = await fetch(`${API_URL}/api/v1/settings/email`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ ...emailSettings, smtp_password: emailSettings.smtp_password || null }),
+      })
+      if (!res.ok) throw new Error((await res.json()).detail || 'Failed to save')
+      toast.success('Email settings saved')
+      setEmailSettings(s => ({ ...s, smtp_password: '' }))
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to save email settings')
+    } finally {
+      setEmailSettingsSaving(false)
+    }
+  }
+
+  const handleTestEmail = async () => {
+    if (!testEmailAddress) { toast.error('Enter a recipient address first'); return }
+    const token = localStorage.getItem('token') || sessionStorage.getItem('token') || ''
+    setTestEmailSending(true)
+    try {
+      const res = await fetch(`${API_URL}/api/v1/settings/email/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ recipient: testEmailAddress }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || 'Test failed')
+      toast.success(data.message || 'Test email sent!')
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to send test email')
+    } finally {
+      setTestEmailSending(false)
+    }
+  }
+
+  const addRecipient = () => {
+    const email = newRecipient.trim()
+    if (!email || emailSettings.alert_recipients.includes(email)) return
+    setEmailSettings(s => ({ ...s, alert_recipients: [...s.alert_recipients, email] }))
+    setNewRecipient('')
+  }
+
+  const removeRecipient = (email: string) => {
+    setEmailSettings(s => ({ ...s, alert_recipients: s.alert_recipients.filter(r => r !== email) }))
+  }
 
   const handleMfaEnable = async () => {
     setMfaLoading(true)
@@ -459,33 +552,182 @@ export default function Settings() {
 
           {/* ── NOTIFICATIONS ── */}
           {activeTab === 'notifications' && (
-            <div className="card">
-              <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
-                <div className="p-2.5 bg-yellow-50 rounded-xl border border-yellow-100">
-                  <Bell className="h-5 w-5 text-yellow-600" />
+            <div className="space-y-6">
+              {emailSettingsLoading && (
+                <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
+                  <div className="h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                  Loading settings…
                 </div>
-                <div>
-                  <h2 className="font-semibold text-gray-900">Notification Preferences</h2>
-                  <p className="text-xs text-gray-500 mt-0.5">Configure how and when you receive alerts</p>
+              )}
+
+              {/* ── Enable toggle ── */}
+              <div className="card">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-yellow-50 rounded-xl border border-yellow-100">
+                      <Bell className="h-5 w-5 text-yellow-600" />
+                    </div>
+                    <div>
+                      <h2 className="font-semibold text-gray-900">Email Alerts</h2>
+                      <p className="text-xs text-gray-500 mt-0.5">Send email when a policy violation is detected</p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input type="checkbox" className="sr-only peer"
+                      checked={emailSettings.enabled}
+                      onChange={e => setEmailSettings(s => ({ ...s, enabled: e.target.checked }))} />
+                    <div className="w-10 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600" />
+                  </label>
                 </div>
               </div>
-              <div className="divide-y divide-gray-100">
-                {[
-                  { label: 'Email Notifications', desc: 'Receive email alerts for critical and high-severity events', defaultOn: true },
-                  { label: 'Desktop Notifications', desc: 'Show browser push notifications when new alerts arrive', defaultOn: false },
-                  { label: 'Critical Events Only', desc: 'Suppress non-critical notifications — only show severity: critical', defaultOn: false },
-                ].map((item) => (
-                  <div key={item.label} className="flex items-center justify-between py-5">
-                    <div className="pr-6">
-                      <p className="text-sm font-semibold text-gray-900">{item.label}</p>
-                      <p className="text-xs text-gray-500 mt-0.5">{item.desc}</p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                      <input type="checkbox" className="sr-only peer" defaultChecked={item.defaultOn} />
-                      <div className="w-10 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                    </label>
+
+              {/* ── SMTP Configuration ── */}
+              <div className="card">
+                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
+                  <div className="p-2.5 bg-blue-50 rounded-xl border border-blue-100">
+                    <Mail className="h-5 w-5 text-blue-600" />
                   </div>
-                ))}
+                  <div>
+                    <h2 className="font-semibold text-gray-900">SMTP Configuration</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">Outgoing mail server settings</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">SMTP Host</label>
+                    <input type="text" value={emailSettings.smtp_host}
+                      onChange={e => setEmailSettings(s => ({ ...s, smtp_host: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="smtp.gmail.com" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">SMTP Port</label>
+                    <input type="number" value={emailSettings.smtp_port}
+                      onChange={e => setEmailSettings(s => ({ ...s, smtp_port: parseInt(e.target.value) || 587 }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="587" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Username / Email</label>
+                    <input type="text" value={emailSettings.smtp_user}
+                      onChange={e => setEmailSettings(s => ({ ...s, smtp_user: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="alerts@yourcompany.com" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Password / App Password</label>
+                    <input type="password" value={emailSettings.smtp_password}
+                      onChange={e => setEmailSettings(s => ({ ...s, smtp_password: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Leave blank to keep existing" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">From Name</label>
+                    <input type="text" value={emailSettings.smtp_from_name}
+                      onChange={e => setEmailSettings(s => ({ ...s, smtp_from_name: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="SeceoKnight DLP" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">From Email</label>
+                    <input type="email" value={emailSettings.smtp_from_email}
+                      onChange={e => setEmailSettings(s => ({ ...s, smtp_from_email: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="noreply@yourcompany.com" />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 mt-4">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" checked={emailSettings.smtp_tls}
+                      onChange={e => setEmailSettings(s => ({ ...s, smtp_tls: e.target.checked }))}
+                      className="rounded" />
+                    <span className="text-sm text-gray-700">Use STARTTLS</span>
+                  </label>
+                  <span className="text-xs text-gray-400">(recommended for port 587)</span>
+                </div>
+              </div>
+
+              {/* ── Alert Recipients ── */}
+              <div className="card">
+                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
+                  <div className="p-2.5 bg-orange-50 rounded-xl border border-orange-100">
+                    <AlertCircle className="h-5 w-5 text-orange-600" />
+                  </div>
+                  <div>
+                    <h2 className="font-semibold text-gray-900">Alert Recipients</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">Who receives automatic violation alerts</p>
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Minimum Severity to Trigger Email</label>
+                  <select value={emailSettings.min_severity}
+                    onChange={e => setEmailSettings(s => ({ ...s, min_severity: e.target.value }))}
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                    <option value="critical">Critical only</option>
+                    <option value="high">High and above</option>
+                    <option value="medium">Medium and above</option>
+                    <option value="low">All (Low and above)</option>
+                  </select>
+                </div>
+
+                <div className="flex gap-2 mb-3">
+                  <input type="email" value={newRecipient}
+                    onChange={e => setNewRecipient(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addRecipient() }}}
+                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="admin@yourcompany.com" />
+                  <button onClick={addRecipient}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors">
+                    <Plus className="h-4 w-4" /> Add
+                  </button>
+                </div>
+
+                {emailSettings.alert_recipients.length === 0 ? (
+                  <p className="text-sm text-gray-400 py-3">No recipients added. Emails will not be sent.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {emailSettings.alert_recipients.map(r => (
+                      <span key={r} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-800 text-xs font-medium rounded-full">
+                        {r}
+                        <button onClick={() => removeRecipient(r)} className="text-blue-400 hover:text-blue-700">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* ── Save + Test ── */}
+              <div className="card">
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <button onClick={handleSaveEmailSettings} disabled={emailSettingsSaving}
+                    className="flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 disabled:opacity-60 transition-colors">
+                    {emailSettingsSaving
+                      ? <><div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
+                      : <><CheckCircle2 className="h-4 w-4" /> Save Settings</>}
+                  </button>
+
+                  <div className="flex gap-2 flex-1">
+                    <input type="email" value={testEmailAddress}
+                      onChange={e => setTestEmailAddress(e.target.value)}
+                      className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      placeholder="Send test email to…" />
+                    <button onClick={handleTestEmail} disabled={testEmailSending || !testEmailAddress}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-gray-700 text-white text-sm font-medium rounded-lg hover:bg-gray-800 disabled:opacity-50 transition-colors shrink-0">
+                      {testEmailSending
+                        ? <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        : <Send className="h-4 w-4" />}
+                      Test
+                    </button>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-400 mt-3">
+                  Save settings before sending a test. For Gmail, use an App Password (not your login password).
+                </p>
               </div>
             </div>
           )}
