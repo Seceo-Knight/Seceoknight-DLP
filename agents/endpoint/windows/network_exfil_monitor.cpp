@@ -1290,16 +1290,24 @@ public:
                 uiaGuard(uia, [](IUIAutomation* p){ if (p) p->Release(); });
 
             std::string captured;
+            // Read immediately — dialog may already have a filename typed
+            {
+                std::string fn = FindFileNameFromDialog(uia, senderCopy);
+                if (!fn.empty()) captured = fn;
+            }
             for (int i = 0; i < 120; ++i) {     // 120 * 500ms = 60s
                 if (g_stopRequested.load()) return;
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-                // Dialog closed?
+                // Read filename FIRST — must happen before offscreen/closed check
+                // because the element becomes invalid the moment the dialog closes.
+                std::string fn = FindFileNameFromDialog(uia, senderCopy);
+                if (!fn.empty()) captured = fn;
+
+                // Now check if dialog closed
                 BOOL offscreen = FALSE;
                 HRESULT hr = senderCopy->get_CurrentIsOffscreen(&offscreen);
                 if (FAILED(hr)) break;  // window invalid -> closed
-                std::string fn = FindFileNameFromDialog(uia, senderCopy);
-                if (!fn.empty()) captured = fn;
                 if (offscreen) break;
             }
 
