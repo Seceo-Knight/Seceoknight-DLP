@@ -1163,35 +1163,52 @@ static bool LooksLikeFilename(const std::string& s) {
 }
 
 // Win32 fallback: walk ALL child windows looking for any control with text
-// that looks like a filename. Does NOT filter by class — Chrome's file dialog
-// nests the Edit inside ComboBoxEx32->ComboBox->Edit on some Windows versions,
-// and the class name can differ. We scan everything and log what we find so
-// problems are visible in the agent log.
+// that looks like a filename.  Two-tier priority:
+//   1. "Edit" class controls  — the actual filename text box; stop immediately
+//   2. Any other control      — store as fallback (e.g. SysListView32 items)
+// logChildren controls verbose per-poll debug output (only needed on first scan).
 struct EditControlFinder {
-    std::string result;
+    std::string editResult;   // text from an Edit-class control (highest priority)
+    std::string anyResult;    // first filename-like text from any other control
+    bool        logChildren = false;
+
     static BOOL CALLBACK Callback(HWND hwnd, LPARAM lp) {
         auto* self = reinterpret_cast<EditControlFinder*>(lp);
+
         wchar_t text[32768] = {};
         int len = GetWindowTextW(hwnd, text, 32768);
-        if (len <= 0) return TRUE;  // no text — skip
+        if (len <= 0) return TRUE;  // empty control — keep scanning
 
         char buf[32768 * 3] = {};
         WideCharToMultiByte(CP_UTF8, 0, text, -1, buf, sizeof(buf), nullptr, nullptr);
         std::string s = buf;
 
-        // Log every child with text so we can diagnose what's in the dialog
         wchar_t cls[64] = {};
         GetClassNameW(hwnd, cls, 64);
         char clsBuf[128] = {};
         WideCharToMultiByte(CP_UTF8, 0, cls, -1, clsBuf, sizeof(clsBuf), nullptr, nullptr);
-        std::string preview = s.size() > 60 ? s.substr(0, 60) + "..." : s;
-        LogDbg("dialog_child class=" + std::string(clsBuf) + " text=[" + preview + "]");
+        std::string clsStr = clsBuf;
+
+        if (self->logChildren) {
+            std::string preview = s.size() > 60 ? s.substr(0, 60) + "..." : s;
+            LogDbg("dialog_child class=" + clsStr + " text=[" + preview + "]");
+        }
 
         if (LooksLikeFilename(s)) {
-            self->result = s;
-            return FALSE;   // stop enumeration — take first match
+            if (clsStr == "Edit") {
+                self->editResult = s;
+                return FALSE;   // found the filename input field — stop
+            }
+            if (self->anyResult.empty()) {
+                self->anyResult = s;  // keep scanning for a better Edit match
+            }
         }
         return TRUE;
+    }
+
+    // Return Edit-class result first; fall back to any filename-like text
+    std::string best() const {
+        return editResult.empty() ? anyResult : editResult;
     }
 };
 
@@ -1247,9 +1264,10 @@ std::string FindFileNameFromDialog(IUIAutomation* uia, IUIAutomationElement* roo
     root->get_CurrentNativeWindowHandle(reinterpret_cast<UIA_HWND*>(&nativeHwnd));
     if (nativeHwnd) {
         EditControlFinder finder;
+        finder.logChildren = false;
         EnumChildWindows(nativeHwnd, EditControlFinder::Callback,
                          reinterpret_cast<LPARAM>(&finder));
-        if (!finder.result.empty()) return finder.result;
+        if (!finder.best().empty()) return finder.best();
     }
 
     return result;
@@ -1348,41 +1366,49 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
         return el;
     };
 
-    // Win32 fallback: walk child windows for filename text
-    auto tryWin32 = [&]() -> std::string {
+    // Win32 scan: walk child windows for filename text.
+    // log=true on first call to produce debug output; silent on polling iterations.
+    auto tryWin32 = [&](bool log = false) -> std::string {
         if (!dialogHwnd || !IsWindow(dialogHwnd)) return {};
         EditControlFinder finder;
+        finder.logChildren = log;
         EnumChildWindows(dialogHwnd, EditControlFinder::Callback,
                          reinterpret_cast<LPARAM>(&finder));
-        return finder.result;
+        return finder.best();
     };
 
     std::string captured;
 
-    // Try immediately (dialog may be pre-populated, e.g. drag-drop)
+    // One-time UIA attempt (good for pre-populated drag-drop dialogs)
     {
         IUIAutomationElement* el = getEl();
         std::string fn = FindFileNameFromDialog(uia, el);
         if (el) el->Release();
-        if (fn.empty()) fn = tryWin32();
         if (!fn.empty()) captured = fn;
+        // Win32 initial scan with logging so we can see what controls exist
+        if (captured.empty()) captured = tryWin32(/*log=*/true);
     }
 
-    // Poll every 50ms for up to 60s
-    for (int i = 0; i < 1200 && !g_stopRequested.load(); ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // Fast Win32 polling: 10ms intervals, no UIA overhead.
+    // uia->ElementFromHandle() takes ~450ms/call — keeping it in the loop made
+    // the effective poll rate ~500ms, causing us to miss fast selections.
+    //
+    // Key: we check dialogValid vs dialogVisible separately.  When the user
+    // clicks "Open", the dialog hides (WS_VISIBLE cleared) before the HWND is
+    // destroyed — so we do one final scan while the HWND is still valid.
+    for (int i = 0; i < 6000 && !g_stopRequested.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-        bool dialogGone = !dialogHwnd ||
-                          !IsWindow(dialogHwnd) ||
-                          !IsWindowVisible(dialogHwnd);
+        bool dialogValid   = dialogHwnd && IsWindow(dialogHwnd);
+        bool dialogVisible = dialogValid && IsWindowVisible(dialogHwnd);
 
-        IUIAutomationElement* el = getEl();
-        std::string fn = FindFileNameFromDialog(uia, el);
-        if (el) el->Release();
-        if (fn.empty()) fn = tryWin32();
-        if (!fn.empty()) captured = fn;
+        // Scan whenever the HWND is valid (even invisible = dialog just closed)
+        if (dialogValid) {
+            std::string fn = tryWin32(/*log=*/false);
+            if (!fn.empty()) captured = fn;
+        }
 
-        if (dialogGone) break;
+        if (!dialogValid || !dialogVisible) break;
     }
 
     if (uia) uia->Release();
@@ -1453,16 +1479,24 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
     f.matchedRule         = cls.matchedRule;
     f.labels              = cls.labels;
 
+    // Always emit — server-side policy decides whether to alert.
+    // Keeping browser events purely local (only for confidential files) means
+    // the dashboard policy "browser_upload_monitoring" never fires on test files.
     if (sensitive) {
         f.action   = "ALERT";
         f.severity = (catLower == "restricted") ? "critical" : "high";
         f.reason   = "Sensitive file selected for upload in " + browserExe +
                      " (" + cls.category + "). Alert only - not blocked.";
         LogWarn("POLICY_DECISION browser decision=ALERT category=" + cls.category);
-        EmitEvent(f);
-    } else if (!cls.category.empty()) {
-        LogDbg("Browser file selection non-sensitive; no event emitted");
+    } else {
+        f.action   = "ALLOW";
+        f.severity = "low";
+        f.reason   = "Browser file selection detected: " + browserExe +
+                     (cls.category.empty() ? "" : " (" + cls.category + ")");
+        LogInfo("POLICY_DECISION browser decision=ALLOW category=" +
+                (cls.category.empty() ? "none" : cls.category));
     }
+    EmitEvent(f);
 }
 
 void BrowserDetectorThread() {

@@ -260,6 +260,7 @@ class DatabasePolicyEvaluator:
             "source": ["source", "event.source"],
             "connection_id": ["connection_id", "metadata.connection_id"],
             "folder_id": ["folder_id", "metadata.folder_id"],
+            "channel": ["channel", "event.channel"],
             # Classification fields
             "classification_level": ["classification_metadata.classification_level", "classification_level"],
             "confidence_score": ["classification_metadata.confidence_score", "confidence_score"],
