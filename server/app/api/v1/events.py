@@ -645,6 +645,11 @@ def _build_event_title(event: EventCreate, processed_event: Dict[str, Any]) -> s
     elif "file" in event_type.lower():
         action = "Blocked" if blocked else "Modified"
         return f"File {action} - {file_name}"
+    elif event_type.lower() == "network_exfil" and "browser" in event_subtype.lower():
+        if classification and confidence > 0:
+            return f"Browser Upload Detected - {file_name} ({classification} - {int(confidence * 100)}%)"
+        else:
+            return f"Browser Upload Detected - {file_name}"
     else:
         return f"{event_type.title()} Event - {file_name}"
 

@@ -221,10 +221,16 @@ class DatabasePolicyEvaluator:
                 candidate = str(event_value)
                 return any(_prefix_match(candidate, str(prefix)) for prefix in prefixes)
             if operator == "in":
-                options = value if isinstance(value, list) else [value]
+                if isinstance(value, list):
+                    options = value
+                elif isinstance(value, str) and "," in value:
+                    # Support comma-separated strings like "Confidential,Restricted"
+                    options = [v.strip() for v in value.split(",") if v.strip()]
+                else:
+                    options = [value]
                 if isinstance(event_value, list):
-                    return any(item in options for item in event_value)
-                return str(event_value) in [str(opt) for opt in options]
+                    return any(str(item).lower() in [str(o).lower() for o in options] for item in event_value)
+                return str(event_value).lower() in [str(opt).lower() for opt in options]
             if operator == "equals":
                 return str(event_value).lower() == str(value).lower()
             if operator == "contains":

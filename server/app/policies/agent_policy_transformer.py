@@ -21,6 +21,8 @@ POLICY_PLATFORM_SUPPORT: Dict[str, List[str]] = {
     "usb_file_transfer_monitoring": ["windows"],
     "google_drive_local_monitoring": ["windows"],
     "classification_aware": ["windows", "linux"],  # Content-classification-driven policies
+    "classification_aware_policy": ["windows", "linux"],
+    "browser_upload_monitoring": ["windows"],       # Browser file-dialog detection
 }
 
 POLICY_CAPABILITY_MAP: Dict[str, str] = {
@@ -31,6 +33,8 @@ POLICY_CAPABILITY_MAP: Dict[str, str] = {
     "usb_file_transfer_monitoring": "usb_monitoring",
     "google_drive_local_monitoring": "file_monitoring",
     "classification_aware": "clipboard_monitoring",  # Enforced via clipboard + file paths
+    "classification_aware_policy": "clipboard_monitoring",
+    "browser_upload_monitoring": "clipboard_monitoring",  # Shares clipboard capability flag
 }
 
 

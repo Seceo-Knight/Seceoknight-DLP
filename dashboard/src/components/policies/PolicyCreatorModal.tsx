@@ -241,7 +241,7 @@ export default function PolicyCreatorModal({
             match: 'all',
             rules: [
               { field: 'event_subtype', operator: 'equals', value: 'browser_file_selection' },
-              { field: 'classification_level', operator: 'in', value: 'Confidential,Restricted' },
+              { field: 'classification_level', operator: 'in', value: ['Confidential', 'Restricted'] },
             ],
           },
           actions: { alert: { severity: 'high' } },
