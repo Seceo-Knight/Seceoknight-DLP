@@ -1152,16 +1152,54 @@ bool IsBrowserExe(const std::string& exeLower) {
     return browsers.count(exeLower) > 0;
 }
 
-// Walk up the UIA subtree looking for the Edit control that contains the
-// currently-typed file name. Depth-limited to avoid runaway traversal.
+// Helper: does a string look like a filename/path (not a dialog label)?
+static bool LooksLikeFilename(const std::string& s) {
+    if (s.empty()) return false;
+    if (s.find("File name") != std::string::npos) return false;
+    if (s.find("file name") != std::string::npos) return false;
+    return s.find('\\') != std::string::npos ||
+           s.find('/')  != std::string::npos ||
+           s.find('.')  != std::string::npos;
+}
+
+// Win32 fallback: walk child windows looking for an Edit control with text.
+// Chrome's file-dialog Edit control often doesn't expose its value via the
+// UIA ValuePattern, but GetWindowTextW works reliably.
+struct EditControlFinder {
+    std::string result;
+    static BOOL CALLBACK Callback(HWND hwnd, LPARAM lp) {
+        auto* self = reinterpret_cast<EditControlFinder*>(lp);
+        wchar_t cls[64] = {};
+        GetClassNameW(hwnd, cls, 64);
+        if (wcscmp(cls, L"Edit") == 0) {
+            wchar_t text[32768] = {};
+            if (GetWindowTextW(hwnd, text, 32768) > 0) {
+                char buf[32768 * 3] = {};
+                WideCharToMultiByte(CP_UTF8, 0, text, -1, buf, sizeof(buf),
+                                    nullptr, nullptr);
+                std::string s = buf;
+                if (LooksLikeFilename(s)) {
+                    self->result = s;
+                    return FALSE;   // stop enumeration
+                }
+            }
+        }
+        return TRUE;
+    }
+};
+
+// Walk the UIA subtree (and fall back to Win32) looking for the file name
+// the user has typed / navigated to in the browser's file-upload dialog.
 std::string FindFileNameFromDialog(IUIAutomation* uia, IUIAutomationElement* root) {
     if (!uia || !root) return {};
+
+    // --- Approach 1: UIA ValuePattern on Edit controls ---
+    std::string result;
     IUIAutomationCondition* cond = nullptr;
     VARIANT v; VariantInit(&v);
     v.vt = VT_I4; v.lVal = UIA_EditControlTypeId;
     uia->CreatePropertyCondition(UIA_ControlTypePropertyId, v, &cond);
 
-    std::string result;
     if (cond) {
         IUIAutomationElementArray* arr = nullptr;
         root->FindAll(TreeScope_Descendants, cond, &arr);
@@ -1171,34 +1209,19 @@ std::string FindFileNameFromDialog(IUIAutomation* uia, IUIAutomationElement* roo
                 IUIAutomationElement* el = nullptr;
                 arr->GetElement(i, &el);
                 if (!el) continue;
-                // Always read the Value pattern first — get_CurrentName() returns
-                // the accessibility label (e.g. "File name:"), not the content.
-                {
-                    IUnknown* pat = nullptr;
-                    if (SUCCEEDED(el->GetCurrentPattern(UIA_ValuePatternId, &pat)) && pat) {
-                        IUIAutomationValuePattern* vp = nullptr;
-                        pat->QueryInterface(IID_IUIAutomationValuePattern,
-                                            (void**)&vp);
-                        pat->Release();
-                        if (vp) {
-                            BSTR val = nullptr;
-                            if (SUCCEEDED(vp->get_CurrentValue(&val)) && val) {
-                                std::string s = WideToUtf8(val);
-                                SysFreeString(val);
-                                // Accept if it looks like a filename/path
-                                // (has a separator or extension dot) and is
-                                // not a dialog label like "File name:".
-                                if (!s.empty() &&
-                                    (s.find('\\') != std::string::npos ||
-                                     s.find('/') != std::string::npos  ||
-                                     s.find('.') != std::string::npos) &&
-                                    s.find("File name") == std::string::npos &&
-                                    s.find("file name") == std::string::npos) {
-                                    result = s;
-                                }
-                            }
-                            vp->Release();
+                IUnknown* pat = nullptr;
+                if (SUCCEEDED(el->GetCurrentPattern(UIA_ValuePatternId, &pat)) && pat) {
+                    IUIAutomationValuePattern* vp = nullptr;
+                    pat->QueryInterface(IID_IUIAutomationValuePattern, (void**)&vp);
+                    pat->Release();
+                    if (vp) {
+                        BSTR val = nullptr;
+                        if (SUCCEEDED(vp->get_CurrentValue(&val)) && val) {
+                            std::string s = WideToUtf8(val);
+                            SysFreeString(val);
+                            if (LooksLikeFilename(s)) result = s;
                         }
+                        vp->Release();
                     }
                 }
                 el->Release();
@@ -1207,6 +1230,21 @@ std::string FindFileNameFromDialog(IUIAutomation* uia, IUIAutomationElement* roo
         }
         cond->Release();
     }
+
+    if (!result.empty()) return result;
+
+    // --- Approach 2: Win32 GetWindowText fallback ---
+    // UIA ValuePattern returns empty for Chrome's native file dialog.
+    // GetWindowTextW on the "Edit" child window works reliably.
+    HWND nativeHwnd = nullptr;
+    root->get_CurrentNativeWindowHandle(reinterpret_cast<UIA_HWND*>(&nativeHwnd));
+    if (nativeHwnd) {
+        EditControlFinder finder;
+        EnumChildWindows(nativeHwnd, EditControlFinder::Callback,
+                         reinterpret_cast<LPARAM>(&finder));
+        if (!finder.result.empty()) return finder.result;
+    }
+
     return result;
 }
 
