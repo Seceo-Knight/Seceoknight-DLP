@@ -47,6 +47,41 @@ type Policy = {
   updated_at?: string
 }
 
+const POLICY_TYPE_DEFAULTS: Record<string, { conditions: PolicyCondition[]; actions: { type: string; severity?: string }[] }> = {
+  usb_file_transfer_monitoring: {
+    conditions: [
+      { field: 'classification_level', operator: 'in', value: 'Confidential,Restricted' },
+      { field: 'destination_type', operator: 'equals', value: 'removable_drive' },
+    ],
+    actions: [{ type: 'block' }, { type: 'alert', severity: 'high' }],
+  },
+  clipboard_monitoring: {
+    conditions: [
+      { field: 'classification_level', operator: 'in', value: 'Confidential,Restricted' },
+    ],
+    actions: [{ type: 'alert', severity: 'high' }],
+  },
+  file_system_monitoring: {
+    conditions: [
+      { field: 'classification_level', operator: 'in', value: 'Confidential,Restricted' },
+    ],
+    actions: [{ type: 'alert', severity: 'high' }],
+  },
+  usb_device_monitoring: {
+    conditions: [
+      { field: 'destination_type', operator: 'equals', value: 'removable_drive' },
+    ],
+    actions: [{ type: 'block' }, { type: 'alert', severity: 'high' }],
+  },
+  browser_upload_monitoring: {
+    conditions: [
+      { field: 'event_subtype', operator: 'equals', value: 'browser_file_selection' },
+      { field: 'classification_level', operator: 'in', value: 'Confidential,Restricted' },
+    ],
+    actions: [{ type: 'alert', severity: 'high' }],
+  },
+}
+
 function CreatePolicyModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -55,16 +90,23 @@ function CreatePolicyModal({ onClose, onCreated }: { onClose: () => void; onCrea
   const [priority, setPriority] = useState(100)
 
   // Conditions
-  const [conditions, setConditions] = useState<PolicyCondition[]>([
-    { field: 'classification_level', operator: 'in', value: 'Confidential,Restricted' },
-    { field: 'destination_type', operator: 'equals', value: 'removable_drive' },
-  ])
+  const [conditions, setConditions] = useState<PolicyCondition[]>(
+    POLICY_TYPE_DEFAULTS['usb_file_transfer_monitoring'].conditions
+  )
 
   // Actions
-  const [actions, setActions] = useState<{ type: string; severity?: string }[]>([
-    { type: 'block' },
-    { type: 'alert', severity: 'high' },
-  ])
+  const [actions, setActions] = useState<{ type: string; severity?: string }[]>(
+    POLICY_TYPE_DEFAULTS['usb_file_transfer_monitoring'].actions
+  )
+
+  const handleTypeChange = (type: string) => {
+    setPolicyType(type)
+    const defaults = POLICY_TYPE_DEFAULTS[type]
+    if (defaults) {
+      setConditions([...defaults.conditions])
+      setActions([...defaults.actions])
+    }
+  }
 
   const [submitting, setSubmitting] = useState(false)
 
@@ -155,12 +197,13 @@ function CreatePolicyModal({ onClose, onCreated }: { onClose: () => void; onCrea
           <div className="grid grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
-              <select value={policyType} onChange={e => setPolicyType(e.target.value)}
+              <select value={policyType} onChange={e => handleTypeChange(e.target.value)}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
                 <option value="usb_file_transfer_monitoring">USB File Transfer</option>
-                <option value="clipboard_monitoring">Clipboard</option>
+                <option value="clipboard_monitoring">Clipboard Monitoring</option>
                 <option value="file_system_monitoring">File System</option>
                 <option value="usb_device_monitoring">USB Device</option>
+                <option value="browser_upload_monitoring">Browser Upload</option>
               </select>
             </div>
             <div>
