@@ -1162,27 +1162,34 @@ static bool LooksLikeFilename(const std::string& s) {
            s.find('.')  != std::string::npos;
 }
 
-// Win32 fallback: walk child windows looking for an Edit control with text.
-// Chrome's file-dialog Edit control often doesn't expose its value via the
-// UIA ValuePattern, but GetWindowTextW works reliably.
+// Win32 fallback: walk ALL child windows looking for any control with text
+// that looks like a filename. Does NOT filter by class — Chrome's file dialog
+// nests the Edit inside ComboBoxEx32->ComboBox->Edit on some Windows versions,
+// and the class name can differ. We scan everything and log what we find so
+// problems are visible in the agent log.
 struct EditControlFinder {
     std::string result;
     static BOOL CALLBACK Callback(HWND hwnd, LPARAM lp) {
         auto* self = reinterpret_cast<EditControlFinder*>(lp);
+        wchar_t text[32768] = {};
+        int len = GetWindowTextW(hwnd, text, 32768);
+        if (len <= 0) return TRUE;  // no text — skip
+
+        char buf[32768 * 3] = {};
+        WideCharToMultiByte(CP_UTF8, 0, text, -1, buf, sizeof(buf), nullptr, nullptr);
+        std::string s = buf;
+
+        // Log every child with text so we can diagnose what's in the dialog
         wchar_t cls[64] = {};
         GetClassNameW(hwnd, cls, 64);
-        if (wcscmp(cls, L"Edit") == 0) {
-            wchar_t text[32768] = {};
-            if (GetWindowTextW(hwnd, text, 32768) > 0) {
-                char buf[32768 * 3] = {};
-                WideCharToMultiByte(CP_UTF8, 0, text, -1, buf, sizeof(buf),
-                                    nullptr, nullptr);
-                std::string s = buf;
-                if (LooksLikeFilename(s)) {
-                    self->result = s;
-                    return FALSE;   // stop enumeration
-                }
-            }
+        char clsBuf[128] = {};
+        WideCharToMultiByte(CP_UTF8, 0, cls, -1, clsBuf, sizeof(clsBuf), nullptr, nullptr);
+        std::string preview = s.size() > 60 ? s.substr(0, 60) + "..." : s;
+        LogDbg("dialog_child class=" + std::string(clsBuf) + " text=[" + preview + "]");
+
+        if (LooksLikeFilename(s)) {
+            self->result = s;
+            return FALSE;   // stop enumeration — take first match
         }
         return TRUE;
     }
@@ -1315,11 +1322,18 @@ public:
         // Poll the dialog for up to 60 seconds looking for a filename and
         // dialog-close signal. Detached thread so we don't block UIA.
         IUIAutomation* uia = m_uia;
+        // Cache the HWND NOW while the element is valid — the UIA element
+        // becomes unreliable once the dialog starts closing, but the HWND
+        // stays valid for Win32 calls until the window is fully destroyed.
+        HWND dialogHwnd = nullptr;
+        sender->get_CurrentNativeWindowHandle(
+            reinterpret_cast<UIA_HWND*>(&dialogHwnd));
+
         if (uia) uia->AddRef();
         IUIAutomationElement* senderCopy = sender;
         senderCopy->AddRef();
 
-        std::thread([uia, senderCopy, exe, pid]() {
+        std::thread([uia, senderCopy, exe, pid, dialogHwnd]() {
             std::unique_ptr<IUIAutomationElement,
                             void(*)(IUIAutomationElement*)>
                 elGuard(senderCopy, [](IUIAutomationElement* p){ if (p) p->Release(); });
@@ -1327,26 +1341,38 @@ public:
                             void(*)(IUIAutomation*)>
                 uiaGuard(uia, [](IUIAutomation* p){ if (p) p->Release(); });
 
+            // Helper: try Win32 GetWindowText on all Edit children of the dialog
+            auto tryWin32 = [&]() -> std::string {
+                if (!dialogHwnd || !IsWindow(dialogHwnd)) return {};
+                EditControlFinder finder;
+                EnumChildWindows(dialogHwnd, EditControlFinder::Callback,
+                                 reinterpret_cast<LPARAM>(&finder));
+                return finder.result;
+            };
+
             std::string captured;
-            // Read immediately — dialog may already have a filename typed
+            // Try immediately (dialog may already have a filename, e.g. drag-drop)
             {
                 std::string fn = FindFileNameFromDialog(uia, senderCopy);
+                if (fn.empty()) fn = tryWin32();
                 if (!fn.empty()) captured = fn;
             }
-            for (int i = 0; i < 120; ++i) {     // 120 * 500ms = 60s
+            // Poll every 50ms for up to 60s (fast poll catches brief filename window)
+            for (int i = 0; i < 1200; ++i) {
                 if (g_stopRequested.load()) return;
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-                // Read filename FIRST — must happen before offscreen/closed check
-                // because the element becomes invalid the moment the dialog closes.
+                // Check if dialog is gone via Win32 (more reliable than UIA)
+                bool dialogGone = !dialogHwnd ||
+                                  !IsWindow(dialogHwnd) ||
+                                  !IsWindowVisible(dialogHwnd);
+
+                // Try both approaches before deciding to stop
                 std::string fn = FindFileNameFromDialog(uia, senderCopy);
+                if (fn.empty()) fn = tryWin32();
                 if (!fn.empty()) captured = fn;
 
-                // Now check if dialog closed
-                BOOL offscreen = FALSE;
-                HRESULT hr = senderCopy->get_CurrentIsOffscreen(&offscreen);
-                if (FAILED(hr)) break;  // window invalid -> closed
-                if (offscreen) break;
+                if (dialogGone) break;
             }
 
             if (captured.empty()) return;
