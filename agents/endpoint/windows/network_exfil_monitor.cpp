@@ -1171,23 +1171,9 @@ std::string FindFileNameFromDialog(IUIAutomation* uia, IUIAutomationElement* roo
                 IUIAutomationElement* el = nullptr;
                 arr->GetElement(i, &el);
                 if (!el) continue;
-                BSTR name = nullptr;
-                if (SUCCEEDED(el->get_CurrentName(&name)) && name) {
-                    std::string n = WideToUtf8(name);
-                    SysFreeString(name);
-                    // Skip empty / generic labels
-                    if (!n.empty()) {
-                        // Pattern heuristic: if it contains a path separator
-                        // or a common file extension, treat as filename.
-                        if (n.find('\\') != std::string::npos ||
-                            n.find(':') != std::string::npos  ||
-                            n.find('.') != std::string::npos) {
-                            result = n;
-                        }
-                    }
-                }
-                // Also try Value pattern (portable form: GetCurrentPattern + QI)
-                if (result.empty()) {
+                // Always read the Value pattern first — get_CurrentName() returns
+                // the accessibility label (e.g. "File name:"), not the content.
+                {
                     IUnknown* pat = nullptr;
                     if (SUCCEEDED(el->GetCurrentPattern(UIA_ValuePatternId, &pat)) && pat) {
                         IUIAutomationValuePattern* vp = nullptr;
@@ -1199,7 +1185,17 @@ std::string FindFileNameFromDialog(IUIAutomation* uia, IUIAutomationElement* roo
                             if (SUCCEEDED(vp->get_CurrentValue(&val)) && val) {
                                 std::string s = WideToUtf8(val);
                                 SysFreeString(val);
-                                if (!s.empty()) result = s;
+                                // Accept if it looks like a filename/path
+                                // (has a separator or extension dot) and is
+                                // not a dialog label like "File name:".
+                                if (!s.empty() &&
+                                    (s.find('\\') != std::string::npos ||
+                                     s.find('/') != std::string::npos  ||
+                                     s.find('.') != std::string::npos) &&
+                                    s.find("File name") == std::string::npos &&
+                                    s.find("file name") == std::string::npos) {
+                                    result = s;
+                                }
                             }
                             vp->Release();
                         }
