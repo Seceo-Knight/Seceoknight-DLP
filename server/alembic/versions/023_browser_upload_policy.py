@@ -69,7 +69,7 @@ def upgrade() -> None:
     conn.execute(
         sa.text("""
             INSERT INTO policies
-                (id, name, description, enabled, priority, type, severity,
+                (id, name, description, status, priority, type, severity,
                  config, conditions, actions, compliance_tags, agent_ids,
                  created_by, created_at, updated_at)
             VALUES
@@ -78,7 +78,7 @@ def upgrade() -> None:
                  'Alerts when any file is selected in a browser file-upload dialog '
                  '(Chrome, Edge, Firefox). Matches on event_subtype=browser_file_selection '
                  'or channel=BROWSER.',
-                 TRUE,
+                 'active',
                  70,
                  'browser_upload_monitoring',
                  'medium',

@@ -311,18 +311,21 @@ async def _seed_default_policies():
             admin_id = admin_row[0]
 
             for policy in policies_data:
+                # Map "enabled" from JSON to the "status" column used in the live schema.
+                enabled = policy.get("enabled", True)
+                status_val = "active" if enabled else "inactive"
                 await session.execute(
                     text(
-                        "INSERT INTO policies (id, name, description, enabled, priority, type, severity, "
+                        "INSERT INTO policies (id, name, description, status, priority, type, severity, "
                         "config, conditions, actions, compliance_tags, agent_ids, created_by, created_at, updated_at) "
-                        "VALUES (gen_random_uuid(), :name, :description, :enabled, :priority, :type, :severity, "
+                        "VALUES (gen_random_uuid(), :name, :description, :status, :priority, :type, :severity, "
                         ":config, :conditions, :actions, :compliance_tags, :agent_ids, :created_by, NOW(), NOW()) "
                         "ON CONFLICT (name) DO NOTHING"
                     ),
                     {
                         "name": policy["name"],
                         "description": policy.get("description"),
-                        "enabled": policy.get("enabled", True),
+                        "status": status_val,
                         "priority": policy.get("priority", 100),
                         "type": policy.get("type"),
                         "severity": policy.get("severity", "medium"),
