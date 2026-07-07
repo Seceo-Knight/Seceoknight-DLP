@@ -1345,6 +1345,53 @@ void CALLBACK BrowserWinEventProc(
     }).detach();
 }
 
+// Reads the most recently opened file from the Windows Shell Open/Save dialog
+// MRU registry key.  Windows writes this entry for BOTH classic (GetOpenFileName)
+// and modern (IFileOpenDialog) pickers, so it works even when Chrome's dialog
+// renders its content in a separate shell process whose Edit controls are invisible
+// to EnumChildWindows.
+//
+// Returns the file path as a UTF-8 string, or empty if unavailable.
+static std::string GetLastOpenedFileFromMRU() {
+    HKEY hKey = nullptr;
+    LONG rc = RegOpenKeyExW(
+        HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer"
+        L"\\ComDlg32\\OpenSavePidlMRU\\*",
+        0, KEY_READ, &hKey);
+    if (rc != ERROR_SUCCESS) return {};
+
+    // MRUListEx is REG_BINARY: array of DWORD indices, terminated by 0xFFFFFFFF.
+    DWORD mruBuf[64] = {};
+    DWORD mruSize = sizeof(mruBuf);
+    rc = RegQueryValueExW(hKey, L"MRUListEx", nullptr, nullptr,
+                          reinterpret_cast<BYTE*>(mruBuf), &mruSize);
+    if (rc != ERROR_SUCCESS || mruSize < sizeof(DWORD) ||
+        mruBuf[0] == 0xFFFFFFFFu) {
+        RegCloseKey(hKey);
+        return {};
+    }
+
+    // mruBuf[0] is the index (0-based name) of the most recent entry.
+    wchar_t valName[16] = {};
+    _snwprintf_s(valName, _TRUNCATE, L"%lu",
+                 static_cast<unsigned long>(mruBuf[0]));
+
+    BYTE pidlBuf[65536] = {};
+    DWORD pidlSize = sizeof(pidlBuf);
+    DWORD type = 0;
+    rc = RegQueryValueExW(hKey, valName, nullptr, &type, pidlBuf, &pidlSize);
+    RegCloseKey(hKey);
+    if (rc != ERROR_SUCCESS || type != REG_BINARY || pidlSize < 4) return {};
+
+    // Convert PIDL → absolute path.
+    auto* pidl = reinterpret_cast<ITEMIDLIST*>(pidlBuf);
+    wchar_t path[MAX_PATH] = {};
+    if (!SHGetPathFromIDListW(pidl, path) || path[0] == L'\0') return {};
+
+    return WideToUtf8(path);
+}
+
 // Polls the file dialog until the user picks a file (or closes it),
 // then classifies content and emits an event.  Runs on a detached thread.
 static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
@@ -1379,6 +1426,12 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
 
     std::string captured;
 
+    // Snapshot the current Shell MRU *before* the user makes a selection.
+    // After dialog close we compare to detect a genuinely new entry.
+    std::string mruBefore = GetLastOpenedFileFromMRU();
+    LogDbg("Shell MRU before dialog: " +
+           (mruBefore.empty() ? "(empty)" : mruBefore));
+
     // One-time UIA attempt (good for pre-populated drag-drop dialogs)
     {
         IUIAutomationElement* el = getEl();
@@ -1408,7 +1461,28 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
             if (!fn.empty()) captured = fn;
         }
 
-        if (!dialogValid || !dialogVisible) break;
+        if (!dialogValid || !dialogVisible) {
+            // Dialog closed or hidden.  If Win32 scan never found the filename
+            // (likely because Chrome renders its file picker content in the
+            // Windows Shell process, invisible to EnumChildWindows), fall back
+            // to the Shell Open/Save MRU registry key.  Windows writes this key
+            // for every selection regardless of which picker implementation is
+            // used, including the modern IFileOpenDialog.
+            if (captured.empty()) {
+                // Give Windows Shell up to 500ms to flush the MRU entry.
+                for (int j = 0; j < 5; ++j) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    std::string mruNow = GetLastOpenedFileFromMRU();
+                    if (!mruNow.empty()) {
+                        LogDbg("Shell MRU after dialog close: " + mruNow +
+                               (mruNow != mruBefore ? " [NEW]" : " [UNCHANGED]"));
+                        captured = mruNow;
+                        break;
+                    }
+                }
+            }
+            break;
+        }
     }
 
     if (uia) uia->Release();

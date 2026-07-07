@@ -125,5 +125,36 @@
         "severity": "high"
       }
     }
+  },
+  {
+    "name": "Detect Browser Upload",
+    "description": "Alerts when any file is selected in a browser file-upload dialog (Chrome, Edge, Firefox). Matches on event_subtype=browser_file_selection or channel=BROWSER.",
+    "enabled": true,
+    "priority": 70,
+    "type": "browser_upload_monitoring",
+    "severity": "medium",
+    "config": {
+      "description": "Monitor browser file uploads and alert on all file selections"
+    },
+    "conditions": {
+      "match": "any",
+      "rules": [
+        {
+          "field": "event_subtype",
+          "operator": "equals",
+          "value": "browser_file_selection"
+        },
+        {
+          "field": "channel",
+          "operator": "equals",
+          "value": "BROWSER"
+        }
+      ]
+    },
+    "actions": {
+      "alert": {
+        "severity": "medium"
+      }
+    }
   }
 ]
