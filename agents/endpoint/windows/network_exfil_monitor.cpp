@@ -1469,15 +1469,27 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
             // for every selection regardless of which picker implementation is
             // used, including the modern IFileOpenDialog.
             if (captured.empty()) {
-                // Give Windows Shell up to 500ms to flush the MRU entry.
-                for (int j = 0; j < 5; ++j) {
+                // Wait for the MRU to show a DIFFERENT entry from the one that
+                // existed before the dialog opened (mruBefore).  Windows Shell
+                // writes the new entry slightly after IFileOpenDialog returns,
+                // so we must not stop on the old value.  Poll up to 1 second.
+                for (int j = 0; j < 10; ++j) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     std::string mruNow = GetLastOpenedFileFromMRU();
-                    if (!mruNow.empty()) {
-                        LogDbg("Shell MRU after dialog close: " + mruNow +
-                               (mruNow != mruBefore ? " [NEW]" : " [UNCHANGED]"));
+                    if (!mruNow.empty() && mruNow != mruBefore) {
+                        LogDbg("Shell MRU new entry [" + std::to_string(j * 100) +
+                               "ms]: " + mruNow);
                         captured = mruNow;
                         break;
+                    }
+                }
+                // Edge-case: user picked the same file again (MRU won't change).
+                // After the full timeout, accept whatever is in the MRU now.
+                if (captured.empty()) {
+                    std::string mruNow = GetLastOpenedFileFromMRU();
+                    if (!mruNow.empty()) {
+                        LogDbg("Shell MRU fallback (same file re-selected): " + mruNow);
+                        captured = mruNow;
                     }
                 }
             }
