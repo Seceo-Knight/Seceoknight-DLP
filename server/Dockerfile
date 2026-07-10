@@ -25,6 +25,11 @@ ENV PIP_DEFAULT_TIMEOUT=120 \
 RUN pip install --no-cache-dir --upgrade pip==24.0 setuptools wheel && \
     pip install --no-cache-dir --constraint constraints.txt -r requirements.txt
 
+# ML Classification dependencies
+COPY requirements-ml.txt .
+RUN pip install --no-cache-dir -r requirements-ml.txt && \
+    python -m spacy download en_core_web_sm
+
 # Verify critical packages are installed correctly
 RUN python -c "import numpy; print(f'NumPy version: {numpy.__version__}')" && \
     python -c "import pandas; print(f'Pandas version: {pandas.__version__}')" && \
