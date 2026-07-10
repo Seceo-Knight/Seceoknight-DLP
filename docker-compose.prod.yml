@@ -232,6 +232,7 @@ services:
       - ./server/logs:/var/log/seceoknight
       - ./quarantine:/app/quarantine
       - reports_data:/app/reports
+      - ml_models:/app/ml/models
     # No host port binding — manager is reachable only via Nginx on :443.
     # Agents connect to https://<your-domain>/api/v1 — not :55000 directly.
     expose:
@@ -357,6 +358,7 @@ services:
     volumes:
       - ./server/logs:/var/log/seceoknight
       - reports_data:/app/reports
+      - ml_models:/app/ml/models
     depends_on:
       postgres:
         condition: service_healthy
@@ -484,4 +486,6 @@ volumes:
     driver: local
   # Shared volume for Let's Encrypt ACME challenge files (certbot webroot method)
   certbot_webroot:
+    driver: local
+  ml_models:
     driver: local
