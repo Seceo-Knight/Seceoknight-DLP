@@ -1,9 +1,18 @@
 """Convert incidents.severity VARCHAR → INTEGER with bounded CHECK.
 
 Brings the DB in line with the pydantic API (int 0–4) and with how events
-already encode severity (integer-ish via string in Event). No existing rows
-today, but the UPDATE step is included to make the migration safe to apply
-in environments where string values were inserted.
+already encode severity (integer-ish via string in Event).
+
+NOTE: migration 004 already converted incidents.severity from VARCHAR to
+INTEGER (see "incidents: severity String→Integer" in 004), and 010 confirms
+this in its own docstring. By the time this migration runs, severity is
+already an INTEGER column (1=low..4=critical), so there is no string-based
+data left to convert here — attempting a CASE-based string→int backfield
+against an already-integer column raises "invalid input syntax for type
+integer" on every fresh install. All that's left to do is (re-)establish
+the bounded CHECK constraint that 010 dropped, this time permitting 0
+(info) alongside the existing 1-4 range so the scale matches events and
+the pydantic API.
 
 Mapping (matches IncidentCreate docstring: "0=info..4=critical"):
     'info' → 0
@@ -26,38 +35,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # 1. Add a new INT column; backfill from the string column.
-    op.add_column(
-        "incidents",
-        sa.Column("severity_int", sa.Integer(), nullable=True),
-    )
-    op.execute(
-        """
-        UPDATE incidents SET severity_int = CASE severity
-            WHEN 'info'     THEN 0
-            WHEN 'low'      THEN 1
-            WHEN 'medium'   THEN 2
-            WHEN 'high'     THEN 3
-            WHEN 'critical' THEN 4
-            ELSE 1
-        END
-        """
-    )
-    # 2. NOT NULL + default 1 (= 'low'; matches pydantic default=2 but the DB
-    #    default is conservative for direct SQL inserts that omit the column).
-    op.alter_column(
-        "incidents",
-        "severity_int",
-        nullable=False,
-        server_default=sa.text("1"),
-    )
-
-    # 3. Drop the old string column and rename.
-    op.drop_column("incidents", "severity")
-    op.alter_column("incidents", "severity_int", new_column_name="severity")
-
-    # 4. Re-create the CHECK with the new int-based rule. Re-uses the
-    #    constraint name ck_incident_severity that was dropped in 010.
     op.create_check_constraint(
         "ck_incident_severity",
         "incidents",
