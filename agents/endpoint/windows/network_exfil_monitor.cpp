@@ -1398,20 +1398,28 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
                                         const std::string& browserExe,
                                         DWORD browserPid)
 {
-    // Join the MTA so we can use g_browserUia from this thread
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    bool comInited = (hr == S_OK || hr == S_FALSE);
-
-    IUIAutomation* uia = g_browserUia;
-    if (uia) uia->AddRef();
-
-    // Get a fresh UIA element from the HWND each poll (stale after navigation)
-    auto getEl = [&]() -> IUIAutomationElement* {
-        if (!uia || !dialogHwnd || !IsWindow(dialogHwnd)) return nullptr;
-        IUIAutomationElement* el = nullptr;
-        uia->ElementFromHandle(dialogHwnd, &el);
-        return el;
-    };
+    // NOTE: this thread intentionally does NOT touch g_browserUia / IUIAutomation.
+    //
+    // g_browserUia is created on BrowserDetectorThread, which also owns the
+    // only message pump in this component (the MsgWaitForMultipleObjects +
+    // PeekMessageW/DispatchMessageW loop needed to receive WinEvent
+    // callbacks). IUIAutomation calls made from ANY OTHER thread — including
+    // this detached per-dialog worker thread — route through COM/RPC in a
+    // way that can block waiting for BrowserDetectorThread's message loop to
+    // pump again. Because that loop only wakes on the next window-related
+    // event, a stuck call here would only unblock once the NEXT browser
+    // upload dialog opened (and sometimes not until it closed too).
+    //
+    // This was confirmed as the cause of a reproducible bug: uploading
+    // file A produced no alert; opening/cancelling a second dialog then
+    // produced the alert for file A; uploading file B then (incorrectly)
+    // re-triggered file A's alert instead of B's; and so on, with every
+    // file's alert permanently lagging one dialog behind. Removing the UIA
+    // call from this thread removes the stall entirely — Win32 child-window
+    // scanning plus the Shell MRU fallback below are sufficient on their
+    // own (this was already true; UIA was a "nice to have" for pre-
+    // populated drag-drop dialogs, not the primary detection path).
+    bool comInited = false;
 
     // Win32 scan: walk child windows for filename text.
     // log=true on first call to produce debug output; silent on polling iterations.
@@ -1432,15 +1440,8 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
     LogDbg("Shell MRU before dialog: " +
            (mruBefore.empty() ? "(empty)" : mruBefore));
 
-    // One-time UIA attempt (good for pre-populated drag-drop dialogs)
-    {
-        IUIAutomationElement* el = getEl();
-        std::string fn = FindFileNameFromDialog(uia, el);
-        if (el) el->Release();
-        if (!fn.empty()) captured = fn;
-        // Win32 initial scan with logging so we can see what controls exist
-        if (captured.empty()) captured = tryWin32(/*log=*/true);
-    }
+    // Initial Win32 scan (logged so we can see what controls exist).
+    captured = tryWin32(/*log=*/true);
 
     // Fast Win32 polling: 10ms intervals, no UIA overhead.
     // uia->ElementFromHandle() takes ~450ms/call — keeping it in the loop made
@@ -1497,7 +1498,6 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
         }
     }
 
-    if (uia) uia->Release();
     if (comInited) CoUninitialize();
 
     if (captured.empty()) return;
