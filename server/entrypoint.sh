@@ -20,6 +20,8 @@ if [ "$#" -gt 0 ]; then
     echo "[entrypoint] Starting: $*"
     exec "$@"
 else
+    echo "[entrypoint] Seeding first admin account (no-op if users already exist)..."
+    python scripts/seed_admin.py || echo "[entrypoint] seed_admin.py failed — continuing anyway (see logs above)."
     echo "[entrypoint] Starting uvicorn..."
     exec uvicorn app.main:app \
         --host 0.0.0.0 \
