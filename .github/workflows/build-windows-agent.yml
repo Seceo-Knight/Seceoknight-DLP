@@ -1,13 +1,16 @@
 name: Build Windows Agent
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'agents/endpoint/windows/agent.cpp'
-      - 'agents/endpoint/windows/**.h'
-      - '.github/workflows/build-windows-agent.yml'
-  workflow_dispatch:
+     push:
+       branches: [ main ]
+       paths:
+         - 'agents/endpoint/windows/agent.cpp'
+         - 'agents/endpoint/windows/network_exfil_monitor.cpp'
+         - 'agents/endpoint/windows/print_monitor.cpp'
+         - 'agents/endpoint/windows/screen_capture_monitor.cpp'
+         - 'agents/endpoint/windows/**.h'
+         - '.github/workflows/build-windows-agent.yml'
+     workflow_dispatch:
 
 permissions:
   contents: write
