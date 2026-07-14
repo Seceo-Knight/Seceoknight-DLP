@@ -401,6 +401,18 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
      int port;
      bool useHttps = false;
 
+     // CRITICAL: hConnect (and hSession) are shared across every thread in
+     // the agent -- heartbeat, browser-dialog handlers, USB monitor, kernel
+     // event forwarding, etc. -- and were being used with ZERO
+     // synchronization and NO explicit timeouts. Concurrent unsynchronized
+     // use of a single WinHTTP connection handle can leave one thread's
+     // request effectively stuck until another thread's request happens to
+     // advance the connection's internal state. This was confirmed as the
+     // cause of browser-upload alerts only appearing once a *second*,
+     // unrelated request (e.g. from opening/cancelling another file dialog)
+     // fired concurrently. All requests are now fully serialized.
+     std::mutex requestMutex;
+
  public:
      HttpClient(const std::string& url) : serverUrl(url) {
          ParseUrl(url);
@@ -410,6 +422,11 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
              WINHTTP_NO_PROXY_BYPASS, 0);
          
          if (hSession) {
+             // Explicit timeouts (ms): resolve, connect, send, receive.
+             // Previously unset, meaning a stalled request could block this
+             // (serialized) queue indefinitely instead of failing fast.
+             WinHttpSetTimeouts(hSession, 10000, 10000, 10000, 15000);
+
              std::wstring whost(host.begin(), host.end());
              hConnect = WinHttpConnect(hSession, whost.c_str(), port, 0);
          }
@@ -421,14 +438,17 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
      }
      
      std::pair<int, std::string> Post(const std::string& path, const std::string& jsonData) {
+         std::lock_guard<std::mutex> lock(requestMutex);
          return SendRequest(L"POST", path, jsonData);
      }
      
      std::pair<int, std::string> Put(const std::string& path, const std::string& jsonData) {
+         std::lock_guard<std::mutex> lock(requestMutex);
          return SendRequest(L"PUT", path, jsonData);
      }
      
      std::pair<int, std::string> Delete(const std::string& path) {
+         std::lock_guard<std::mutex> lock(requestMutex);
          return SendRequest(L"DELETE", path, "");
      }
      
