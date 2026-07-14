@@ -19,6 +19,7 @@ Classification levels (by confidence score):
 from typing import Dict, Any, List, Optional, Tuple, Set
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+import asyncio
 import re
 import math
 import hashlib
@@ -31,8 +32,16 @@ from sqlalchemy import select
 
 from app.models.rule import Rule
 from app.models.data_label import DataLabel
+from app.core.config import settings
+from app.services.ml_classification import get_ml_service
+from app.services.context_analyzer import get_context_analyzer
 
 logger = structlog.get_logger()
+
+# Max time budget for the ML classification pass before falling back to
+# rule-only scoring. Keeps classify_content() latency bounded even when the
+# spaCy/sklearn models are slow to warm up or under load.
+_ML_TIMEOUT_SECONDS = 0.2
 
 # Module-level cache — shared across all engine instances within a worker.
 # Cleared by the /cache/invalidate endpoint.
@@ -143,6 +152,10 @@ class ClassificationResult:
     details: Dict[str, Any]
     entropy_score: float = 0.0
     data_types: List[str] = field(default_factory=list)
+    # Populated only when FEATURE_ML_CLASSIFICATION is on and the ML/context
+    # passes actually ran (None otherwise — fully backward compatible).
+    ml_analysis: Optional[Dict[str, Any]] = None
+    context_analysis: Optional[Dict[str, Any]] = None
 
 
 class ClassificationEngine:
@@ -234,6 +247,7 @@ class ClassificationEngine:
         total_weight = 0.0
         total_matches = 0
         data_types: List[str] = []
+        all_matched_values: List[str] = []
 
         for rule in rules:
             # Context-aware filtering: skip rules that don't apply to this file type
@@ -241,11 +255,13 @@ class ClassificationEngine:
                 if ctx["file_type"].lower() not in [ft.lower() for ft in rule.file_types]:
                     continue
 
-            matches, match_count, validated_count = await self._evaluate_rule_with_validation(
+            matches, match_count, validated_count, matched_values = await self._evaluate_rule_with_validation(
                 rule, eval_content, ctx
             )
 
             if matches and validated_count >= rule.threshold:
+                if len(all_matched_values) < 50:
+                    all_matched_values.extend(matched_values[: 50 - len(all_matched_values)])
                 rule_result = self._build_rule_result(rule, validated_count)
                 matched_rules.append(rule_result)
 
@@ -275,9 +291,38 @@ class ClassificationEngine:
                 if dt not in data_types:
                     data_types.append(dt)
 
+        # Step 6b: ML classification + context (false-positive) analysis.
+        # Gated behind FEATURE_ML_CLASSIFICATION so this is a strict opt-in:
+        # when off (or the ML service isn't ready), behavior is byte-for-byte
+        # identical to the rule-only pipeline below — zero regression risk.
+        ml_result: Optional[Dict[str, Any]] = None
+        context_result: Optional[Dict[str, Any]] = None
+        rule_confidence = min(1.0, total_weight)
+
+        if settings.FEATURE_ML_CLASSIFICATION:
+            try:
+                ml_result = await self._apply_ml_classification(eval_content, metadata=ctx)
+                context_result = self._apply_context_analysis(
+                    eval_content, all_matched_values, rule_confidence, metadata=ctx
+                )
+            except Exception as e:
+                logger.warning("ML/context analysis pass failed, using rules only", error=str(e))
+                ml_result = None
+                context_result = None
+
         # Step 7: Context-aware score adjustment
         context_multiplier = self._compute_context_multiplier(ctx)
-        adjusted_weight = total_weight * context_multiplier
+
+        if ml_result is not None and context_result is not None:
+            base_confidence = self._combine_scores(
+                rule_confidence=rule_confidence,
+                ml_confidence=ml_result["ml_confidence"],
+                context_adjustment=context_result["adjusted_confidence"],
+                is_false_positive=context_result["is_false_positive"],
+            )
+            adjusted_weight = base_confidence * context_multiplier
+        else:
+            adjusted_weight = total_weight * context_multiplier
 
         # Entropy bonus: high entropy content with pattern matches is more suspicious
         entropy_bonus = 0.0
@@ -298,50 +343,172 @@ class ClassificationEngine:
                 "context": ctx,
                 "context_multiplier": context_multiplier,
                 "entropy_score": round(entropy, 4),
-                "method": "multi_technique_correlated",
+                "method": "multi_technique_correlated_ml" if ml_result is not None else "multi_technique_correlated",
                 "correlation": correlation_result.get("signals", []) if correlation_result else [],
             },
             entropy_score=round(entropy, 4),
             data_types=data_types,
+            ml_analysis=ml_result,
+            context_analysis=context_result,
         )
+
+    # ── ML classification + context (false-positive) analysis ──────────────
+    # These three methods bridge classify_content() to app.services.ml_classification
+    # (spaCy NER + TF-IDF/SGD sensitivity classifier) and
+    # app.services.context_analyzer (false-positive/true-positive phrase
+    # scoring). Both services ship fully built but previously had no caller —
+    # see classify_content()'s Step 6b for the gated call site.
+
+    async def _apply_ml_classification(
+        self,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run ML classification on content and return ML signals.
+        Bounded to _ML_TIMEOUT_SECONDS — if the model is slow (cold start,
+        overloaded worker), we fall back to rule-only scoring rather than
+        block the request.
+        """
+        ml_service = get_ml_service()
+
+        try:
+            result = await asyncio.wait_for(
+                ml_service.classify(
+                    content=content,
+                    content_type=(metadata or {}).get("content_type", "text"),
+                    metadata=metadata,
+                ),
+                timeout=_ML_TIMEOUT_SECONDS,
+            )
+            return {
+                "ml_confidence": result.ml_confidence,
+                "ml_label": result.predicted_label,
+                "entities": result.entities_detected,
+                "explanation": result.explanation,
+                "processing_time_ms": result.processing_time_ms,
+            }
+        except asyncio.TimeoutError:
+            logger.debug("ML classification timed out, using rules only",
+                         timeout_s=_ML_TIMEOUT_SECONDS)
+            return {
+                "ml_confidence": 0.0,
+                "ml_label": "public",
+                "entities": [],
+                "explanation": f"ML timeout (>{_ML_TIMEOUT_SECONDS * 1000:.0f}ms), using rules only",
+                "processing_time_ms": _ML_TIMEOUT_SECONDS * 1000,
+            }
+        except Exception as e:
+            logger.warning("ML classification failed, using rules only", error=str(e))
+            return {
+                "ml_confidence": 0.0,
+                "ml_label": "public",
+                "entities": [],
+                "explanation": f"ML error: {str(e)}",
+                "processing_time_ms": 0.0,
+            }
+
+    def _apply_context_analysis(
+        self,
+        content: str,
+        matched_values: List[str],
+        rule_confidence: float,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run context analysis to detect false positives and adjust confidence.
+
+        Returns dict with: adjusted_confidence, is_false_positive, reason,
+        fp_indicators, tp_indicators.
+        """
+        analyzer = get_context_analyzer()
+
+        result = analyzer.analyze(
+            content=content,
+            matched_values=matched_values,
+            metadata=metadata,
+        )
+
+        adjusted = max(0.0, min(1.0, rule_confidence + result.confidence_adjustment))
+
+        return {
+            "adjusted_confidence": adjusted,
+            "is_false_positive": result.is_false_positive,
+            "reason": result.reason,
+            "fp_indicators": result.fp_indicators_found,
+            "tp_indicators": result.tp_indicators_found,
+        }
+
+    def _combine_scores(
+        self,
+        rule_confidence: float,
+        ml_confidence: float,
+        context_adjustment: float,
+        is_false_positive: bool,
+    ) -> float:
+        """
+        Combine rule-based, ML, and context scores into final confidence.
+
+        Weighting:
+        - Rule-based: 50% (proven, deterministic)
+        - ML: 30% (contextual, probabilistic)
+        - Context adjustment: 20% (false positive reduction)
+
+        If context says false positive, hard-cap at 0.25 (still logged but
+        classified as Public/Internal, not blocked).
+        """
+        if is_false_positive:
+            # Don't completely zero it out (audit trail), but prevent blocking
+            return min(0.25, rule_confidence * 0.3)
+
+        combined = (
+            rule_confidence * 0.50 +
+            ml_confidence * 0.30 +
+            context_adjustment * 0.20
+        )
+
+        return max(0.0, min(1.0, combined))
 
     async def _evaluate_rule_with_validation(
         self,
         rule: Rule,
         content: str,
         context: Optional[Dict[str, Any]],
-    ) -> Tuple[bool, int, int]:
+    ) -> Tuple[bool, int, int, List[str]]:
         """
         Evaluate a rule and apply secondary validation (Luhn, Verhoeff).
 
         Returns:
-            (matched: bool, raw_match_count: int, validated_count: int)
+            (matched: bool, raw_match_count: int, validated_count: int, matched_values: List[str])
+            matched_values is capped at 10 entries per rule — it only feeds
+            the context analyzer's false-positive/true-positive window
+            extraction, not billing/audit counts.
         """
         try:
             if rule.type == "regex":
                 return await self._evaluate_regex_with_validation(rule, content)
             elif rule.type == "keyword":
-                matched, count = await self._evaluate_keyword_rule(rule, content)
-                return matched, count, count
+                matched, count, values = await self._evaluate_keyword_rule(rule, content)
+                return matched, count, count, values
             elif rule.type == "dictionary":
-                matched, count = await self._evaluate_dictionary_rule(rule, content)
-                return matched, count, count
+                matched, count, values = await self._evaluate_dictionary_rule(rule, content)
+                return matched, count, count, values
             else:
-                return False, 0, 0
+                return False, 0, 0, []
         except Exception as e:
             logger.error("Rule evaluation failed", rule_name=rule.name, error=str(e))
-            return False, 0, 0
+            return False, 0, 0, []
 
     async def _evaluate_regex_with_validation(
         self, rule: Rule, content: str
-    ) -> Tuple[bool, int, int]:
+    ) -> Tuple[bool, int, int, List[str]]:
         """Evaluate regex rule with secondary validation for known patterns."""
         if not rule.pattern:
-            return False, 0, 0
+            return False, 0, 0, []
 
         pattern = self._get_compiled_regex(rule)
         if pattern is None:
-            return False, 0, 0
+            return False, 0, 0, []
 
         # Limit regex evaluation to prevent ReDoS
         eval_text = content[:self.MAX_REGEX_TIMEOUT_CHARS]
@@ -349,23 +516,30 @@ class ClassificationEngine:
         raw_count = len(raw_matches)
 
         if raw_count == 0:
-            return False, 0, 0
+            return False, 0, 0, []
 
         # Apply secondary validation based on rule category
         category = (rule.category or "").lower()
         labels = [l.upper() for l in (rule.classification_labels or [])]
 
         validated_count = raw_count
+        matched_values: List[str] = [
+            m if isinstance(m, str) else str(m) for m in raw_matches[:10]
+        ]
 
         if "CREDIT_CARD" in labels or "PCI" in labels:
             # Luhn validation — ONLY for credit card rules, not all financial rules
             validated = 0
+            validated_values: List[str] = []
             for match in raw_matches:
                 match_str = match if isinstance(match, str) else str(match)
                 digits_only = re.sub(r'\D', '', match_str)
                 if luhn_check(digits_only):
                     validated += 1
+                    if len(validated_values) < 10:
+                        validated_values.append(match_str)
             validated_count = validated
+            matched_values = validated_values
 
         elif "AADHAAR" in labels:
             # Aadhaar: format match is sufficient for DLP detection.
@@ -382,8 +556,11 @@ class ClassificationEngine:
             non_comment_text = comment_pattern.sub('', eval_text)
             non_comment_matches = pattern.findall(non_comment_text)
             validated_count = len(non_comment_matches)
+            matched_values = [
+                m if isinstance(m, str) else str(m) for m in non_comment_matches[:10]
+            ]
 
-        return validated_count > 0, raw_count, validated_count
+        return validated_count > 0, raw_count, validated_count, matched_values
 
     def _get_compiled_regex(self, rule: Rule) -> Optional[re.Pattern]:
         """Get compiled regex from module-level cache or compile and cache it."""
@@ -404,10 +581,10 @@ class ClassificationEngine:
             logger.error("Invalid regex pattern", rule_name=rule.name, error=str(e))
             return None
 
-    async def _evaluate_keyword_rule(self, rule: Rule, content: str) -> Tuple[bool, int]:
+    async def _evaluate_keyword_rule(self, rule: Rule, content: str) -> Tuple[bool, int, List[str]]:
         """Evaluate keyword matching rule."""
         if not rule.keywords:
-            return False, 0
+            return False, 0, []
 
         if rule.case_sensitive:
             search_content = content
@@ -417,16 +594,19 @@ class ClassificationEngine:
             search_keywords = [kw.lower() for kw in rule.keywords]
 
         match_count = 0
+        matched_keywords: List[str] = []
         for keyword in search_keywords:
             count = search_content.count(keyword)
             match_count += count
+            if count > 0 and len(matched_keywords) < 10:
+                matched_keywords.append(keyword)
 
-        return match_count > 0, match_count
+        return match_count > 0, match_count, matched_keywords
 
-    async def _evaluate_dictionary_rule(self, rule: Rule, content: str) -> Tuple[bool, int]:
+    async def _evaluate_dictionary_rule(self, rule: Rule, content: str) -> Tuple[bool, int, List[str]]:
         """Evaluate dictionary-based rule."""
         if not rule.dictionary_path:
-            return False, 0
+            return False, 0, []
 
         dict_key = f"{rule.id}:{rule.dictionary_path}"
         if dict_key not in _module_cache["dictionary"]:
@@ -435,12 +615,12 @@ class ClassificationEngine:
                 _module_cache["dictionary"][dict_key] = words
             except Exception as e:
                 logger.error("Dictionary load failed", rule_name=rule.name, error=str(e))
-                return False, 0
+                return False, 0, []
 
         dictionary = _module_cache["dictionary"][dict_key]
         content_words = set(re.findall(r'\b\w+\b', content.lower()))
         matched_words = content_words & dictionary
-        return len(matched_words) > 0, len(matched_words)
+        return len(matched_words) > 0, len(matched_words), list(matched_words)[:10]
 
     async def _load_dictionary(self, path: str) -> Set[str]:
         """Load dictionary file into a set of lowercase words."""

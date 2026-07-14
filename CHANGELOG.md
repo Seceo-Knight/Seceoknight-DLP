@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 ML Classification Wiring + Enterprise Audit Correction (July 14, 2026)
+
+### Summary
+
+Verified five previously-questioned capabilities (MFA, ML/NLP classification, OCR, browser upload detection, email DLP) against the actual codebase rather than the stale `ENTERPRISE_AUDIT.md`. Two were already fully built and working (MFA, browser upload detection) but miscategorized as missing in the audit doc. One was fully built but never actually called (ML/NLP classification). Two are genuinely absent (OCR, email content-inspection DLP).
+
+### Fixed
+
+- **ML/NLP classification was dead code.** `app/services/ml_classification.py` (spaCy NER + TF-IDF/SGD sensitivity classifier) and `app/services/context_analyzer.py` (false-positive/true-positive phrase scoring) were fully implemented, `FEATURE_ML_CLASSIFICATION` already existed as a config flag, and the Docker image already installed spaCy (`requirements-ml.txt` + `python -m spacy download en_core_web_sm` in `server/Dockerfile`) — but the only "integration" was `classification_engine_ml_patch.py`, a set of copy-paste-me instructions that had never actually been applied. `ClassificationEngine.classify_content()` never called either service. Wired both in for real: `_apply_ml_classification` (200ms timeout, graceful fallback to rule-only on timeout/error), `_apply_context_analysis`, and `_combine_scores` (50% rule / 30% ML / 20% context, with a false-positive hard-cap) are now real methods called from Step 6b of the classification pipeline, gated behind `FEATURE_ML_CLASSIFICATION` so the rule-only path is unchanged when the flag is off. Retired `classification_engine_ml_patch.py`.
+- Extended `_evaluate_regex_with_validation` / `_evaluate_keyword_rule` / `_evaluate_dictionary_rule` to also surface the actual matched substrings (capped at 10 per rule), so the context analyzer has real text to run its false-positive window analysis on instead of an empty list.
+- Corrected `ENTERPRISE_AUDIT.md`: removed "No MFA" and "No ML/NLP Classification" as gaps (both were already done), reclassified "No Browser Extension" as a narrower "content-level payload inspection" gap (native file-selection detection already existed via `NetworkExfilMonitor::BrowserDetectorThread`), and confirmed OCR and Email DLP (content-inspection, as distinct from the existing SMTP *alert*-notification settings in `email_settings.py`) as the two gaps that are still genuinely open. Overall score revised 6.9/10 → 7.4/10.
+
+### Test coverage
+
+Added `test_ml_classification_wiring.py` (10 tests): `_combine_scores` weighting arithmetic, graceful degradation on ML service exception/timeout, and end-to-end `classify_content()` behavior with the feature flag on and off. All 81 previously-added tests (threat intel, domain RBAC, IP allowlist, retention) still pass — no regressions.
+
+### Known pre-existing issue found (not fixed — separate scope)
+
+`tests/test_detection_classification.py` calls `EventProcessor._classify_content()`, `EventProcessor._redact_content()`, and `EventProcessor.initialize()` — none of which exist on the current `EventProcessor` class (it only has `process_event()`). This test file was already broken before today's changes and is unrelated to the ML wiring fix; flagged for a separate pass if you want it repaired.
+
+---
+
 ## 🚀 Threat Intel, Domain-Scoped RBAC, IP Allowlisting & Log Retention (July 14, 2026)
 
 ### Summary
