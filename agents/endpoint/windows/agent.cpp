@@ -384,13 +384,138 @@ bool IsOcrCandidateExtension(const std::string& ext) {
     return kOcrExtensions.count(lowerExt) > 0;
 }
 
+// ── PDF content extraction (text layer + scanned-page OCR fallback) ────
+//
+// PDFs need different handling than raster images: Tesseract can't read
+// a PDF directly, and many PDFs already have a real embedded text layer
+// (anything exported from Word, a browser, etc.) where OCR would be both
+// slower and less accurate than just reading the text that's already
+// there. So the strategy is:
+//   1. Try pdftotext (poppler-utils) — fast, exact, works for any PDF
+//      with a text layer.
+//   2. If that comes back empty/near-empty, the PDF is almost certainly
+//      a scan or photo with no text layer — rasterize each page to PNG
+//      with pdftoppm (also poppler-utils) and OCR each page with the
+//      same RunTesseractOnFile() used everywhere else.
+//
+// Requires poppler-utils on PATH (pdftotext.exe + pdftoppm.exe) —
+// install-agent.ps1 Step 4 installs it via `choco install poppler`
+// alongside Tesseract. If poppler isn't installed, both helpers fail
+// safely and return "" — the PDF is simply not classified by content
+// (existing behavior), nothing crashes.
+
+// Extracts a PDF's embedded text layer via `pdftotext`. Returns "" if
+// poppler isn't installed, the file isn't a valid PDF, or there's no
+// text layer (i.e. it needs OCR instead — see ExtractPdfContent below).
+std::string ExtractPdfTextLayer(const std::string& pdfPath) {
+    try {
+        std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\Windows\Temp");
+        std::string uniqueTag = std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
+            std::to_string(GetCurrentThreadId());
+        std::string outTxt = tempDir + "\cs_pdf_text_" + uniqueTag + ".txt";
+
+        std::string cmd = "pdftotext "" + pdfPath + "" "" + outTxt + "" 2>nul";
+        int result = system(cmd.c_str());
+
+        std::string text;
+        if (result == 0) {
+            std::ifstream ifs(outTxt);
+            if (ifs.is_open()) {
+                std::stringstream ss;
+                ss << ifs.rdbuf();
+                text = ss.str();
+                ifs.close();
+            }
+        }
+        DeleteFileA(outTxt.c_str());
+        return text;
+    } catch (...) {
+        return "";
+    }
+}
+
+// OCRs a scanned/image-only PDF: rasterizes up to MAX_OCR_PAGES pages to
+// PNG at 150 DPI via `pdftoppm`, then runs RunTesseractOnFile() on each
+// page and concatenates the results. Capped so a 500-page scanned
+// archive can't stall file/USB monitoring for minutes.
+std::string OcrScannedPdf(const std::string& pdfPath) {
+    static const int MAX_OCR_PAGES = 10;
+    try {
+        std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\Windows\Temp");
+        std::string uniqueTag = std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
+            std::to_string(GetCurrentThreadId());
+        std::string pageBase = tempDir + "\cs_pdf_page_" + uniqueTag;
+
+        // 150 DPI is enough for Tesseract to read normal document text
+        // without producing unnecessarily huge page images.
+        std::string cmd = "pdftoppm -png -r 150 -f 1 -l " + std::to_string(MAX_OCR_PAGES) +
+                           " "" + pdfPath + "" "" + pageBase + "" 2>nul";
+        int result = system(cmd.c_str());
+
+        std::string combinedText;
+        if (result == 0) {
+            // pdftoppm zero-pads page numbers once the document has 10+
+            // pages (page-01.png vs page-1.png) — try both forms.
+            for (int page = 1; page <= MAX_OCR_PAGES; ++page) {
+                std::string unpadded = pageBase + "-" + std::to_string(page) + ".png";
+                std::string padded   = pageBase + "-" +
+                    (page < 10 ? "0" + std::to_string(page) : std::to_string(page)) + ".png";
+
+                std::string actualPath;
+                if (fs::exists(unpadded)) actualPath = unpadded;
+                else if (fs::exists(padded)) actualPath = padded;
+                else break; // no more pages produced
+
+                std::string pageText = RunTesseractOnFile(actualPath);
+                if (!pageText.empty()) {
+                    combinedText += pageText + "
+";
+                }
+                DeleteFileA(actualPath.c_str());
+            }
+        }
+        return combinedText;
+    } catch (...) {
+        return "";
+    }
+}
+
+// Entry point for PDF content extraction: tries the fast native-text
+// path first and only falls back to full page-by-page OCR if that finds
+// essentially nothing (a real text layer produces far more than a
+// handful of stray characters; a pure scan/photo returns "" or
+// whitespace-only).
+std::string ExtractPdfContent(const std::string& pdfPath) {
+    std::string text = ExtractPdfTextLayer(pdfPath);
+
+    std::string trimmed;
+    for (char c : text) {
+        if (!std::isspace(static_cast<unsigned char>(c))) trimmed += c;
+    }
+    if (trimmed.size() >= 20) {
+        return text;
+    }
+    return OcrScannedPdf(pdfPath);
+}
+
 // Convenience wrapper for file-based monitors (file-write and USB
-// transfer): OCRs filePath if its extension looks like a raster image,
-// returns "" (no-op) for every other file type so normal text-based
-// classification (ReadFileContent) is completely unaffected.
+// transfer): routes .pdf through ExtractPdfContent (text layer, or OCR
+// fallback for scans), OCRs filePath directly if its extension looks
+// like a raster image, and returns "" (no-op) for every other file type
+// so normal text-based classification (ReadFileContent) is completely
+// unaffected.
 std::string OcrImageFileIfApplicable(const std::string& filePath) {
     std::string ext;
     try { ext = fs::path(filePath).extension().string(); } catch (...) { return ""; }
+
+    std::string lowerExt = ext;
+    std::transform(lowerExt.begin(), lowerExt.end(), lowerExt.begin(), ::tolower);
+    if (lowerExt == ".pdf") {
+        return ExtractPdfContent(filePath);
+    }
+
     if (!IsOcrCandidateExtension(ext)) return "";
     return RunTesseractOnFile(filePath);
 }

@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📄 PDF Content Extraction (Text Layer + Scanned-Page OCR) (July 14, 2026)
+
+### Summary
+
+Extended the same-day file/USB OCR work to PDFs — the highest-value gap, since confidential contracts, HR records, and financial documents are routinely shared as PDFs, and a scanned/photographed PDF page previously had zero content visibility (raw binary bytes fed uselessly into the regex classifier).
+
+### Added
+
+- **`ExtractPdfTextLayer(pdfPath)`** — runs `pdftotext` (poppler-utils) to read a PDF's embedded text layer directly. Fast and exact for the common case: any PDF exported from Word, a browser, an e-signature tool, etc.
+- **`OcrScannedPdf(pdfPath)`** — fallback for PDFs with no usable text layer (scans, photographed documents). Rasterizes up to 10 pages to PNG at 150 DPI via `pdftoppm`, then OCRs each page with the existing `RunTesseractOnFile()` helper and concatenates the results. Page count capped so a large scanned archive can't stall file/USB monitoring.
+- **`ExtractPdfContent(pdfPath)`** — entry point: tries the text-layer path first, falls back to OCR only if that returns fewer than 20 non-whitespace characters (i.e. the PDF is essentially a scan).
+- **`OcrImageFileIfApplicable`** now routes `.pdf` through `ExtractPdfContent` — no changes needed at the file-write or USB-transfer call sites, both already call this function for every monitored file.
+- **`install-agent.ps1`** Step 4 now also installs `poppler` via Chocolatey (mirroring the existing `Install-Tesseract` pattern), alongside the already-auto-installed Tesseract.
+
+### Scope
+
+Clipboard image paste is unchanged — pasting a PDF isn't a `CF_DIB` bitmap operation on Windows, so it wasn't in scope here. File-write and USB-transfer monitoring are the two channels that matter for PDFs (someone saving or exfiltrating a document), and both are covered.
+
+### ⚠️ Not yet verified
+
+Same caveat as the file/USB/clipboard OCR work above: this C++ code has not been compiled or run on a real Windows machine. Test with an actual text-layer PDF, an actual scanned/photographed PDF, and confirm `poppler` installs cleanly via the updated `install-agent.ps1` before shipping to production.
+
+---
+
 ## 🖥️ Extend Agent-Side OCR to File/USB/Clipboard Channels (July 14, 2026)
 
 ### Summary

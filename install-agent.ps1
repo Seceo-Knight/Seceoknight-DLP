@@ -7,8 +7,9 @@
 # What this script does:
 #   1. Validates server connectivity (IP or DNS hostname).
 #   2. Cleans previous installs (scheduled task, service, running process).
-#   3. Installs Chocolatey + Tesseract for the screenshot OCR fallback
-#      (only if missing).
+#   3. Installs Chocolatey + Tesseract + Poppler for OCR (screenshots,
+#      image files, USB-transferred images, clipboard paste, and PDFs —
+#      only if missing).
 #   4. Downloads seceoknight_agent.exe from the repo, verifies its
 #      SHA-256 against the sidecar manifest in the repo, and refuses to
 #      install if the hash doesn't match.
@@ -190,11 +191,16 @@ foreach ($d in @($INSTALL_DIR, "$DATA_DIR\logs", "$DATA_DIR\quarantine", "$DATA_
 Write-ColorOutput "Directories created" -Type "Success"
 Write-Host ""
 
-# Step 4: Install OCR dependencies (Chocolatey + Tesseract)
+# Step 4: Install OCR dependencies (Chocolatey + Tesseract + Poppler)
 # Tesseract is used by the screen-capture classifier as its Stage 4 OCR
 # fallback — it lets the agent read text from a screenshot when window-
-# text extraction doesn't find anything.
-Write-ColorOutput "Step 4: Installing OCR dependencies (Chocolatey + Tesseract)..." -Type "Info"
+# text extraction doesn't find anything. It's also used to OCR image
+# files being written/saved, copied to USB, or pasted from the
+# clipboard. Poppler (pdftotext + pdftoppm) extends that coverage to
+# PDFs: pdftotext reads a PDF's embedded text layer directly when one
+# exists, and pdftoppm rasterizes scanned/photo-only PDF pages so
+# Tesseract can OCR them.
+Write-ColorOutput "Step 4: Installing OCR dependencies (Chocolatey + Tesseract + Poppler)..." -Type "Info"
 
 function Test-CommandExists {
     param([string]$Command)
@@ -270,6 +276,36 @@ function Install-Tesseract {
     }
 }
 
+function Install-Poppler {
+    Write-ColorOutput "  Poppler not found — installing via choco..." -Type "Warning"
+    try {
+        # -y auto-confirms; --no-progress keeps logs clean
+        $proc = Start-Process -FilePath "choco" `
+                              -ArgumentList "install","poppler","-y","--no-progress" `
+                              -Wait -PassThru -NoNewWindow
+        if ($proc.ExitCode -ne 0) {
+            Write-ColorOutput "  choco install poppler exited with code $($proc.ExitCode)" -Type "Warning"
+        }
+
+        # Refresh PATH so `pdftotext`/`pdftoppm` are callable in this session.
+        $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+        $userPath    = [Environment]::GetEnvironmentVariable("Path", "User")
+        $env:Path    = "$machinePath;$userPath"
+
+        if (Test-CommandExists "pdftotext") {
+            Write-ColorOutput "  Poppler installed (pdftotext, pdftoppm available)" -Type "Success"
+            return $true
+        } else {
+            Write-ColorOutput "  Poppler install ran but 'pdftotext' is not on PATH yet" -Type "Warning"
+            Write-ColorOutput "  A reboot or new PowerShell session may be required" -Type "Warning"
+            return $false
+        }
+    } catch {
+        Write-ColorOutput "  Failed to install Poppler: $($_.Exception.Message)" -Type "Error"
+        return $false
+    }
+}
+
 # 4a. Chocolatey
 if (Test-CommandExists "choco") {
     $chocoVer = (& choco --version 2>&1 | Select-Object -First 1)
@@ -294,6 +330,22 @@ if ($chocoOk) {
 } else {
     Write-ColorOutput "  Skipping Tesseract — Chocolatey is not available" -Type "Warning"
     Write-ColorOutput "  Install manually from https://github.com/UB-Mannheim/tesseract/wiki, then re-run this script" -Type "Warning"
+}
+
+# 4c. Poppler (pdftotext + pdftoppm — PDF text extraction and OCR fallback for scanned PDFs)
+if ($chocoOk) {
+    if (Test-CommandExists "pdftotext") {
+        Write-ColorOutput "  Poppler already installed" -Type "Success"
+    } else {
+        $popplerOk = Install-Poppler
+        if (-not $popplerOk) {
+            Write-ColorOutput "  Poppler install incomplete — PDF text/OCR extraction will be disabled" -Type "Warning"
+            Write-ColorOutput "  After this script finishes, run: choco install poppler -y" -Type "Warning"
+        }
+    }
+} else {
+    Write-ColorOutput "  Skipping Poppler — Chocolatey is not available" -Type "Warning"
+    Write-ColorOutput "  Install manually from https://github.com/oschwartz10612/poppler-windows/releases, then re-run this script" -Type "Warning"
 }
 
 Write-Host ""
