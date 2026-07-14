@@ -1474,6 +1474,16 @@ static ClassificationResult Classify(const std::string& content,
      AgentConfig config;
      Logger logger;
      std::unique_ptr<HttpClient> httpClient;
+     // Guards httpClient itself (the pointer), not just requests through it.
+     // httpClient is reassigned by the heartbeat thread's reconnect logic
+     // (see "reinitializing HTTP client" below) while OTHER threads
+     // (browser-dialog handlers, USB monitor, kernel event forwarding) may
+     // be concurrently calling through the existing pointer. Without this,
+     // the old HttpClient object can be destroyed while another thread is
+     // still inside a call on it -- undefined behavior that manifested as
+     // both stuck browser-upload alerts and the agent going offline
+     // (heartbeat thread hanging on a destroyed object).
+     std::mutex httpClientMutex;
      
      std::atomic<bool> running{false};
      std::atomic<bool> hasFilePolices{false};
@@ -2457,7 +2467,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      "\"file_path\":\"" + path + "\","
                      "\"process_id\":" + pid + ","
                      "\"blocked\":" + blocked + "}";
-                 httpClient->Post("/events/kernel", evJson);
+                 {
+                     std::lock_guard<std::mutex> lock(httpClientMutex);
+                     httpClient->Post("/events/kernel", evJson);
+                 }
              } catch (...) {}
          });
 
@@ -2960,7 +2973,12 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              json.AddString("ip_address", GetRealIPAddress());
              json.AddString("version", "1.0.0");
              
-             auto [status, response] = httpClient->Post("/agents", json.Build());
+             std::pair<int, std::string> reg;
+             {
+                 std::lock_guard<std::mutex> lock(httpClientMutex);
+                 reg = httpClient->Post("/agents", json.Build());
+             }
+             auto& [status, response] = reg;
              
              if (status == 200 || status == 201) {
                  logger.Info("Agent registered with server");
@@ -2982,7 +3000,12 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
      
      void UnregisterAgent() {
          try {
-             auto [status, response] = httpClient->Delete("/agents/" + config.agentId + "/unregister");
+             std::pair<int, std::string> res;
+             {
+                 std::lock_guard<std::mutex> lock(httpClientMutex);
+                 res = httpClient->Delete("/agents/" + config.agentId + "/unregister");
+             }
+             auto& [status, response] = res;
              if (status == 200 || status == 204) {
                  logger.Info("Agent unregistered from server");
              }
@@ -3004,10 +3027,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              std::string requestBody = json.Build();
              logger.Debug("Policy sync request: " + requestBody);
              
-             auto [status, response] = httpClient->Post(
-                 "/agents/" + config.agentId + "/policies/sync",
-                 requestBody
-             );
+             std::pair<int, std::string> sync;
+             {
+                 std::lock_guard<std::mutex> lock(httpClientMutex);
+                 sync = httpClient->Post(
+                     "/agents/" + config.agentId + "/policies/sync",
+                     requestBody
+                 );
+             }
+             auto& [status, response] = sync;
              
              if (status == 200) {
                  logger.Debug("Policy sync response (first 1000 chars): " + response.substr(0, 1000));
@@ -3710,6 +3738,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             if (consecutiveFailures >= 3) {
                 logger.Warning("3 consecutive heartbeat failures - reinitializing HTTP client");
                 try {
+                    std::lock_guard<std::mutex> lock(httpClientMutex);
                     httpClient = std::make_unique<HttpClient>(config.serverUrl);
                     consecutiveFailures = 0;
                     logger.Info("HTTP client reinitialized - will retry heartbeat");
@@ -3731,10 +3760,15 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                  json.AddString("policy_version", activePolicyVersion);
              }
              
-             auto [status, response] = httpClient->Put(
-                 "/agents/" + config.agentId + "/heartbeat",
-                 json.Build()
-             );
+             std::pair<int, std::string> hb;
+             {
+                 std::lock_guard<std::mutex> lock(httpClientMutex);
+                 hb = httpClient->Put(
+                     "/agents/" + config.agentId + "/heartbeat",
+                     json.Build()
+                 );
+             }
+             auto& [status, response] = hb;
              
              if (status == 200) {
                  logger.Debug("Heartbeat sent successfully");
@@ -4062,7 +4096,12 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                         if (!allowEvents) {
                             logger.Debug("Dropping public clipboard event — no active policies");
                         } else {
-                            auto [evStatus, evBody] = httpClient->Post("/events", pubPayload);
+                            std::pair<int, std::string> ev;
+                            {
+                                std::lock_guard<std::mutex> lock(httpClientMutex);
+                                ev = httpClient->Post("/events", pubPayload);
+                            }
+                            auto& [evStatus, evBody] = ev;
                             if (evStatus == 200 || evStatus == 201) {
                                 logger.Debug("Event sent successfully (public path)");
                                 bool serverBlock =
@@ -4243,7 +4282,12 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                     if (!allowEvents) {
                         logger.Debug("Dropping event because no active policies");
                     } else {
-                        auto [evStatus, evBody] = httpClient->Post("/events", eventPayload);
+                        std::pair<int, std::string> ev;
+                        {
+                            std::lock_guard<std::mutex> lock(httpClientMutex);
+                            ev = httpClient->Post("/events", eventPayload);
+                        }
+                        auto& [evStatus, evBody] = ev;
                         if (evStatus == 200 || evStatus == 201) {
                             logger.Debug("Event sent successfully");
                             // Check for server-side block decision (boolean in JSON)
@@ -5951,7 +5995,12 @@ if (shouldMonitor) {
                  return;
              }
              
-             auto [status, response] = httpClient->Post("/events", eventData);
+             std::pair<int, std::string> ev;
+             {
+                 std::lock_guard<std::mutex> lock(httpClientMutex);
+                 ev = httpClient->Post("/events", eventData);
+             }
+             auto& [status, response] = ev;
              
              if (status == 200 || status == 201) {
                  logger.Debug("Event sent successfully");
@@ -6403,7 +6452,12 @@ if (shouldMonitor) {
 
             logger.Info("🔍 Calling real-time classification API for: " + fileName);
 
-            auto [statusCode, responseBody] = httpClient->Post(apiPath, requestBody);
+            std::pair<int, std::string> resp;
+            {
+                std::lock_guard<std::mutex> lock(httpClientMutex);
+                resp = httpClient->Post(apiPath, requestBody);
+            }
+            auto& [statusCode, responseBody] = resp;
 
             if (statusCode != 200) {
                 logger.Warning("Classification API returned status " + std::to_string(statusCode));
