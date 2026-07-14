@@ -73,6 +73,11 @@ schedule==1.2.0
 celery==5.3.4
 kombu==5.3.4
 
+# Threat intel — TAXII 2.1 feed polling (app/services/taxii_ingest.py).
+# NOTE: we deliberately do NOT add the `stix2` package — nothing in this repo
+# imports it; STIX pattern parsing is done with the regex in ioc_service.py.
+taxii2-client==2.3.0
+
 # Testing
 pytest==7.4.3
 pytest-asyncio==0.21.1

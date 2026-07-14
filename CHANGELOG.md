@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🚀 Threat Intel, Domain-Scoped RBAC, IP Allowlisting & Log Retention (July 14, 2026)
+
+### Summary
+
+Ported four capabilities from a sibling deployment's feature branch, backfilling test coverage and fixing two migration gaps found along the way.
+
+### New features
+
+- **Threat Intelligence (IOC / STIX 2.1 / TAXII 2.1)** — `iocs` and `taxii_feeds` tables, an in-memory IOC matcher (`app/services/ioc_service.py`), a TAXII 2.1 poller (`app/services/taxii_ingest.py`), an outbound TAXII 2.1 sharing server for opt-in indicators (`app/api/v1/taxii.py`), and a management API + dashboard page (`/threat-intel`) for manual/CSV/STIX import and feed polling.
+- **Domain-scoped admin RBAC** — three new roles (`THREAT_ADMIN`, `DATA_PROTECTION_ADMIN`, `ACCESS_CONTROL_ADMIN`), each scoped to one policy domain (`app/core/domains.py`). Domain admins only see and manage the policies, events, alerts, and incidents within their domain; the global `ADMIN` is unrestricted. Policies are auto-tagged with a `domain` derived from their `type`.
+- **IP allowlisting** — an admin-managed allowlist (`ip_allowlist` table) enforced by `IPAllowlistMiddleware`. Fail-open when empty, loopback always allowed, agent-ingestion and health endpoints always exempt so monitored machines keep reporting regardless of the portal restriction.
+- **Log retention policy** — a dashboard-editable `retention_config` (event + OpenSearch index retention) with a hard 90-day compliance floor enforced both by the API and a DB `CHECK` constraint. The daily cleanup task now reads the effective value instead of a static env default.
+
+### Fixed along the way
+
+- Added Alembic migrations for `taxii_share_config` and `retention_config` — the source branch had model + API code for both but no migration, so a real `alembic upgrade head` deploy (as opposed to a fresh-install `create_all`) would have been missing the tables.
+- Did **not** carry over `stix2`, `tensorflow`, `torch`, `transformers`, or `spacy` from the source branch's `requirements.txt` — none of them are imported anywhere; only `taxii2-client` is actually used for TAXII polling.
+- Added the missing SQLite `JSONB`/`ARRAY` compiler shims to `tests/conftest.py` (pre-existing gap, not limited to the new tests — it also blocked the existing Google Drive model tests).
+
+### Test coverage
+
+Added `test_domain_service.py`, `test_ioc_taxii.py`, `test_ip_allowlist.py`, and `test_retention_service.py` (71 tests). The source branch shipped all four features with zero tests.
+
+---
+
 ## 🚀 OneDrive Hybrid Modification Detection (December 25, 2025)
 
 ### Summary

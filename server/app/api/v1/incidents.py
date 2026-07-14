@@ -14,6 +14,7 @@ import structlog
 
 from app.core.security import get_current_user, require_role
 from app.core.database import get_db
+from app.services.domain_service import build_domain_mongo_filter
 from app.services.incident_service import IncidentService
 
 logger = structlog.get_logger()
@@ -343,6 +344,8 @@ async def list_auto_incidents(
     if severity is not None:
         query["severity"] = severity
     query = merge_mongo_filter(query, abac)
+    _dom = build_domain_mongo_filter(current_user)
+    query = merge_mongo_filter(query, _dom)
 
     cursor = col.find(query).sort("created_at", -1).limit(limit)
     incidents = []
@@ -354,7 +357,7 @@ async def list_auto_incidents(
         incidents.append(doc)
 
     # Stats (ABAC-scoped) — same dept/clearance filter merged with status.
-    stats_base = merge_mongo_filter({}, abac)
+    stats_base = merge_mongo_filter(merge_mongo_filter({}, abac), _dom)
     stats = {
         "total": await col.count_documents(stats_base),
         "open": await col.count_documents(
@@ -401,14 +404,16 @@ async def update_auto_incident(
     if update.assigned_to:
         update_fields["assigned_to"] = str(update.assigned_to)
 
-    # Lookups honour ABAC — callers cannot update a doc they can't see.
+    # Lookups honour ABAC + domain scoping — callers cannot update a doc
+    # they can't see.
+    _dom = build_domain_mongo_filter(current_user)
     result = await col.update_one(
-        merge_mongo_filter({"id": incident_id}, abac),
+        merge_mongo_filter(merge_mongo_filter({"id": incident_id}, abac), _dom),
         {"$set": update_fields},
     )
     if result.matched_count == 0:
         result = await col.update_one(
-            merge_mongo_filter({"event_id": incident_id}, abac),
+            merge_mongo_filter(merge_mongo_filter({"event_id": incident_id}, abac), _dom),
             {"$set": update_fields},
         )
 
@@ -437,8 +442,11 @@ async def get_auto_incident(
 
     doc = await col.find_one(
         merge_mongo_filter(
-            {"$or": [{"id": incident_id}, {"event_id": incident_id}]},
-            abac,
+            merge_mongo_filter(
+                {"$or": [{"id": incident_id}, {"event_id": incident_id}]},
+                abac,
+            ),
+            build_domain_mongo_filter(current_user),
         )
     )
     if not doc:

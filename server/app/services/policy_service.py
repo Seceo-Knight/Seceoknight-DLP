@@ -118,7 +118,10 @@ class PolicyService:
         # Validate policy structure
         self._validate_policy_structure(conditions, actions)
 
-        # Create new policy
+        # Create new policy. Domain (for domain-scoped RBAC) is derived from
+        # the policy type — see app.core.domains.
+        from app.core.domains import domain_for_policy_type
+
         policy = Policy(
             name=name,
             description=description,
@@ -132,6 +135,7 @@ class PolicyService:
             severity=severity,
             config=config,
             agent_ids=agent_ids or [],
+            domain=domain_for_policy_type(type),
         )
 
         self.db.add(policy)
@@ -208,6 +212,9 @@ class PolicyService:
 
         if type is not None:
             policy.type = type
+            # Keep the RBAC domain in sync when the type changes.
+            from app.core.domains import domain_for_policy_type
+            policy.domain = domain_for_policy_type(type)
 
         if severity is not None:
             policy.severity = severity

@@ -22,7 +22,13 @@ import {
 import { usePermission } from '@/hooks/usePermission'
 
 // Roles exposed by the dropdowns — mirrors the backend whitelist.
-const ROLE_OPTIONS = ['ADMIN', 'ANALYST', 'MANAGER', 'VIEWER'] as const
+// THREAT_ADMIN / DATA_PROTECTION_ADMIN / ACCESS_CONTROL_ADMIN are the
+// domain-scoped admin roles (see app.core.domains) — each sees and manages
+// only the policies/events/incidents within its own domain.
+const ROLE_OPTIONS = [
+  'ADMIN', 'ANALYST', 'MANAGER', 'VIEWER',
+  'THREAT_ADMIN', 'DATA_PROTECTION_ADMIN', 'ACCESS_CONTROL_ADMIN',
+] as const
 
 const EMPTY_CREATE: AdminUserCreateInput = {
   email: '',
@@ -347,6 +353,9 @@ function RoleBadge({ role }: { role: string }) {
     MANAGER: 'bg-purple-100 text-purple-800',
     VIEWER:  'bg-gray-100 text-gray-800',
     AGENT:   'bg-emerald-100 text-emerald-800',
+    THREAT_ADMIN:           'bg-orange-100 text-orange-800',
+    DATA_PROTECTION_ADMIN:  'bg-teal-100 text-teal-800',
+    ACCESS_CONTROL_ADMIN:   'bg-indigo-100 text-indigo-800',
   }
   const cls = colors[role?.toUpperCase()] || 'bg-gray-100 text-gray-800'
   return (

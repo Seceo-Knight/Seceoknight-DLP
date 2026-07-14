@@ -16,6 +16,8 @@ import structlog
 from app.core.security import get_current_user, require_role
 from app.core.database import get_db, get_mongodb
 from app.core.cache import get_cache, CacheService
+from app.core.domains import domain_for_policy_type
+from app.services.domain_service import get_user_domains, user_can_access_domain
 from app.services.policy_service import PolicyService
 from app.services.audit_service import audit_log
 from app.utils.policy_transformer import transform_frontend_config_to_backend
@@ -26,6 +28,16 @@ from app.models.agent import Agent
 
 logger = structlog.get_logger()
 router = APIRouter()
+
+
+def _authz_policy_domain(current_user, policy) -> None:
+    """403 if the policy is outside the caller's administrative domain(s).
+    Super admin / analysts (unrestricted) always pass."""
+    if not user_can_access_domain(current_user, getattr(policy, "domain", None)):
+        raise HTTPException(
+            status_code=403,
+            detail="This policy is outside your administrative domain.",
+        )
 
 
 async def invalidate_policy_bundle_cache() -> None:
@@ -330,6 +342,13 @@ async def get_policies(
         enabled_only=enabled_only,
     )
 
+    # Domain-scoped RBAC: a domain admin only sees their domain's policies.
+    _allowed = get_user_domains(current_user)
+    if _allowed is not None:
+        policies = [
+            p for p in policies if (getattr(p, "domain", None) or "general") in _allowed
+        ]
+
     # Build per-policy violation counts from MongoDB events (last 24h).
     # Using matched_policies is more accurate than counting PostgreSQL alerts
     # because policies with only a "log" action (filtered out during action
@@ -386,6 +405,7 @@ async def get_policies(
             "enabled": policy.enabled,
             "priority": policy.priority,
             "type": policy.type,
+            "domain": getattr(policy, "domain", "general"),
             "severity": policy.severity,
             "config": policy.config,
             "match": policy.conditions.get("match", "all")
@@ -423,6 +443,8 @@ async def get_policy(
     if not policy:
         raise HTTPException(status_code=404, detail="Policy not found")
 
+    _authz_policy_domain(current_user, policy)
+
     return {
         "id": str(policy.id),
         "name": policy.name,
@@ -430,6 +452,7 @@ async def get_policy(
         "enabled": policy.enabled,
         "priority": policy.priority,
         "type": policy.type,
+        "domain": getattr(policy, "domain", "general"),
         "severity": policy.severity,
         "config": policy.config,
         "match": policy.conditions.get("match", "all")
@@ -464,6 +487,18 @@ async def create_policy(
     print(f"DEBUG: config={policy.config}")
     print(f"DEBUG: conditions={policy.conditions}")
     print(f"DEBUG: actions={policy.actions}")
+
+    # Domain-scoped RBAC: a domain admin may only create policies in their
+    # own domain. The domain is derived from the policy type.
+    _new_domain = domain_for_policy_type(policy.type)
+    if not user_can_access_domain(current_user, _new_domain):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"You can only create policies in your domain. "
+                f"'{policy.type}' belongs to the '{_new_domain}' domain."
+            ),
+        )
 
     policy_service = PolicyService(db)
 
@@ -522,6 +557,7 @@ async def create_policy(
             "enabled": created_policy.enabled,
             "priority": created_policy.priority,
             "type": created_policy.type,
+            "domain": getattr(created_policy, "domain", "general"),
             "severity": created_policy.severity,
             "config": created_policy.config,
             "conditions": created_policy.conditions or {},
@@ -548,6 +584,21 @@ async def update_policy(
     Update existing DLP policy
     """
     policy_service = PolicyService(db)
+
+    # Domain-scoped RBAC: you may only edit a policy within your domain, and
+    # (if the type/domain-mapping changes) may not move it into a domain you
+    # don't own.
+    _existing = await policy_service.get_policy_by_id(policy_id)
+    if not _existing:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    _authz_policy_domain(current_user, _existing)
+    if policy.type is not None and not user_can_access_domain(
+        current_user, domain_for_policy_type(policy.type)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="You cannot move this policy into another domain.",
+        )
 
     # Transform frontend config to backend conditions/actions if config is provided
     if policy.config and policy.type:
@@ -605,6 +656,7 @@ async def update_policy(
             "enabled": updated_policy.enabled,
             "priority": updated_policy.priority,
             "type": updated_policy.type,
+            "domain": getattr(updated_policy, "domain", "general"),
             "severity": updated_policy.severity,
             "config": updated_policy.config,
             "conditions": updated_policy.conditions or {},
@@ -628,6 +680,13 @@ async def delete_policy(
 ):
     # ... (Implementation same as read_file)
     policy_service = PolicyService(db)
+
+    # Domain-scoped RBAC: only delete policies within your domain.
+    _existing = await policy_service.get_policy_by_id(policy_id)
+    if not _existing:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    _authz_policy_domain(current_user, _existing)
+
     success = await policy_service.delete_policy(policy_id)
 
     if not success:
@@ -652,6 +711,12 @@ async def enable_policy(
 ):
     # ... (Implementation same as read_file)
     policy_service = PolicyService(db)
+
+    _existing = await policy_service.get_policy_by_id(policy_id)
+    if not _existing:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    _authz_policy_domain(current_user, _existing)
+
     policy = await policy_service.enable_policy(policy_id)
 
     if not policy:
@@ -675,6 +740,12 @@ async def disable_policy(
 ):
     # ... (Implementation same as read_file)
     policy_service = PolicyService(db)
+
+    _existing = await policy_service.get_policy_by_id(policy_id)
+    if not _existing:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    _authz_policy_domain(current_user, _existing)
+
     policy = await policy_service.disable_policy(policy_id)
 
     if not policy:

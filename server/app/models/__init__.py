@@ -28,6 +28,9 @@ from app.models.audit_log import AuditLog
 from app.models.google_drive import GoogleDriveConnection, GoogleDriveProtectedFolder
 from app.models.onedrive import OneDriveConnection, OneDriveProtectedFolder
 from app.models.report import Report
+from app.models.ioc import IOC, TAXIIFeed, TAXIIShareConfig
+from app.models.ip_allowlist import IPAllowlistEntry
+from app.models.retention_config import RetentionConfig
 
 __all__ = [
     "Role",
@@ -60,4 +63,9 @@ __all__ = [
     "OneDriveConnection",
     "OneDriveProtectedFolder",
     "Report",
+    "IOC",
+    "TAXIIFeed",
+    "TAXIIShareConfig",
+    "IPAllowlistEntry",
+    "RetentionConfig",
 ]

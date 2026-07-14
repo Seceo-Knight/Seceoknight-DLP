@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     # its own tokens signed with SECRET_KEY.
     DLP_SSO_SECRET: str = Field(default="")
 
+    # TAXII 2.1 outbound sharing server — HTTP Basic credential partner
+    # vendors use to poll our shared (opt-in) IOCs. Env fallback when no
+    # dashboard-managed TAXIIShareConfig row exists. Empty password = sharing
+    # disabled (503 on every /taxii2/* endpoint).
+    TAXII_SHARE_USER: str = Field(default="partner")
+    TAXII_SHARE_PASSWORD: str = Field(default="")
+
     # CORS
     # NOTE: Pydantic Settings parses list fields from env as JSON only. To support both:
     # - JSON list strings (recommended) AND

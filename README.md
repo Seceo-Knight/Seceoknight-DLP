@@ -9,6 +9,10 @@ SeceoKnight DLP is an enterprise Data Loss Prevention platform. It monitors your
 - Enforces policies: block, quarantine, encrypt, or alert
 - Provides a web dashboard to view events, manage policies, and monitor agents
 - Generates 7 report types: Executive Summary, Policy Violations, Incident Trends, Top Violators, Policy Effectiveness, Compliance Overview, and Incident Detail Report
+- Ingests and shares threat-intelligence indicators (IOCs) via STIX 2.1 / TAXII 2.1 — poll external feeds, add IOCs manually or via CSV/STIX import, and optionally publish your own DLP-derived indicators to partner vendors
+- Supports domain-scoped admin roles (Threat, Data Protection, Access Control) alongside the global Super Admin, so each admin sees and manages only the policies, events, and incidents in their own domain
+- Restricts the admin portal to authorized IP ranges via an admin-managed allowlist (fail-open when empty; agent and health endpoints always exempt)
+- Enforces a dashboard-managed log-retention policy (event + index retention) with a hard 90-day compliance floor
 
 ---
 

@@ -26,6 +26,7 @@ from app.core.opensearch import init_opensearch, close_opensearch
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
+from app.middleware.ip_allowlist import IPAllowlistMiddleware
 from app.api.v1 import api_router
 
 # Setup structured logging
@@ -427,6 +428,11 @@ app.add_middleware(
     max_requests=settings.RATE_LIMIT_REQUESTS,
     window_seconds=settings.RATE_LIMIT_WINDOW,
 )
+
+# IP allowlist — fail-open when the table is empty/all-disabled; see
+# app/middleware/ip_allowlist.py for the exemption list (agent endpoints,
+# health checks, TAXII sharing).
+app.add_middleware(IPAllowlistMiddleware)
 
 # CORS — reject wildcard origins in production.
 _wildcard_cors = settings.CORS_ORIGINS == ["*"]

@@ -247,10 +247,19 @@ def require_role(required_role: str):
     async def role_checker(current_user: User = Depends(get_current_user)):
         user_role = current_user.role
 
-        # Role hierarchy: ADMIN > ANALYST ≈ MANAGER > VIEWER
+        # Role hierarchy: ADMIN > ANALYST ≈ MANAGER ≈ domain-admins > VIEWER
         # MANAGER sits at ANALYST's level for backwards-compatible hierarchical checks.
+        # The domain-admin roles sit at analyst level so they pass read gates
+        # (events/alerts/incidents); their admin powers are scoped by
+        # require_permission + the policy-domain filter, NOT this hierarchy —
+        # so they intentionally do NOT satisfy require_role("admin").
         # Fine-grained gating should use require_permission instead of require_role.
-        role_hierarchy = {"ADMIN": 3, "ANALYST": 2, "MANAGER": 2, "VIEWER": 1}
+        role_hierarchy = {
+            "ADMIN": 3,
+            "ANALYST": 2, "MANAGER": 2,
+            "THREAT_ADMIN": 2, "DATA_PROTECTION_ADMIN": 2, "ACCESS_CONTROL_ADMIN": 2,
+            "VIEWER": 1,
+        }
         
         # Convert role to string - handle enum properly
         # UserRole enum has .value attribute that returns the string value

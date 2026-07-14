@@ -27,6 +27,31 @@ def compile_inet_sqlite(element, compiler, **kwargs):
     return "TEXT"
 
 
+@compiles(postgresql.JSONB, "sqlite")
+def compile_jsonb_sqlite(element, compiler, **kwargs):
+    """Render PostgreSQL JSONB columns as JSON for SQLite tests.
+
+    Pre-existing gap: roles.permissions (and other JSONB columns added since)
+    had no SQLite shim, so any test that triggers Base.metadata.create_all
+    — which creates every table in metadata, not just the one under test —
+    fails during fixture setup. Not something introduced by this change;
+    confirmed by the same failure on the unmodified test_google_drive_models.py.
+    """
+    return "JSON"
+
+
+from sqlalchemy import ARRAY  # noqa: E402
+
+
+@compiles(ARRAY, "sqlite")
+def compile_array_sqlite(element, compiler, **kwargs):
+    """Render PostgreSQL ARRAY columns (e.g. rules.file_types) as TEXT for
+    SQLite tests — same pre-existing-gap category as JSONB above; only
+    affects DDL creation of unrelated tables pulled in by Base.metadata,
+    not any assertions in this suite."""
+    return "TEXT"
+
+
 # Test database URL (in-memory SQLite for fast tests)
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 

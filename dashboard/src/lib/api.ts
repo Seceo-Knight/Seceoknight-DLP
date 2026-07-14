@@ -801,4 +801,149 @@ export async function deleteReport(id: string) {
   await apiClient.delete(`/reports/${id}`)
 }
 
+// ── Authorized-IP allowlist (Super Admin only) ──────────────────────────────
+export type IPAllowlistEntry = {
+  id: string
+  cidr: string
+  label?: string | null
+  is_enabled: boolean
+  created_at?: string | null
+}
+export type IPAllowlistResponse = {
+  entries: IPAllowlistEntry[]
+  your_ip: string
+  enforced: boolean
+}
+
+export const getIpAllowlist = async (): Promise<IPAllowlistResponse> => {
+  const { data } = await apiClient.get('/security/ip-allowlist')
+  return data
+}
+
+export const addIpAllowlist = async (cidr: string, label?: string) => {
+  const { data } = await apiClient.post('/security/ip-allowlist', { cidr, label })
+  return data
+}
+
+export const deleteIpAllowlist = async (entryId: string) => {
+  const { data } = await apiClient.delete(`/security/ip-allowlist/${entryId}`)
+  return data
+}
+
+// ── Threat Intelligence (IOC / STIX / TAXII) ────────────────────────────────
+export type IOC = {
+  id: string
+  ioc_type: string
+  value: string
+  name?: string | null
+  tlp?: string | null
+  confidence?: number | null
+  source?: string | null
+  direction?: string | null
+  is_shared: boolean
+  is_active: boolean
+  created_at?: string | null
+}
+export type TaxiiFeed = {
+  id: string
+  name: string
+  server_url: string
+  collection_id?: string | null
+  last_polled_at?: string | null
+  last_status?: string | null
+  total_imported: number
+}
+export type IocStats = {
+  total: number
+  active: number
+  shared: number
+  feeds: number
+  by_type: Record<string, number>
+}
+
+export type SharingConfig = {
+  enabled: boolean
+  username: string
+  has_password: boolean
+  source: 'database' | 'environment'
+  taxii_path: string
+  collection_id: string
+  updated_at: string | null
+}
+
+export const getIocs = async (params?: { ioc_type?: string; shared?: boolean; q?: string }): Promise<IOC[]> => {
+  const { data } = await apiClient.get('/threat-intel/iocs', { params })
+  return data?.iocs || []
+}
+export const getIocStats = async (): Promise<IocStats> => {
+  const { data } = await apiClient.get('/threat-intel/stats')
+  return data
+}
+export const addIoc = async (body: { ioc_type: string; value: string; tlp?: string; confidence?: number; name?: string }) => {
+  const { data } = await apiClient.post('/threat-intel/iocs', body)
+  return data
+}
+export const deleteIoc = async (id: string) => {
+  const { data } = await apiClient.delete(`/threat-intel/iocs/${id}`)
+  return data
+}
+export const shareIoc = async (id: string, shared: boolean) => {
+  const { data } = await apiClient.post(`/threat-intel/iocs/${id}/share`, { shared })
+  return data
+}
+export const importIocs = async (format: 'csv' | 'stix', content: string) => {
+  const { data } = await apiClient.post('/threat-intel/iocs/import', { format, content })
+  return data
+}
+export const getTaxiiFeeds = async (): Promise<TaxiiFeed[]> => {
+  const { data } = await apiClient.get('/threat-intel/feeds')
+  return data?.feeds || []
+}
+export const addTaxiiFeed = async (body: { name: string; server_url: string; collection_id?: string; username?: string; password?: string }) => {
+  const { data } = await apiClient.post('/threat-intel/feeds', body)
+  return data
+}
+export const deleteTaxiiFeed = async (id: string) => {
+  const { data } = await apiClient.delete(`/threat-intel/feeds/${id}`)
+  return data
+}
+export const pollTaxiiFeed = async (id: string) => {
+  const { data } = await apiClient.post(`/threat-intel/feeds/${id}/poll`)
+  return data
+}
+export const getIocMatches = async (): Promise<any[]> => {
+  const { data } = await apiClient.get('/threat-intel/matches')
+  return data?.matches || []
+}
+
+export const getSharingConfig = async (): Promise<SharingConfig> => {
+  const { data } = await apiClient.get('/threat-intel/sharing')
+  return data
+}
+export const updateSharingConfig = async (
+  body: { enabled: boolean; username?: string; password?: string },
+): Promise<SharingConfig> => {
+  const { data } = await apiClient.put('/threat-intel/sharing', body)
+  return data
+}
+
+// ── Log-retention policy (Super Admin only) ─────────────────────────────────
+export type RetentionConfig = {
+  event_retention_days: number
+  opensearch_retention_days: number
+  minimum_days: number
+  source: 'database' | 'environment'
+  updated_at: string | null
+}
+export const getRetentionConfig = async (): Promise<RetentionConfig> => {
+  const { data } = await apiClient.get('/system/retention')
+  return data
+}
+export const updateRetentionConfig = async (
+  body: { event_retention_days: number; opensearch_retention_days: number },
+): Promise<RetentionConfig> => {
+  const { data } = await apiClient.put('/system/retention', body)
+  return data
+}
+
 export default apiClient

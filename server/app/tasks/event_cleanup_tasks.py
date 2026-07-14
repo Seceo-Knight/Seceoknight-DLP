@@ -49,8 +49,14 @@ async def run_cleanup():
         db = get_mongodb()
         events_collection = db["dlp_events"]
         
-        # Calculate cutoff date
-        retention_days = settings.EVENT_RETENTION_DAYS
+        # Resolve the effective retention window: dashboard-managed DB policy
+        # wins over the env default, clamped to the 90-day compliance floor.
+        from app.services.retention_service import get_effective_retention
+        if database.postgres_session_factory is not None:
+            async with database.postgres_session_factory() as pg:
+                retention_days, _ = await get_effective_retention(pg)
+        else:
+            retention_days = max(90, settings.EVENT_RETENTION_DAYS)
         cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
         
         logger.logger.info(

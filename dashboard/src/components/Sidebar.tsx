@@ -16,6 +16,7 @@ import {
   BarChart2,
   ClipboardList,
   UserCog,
+  Radar,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/hooks/usePermission'
@@ -29,6 +30,12 @@ type NavItem = {
   to: string
   icon: typeof LayoutDashboard
   requires: string[]
+  // Threat Intel's API is coarse ADMIN-only (require_role("admin")) — unlike
+  // the domain-admin roles, which pass permission checks but are explicitly
+  // NOT admin-tier (see core/security.py require_role). Gate on the real
+  // role here instead of a permission name so domain admins don't see a
+  // link that 403s.
+  adminOnly?: boolean
 }
 
 const navigation: NavItem[] = [
@@ -41,16 +48,18 @@ const navigation: NavItem[] = [
   { name: 'Rules',        to: '/rules',        icon: List,            requires: ['create_policy', 'update_policy'] },
   { name: 'Policies',        to: '/policies',     icon: Shield,     requires: ['create_policy', 'update_policy'] },
   { name: 'Reports',         to: '/reports',      icon: BarChart2,  requires: ['view_events'] },
+  { name: 'Threat Intel',    to: '/threat-intel', icon: Radar,      requires: [], adminOnly: true },
   { name: 'User Management', to: '/admin/users',  icon: UserCog,    requires: ['manage_users'] },
   { name: 'Settings',        to: '/settings',     icon: Settings,   requires: [] },
 ]
 
 export default function Sidebar() {
   const [isCollapsed, setIsCollapsed] = useState(false)
-  const { hasAny } = usePermission()
-  const visibleNav = navigation.filter(
-    (item) => item.requires.length === 0 || hasAny(item.requires),
-  )
+  const { hasAny, isAdmin } = usePermission()
+  const visibleNav = navigation.filter((item) => {
+    if (item.adminOnly && !isAdmin) return false
+    return item.requires.length === 0 || hasAny(item.requires)
+  })
 
   return (
     <aside className={cn(

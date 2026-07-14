@@ -24,6 +24,12 @@ class Policy(Base):
     status = Column(String(20), nullable=False, default="active")  # active, inactive, draft
     priority = Column(Integer, default=100, nullable=False)
     type = Column(String(50), nullable=True)
+    # Domain-scoped RBAC: which admin domain owns this policy. Derived from
+    # ``type`` at create time (see app.core.domains). Super admin sees all;
+    # domain admins are scoped to their own domain.
+    domain = Column(
+        String(30), nullable=False, default="general", server_default="general", index=True
+    )
     severity = Column(String(20), nullable=True)  # low, medium, high, critical
     config = Column(JSON, nullable=True)
     conditions = Column(JSON, nullable=False)

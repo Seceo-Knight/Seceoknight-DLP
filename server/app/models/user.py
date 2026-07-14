@@ -22,6 +22,11 @@ class UserRole(str, enum.Enum):
     MANAGER = "MANAGER"
     VIEWER = "VIEWER"
     AGENT = "AGENT"
+    # Domain-scoped admins (granular RBAC). Each is scoped to one policy
+    # domain; see app.core.domains.
+    THREAT_ADMIN = "THREAT_ADMIN"
+    DATA_PROTECTION_ADMIN = "DATA_PROTECTION_ADMIN"
+    ACCESS_CONTROL_ADMIN = "ACCESS_CONTROL_ADMIN"
 
 
 class User(Base):
