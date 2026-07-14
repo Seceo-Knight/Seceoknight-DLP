@@ -409,13 +409,13 @@ bool IsOcrCandidateExtension(const std::string& ext) {
 // text layer (i.e. it needs OCR instead — see ExtractPdfContent below).
 std::string ExtractPdfTextLayer(const std::string& pdfPath) {
     try {
-        std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\Windows\Temp");
+        std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\\Windows\\Temp");
         std::string uniqueTag = std::to_string(
             std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
             std::to_string(GetCurrentThreadId());
-        std::string outTxt = tempDir + "\cs_pdf_text_" + uniqueTag + ".txt";
+        std::string outTxt = tempDir + "\\cs_pdf_text_" + uniqueTag + ".txt";
 
-        std::string cmd = "pdftotext "" + pdfPath + "" "" + outTxt + "" 2>nul";
+        std::string cmd = "pdftotext \"" + pdfPath + "\" \"" + outTxt + "\" 2>nul";
         int result = system(cmd.c_str());
 
         std::string text;
@@ -442,16 +442,16 @@ std::string ExtractPdfTextLayer(const std::string& pdfPath) {
 std::string OcrScannedPdf(const std::string& pdfPath) {
     static const int MAX_OCR_PAGES = 10;
     try {
-        std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\Windows\Temp");
+        std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\\Windows\\Temp");
         std::string uniqueTag = std::to_string(
             std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
             std::to_string(GetCurrentThreadId());
-        std::string pageBase = tempDir + "\cs_pdf_page_" + uniqueTag;
+        std::string pageBase = tempDir + "\\cs_pdf_page_" + uniqueTag;
 
         // 150 DPI is enough for Tesseract to read normal document text
         // without producing unnecessarily huge page images.
         std::string cmd = "pdftoppm -png -r 150 -f 1 -l " + std::to_string(MAX_OCR_PAGES) +
-                           " "" + pdfPath + "" "" + pageBase + "" 2>nul";
+                           " \"" + pdfPath + "\" \"" + pageBase + "\" 2>nul";
         int result = system(cmd.c_str());
 
         std::string combinedText;
@@ -470,8 +470,7 @@ std::string OcrScannedPdf(const std::string& pdfPath) {
 
                 std::string pageText = RunTesseractOnFile(actualPath);
                 if (!pageText.empty()) {
-                    combinedText += pageText + "
-";
+                    combinedText += pageText + "\n";
                 }
                 DeleteFileA(actualPath.c_str());
             }
