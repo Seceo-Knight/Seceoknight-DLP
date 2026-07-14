@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🖥️ Extend Agent-Side OCR to File/USB/Clipboard Channels (July 14, 2026)
+
+### Summary
+
+Real-time OCR already existed on the Windows agent — `agent.cpp`'s screen-capture classifier captures the foreground window's pixels, shells out to `tesseract.exe`, and blocks the screenshot before it happens if the recognized text is sensitive, with `install-agent.ps1` Step 4 already auto-installing Chocolatey + Tesseract on every endpoint. This was missed in the same-day audit correction below (which only checked the Python server) and briefly, incorrectly reported as "genuinely absent." What actually *was* missing: that OCR path only covered screen captures, not file writes/saves, USB file transfers, or clipboard image paste.
+
+### Added
+
+- **`RunTesseractOnFile(imagePath)`** — new shared helper (`agents/endpoint/windows/agent.cpp`, near `ReadFileContent`) that shells out to `tesseract.exe` on an existing image file and returns the recognized text, or `""` on any failure (not installed, unreadable file, no text found). Never throws.
+- **`OcrImageFileIfApplicable(filePath)`** — OCRs `filePath` if its extension is a raster image (`.png/.jpg/.jpeg/.bmp/.tiff/.tif/.gif`), no-ops for everything else so existing text-based file classification is unaffected.
+- **`TryOcrClipboardImage()`** — reads a `CF_DIB` bitmap off an already-open clipboard, reconstructs it as a standalone `.bmp`, and OCRs it.
+- Wired `OcrImageFileIfApplicable` into `HandleFileEvent` (file-write/save monitoring) and `EvaluatePolicyRealtime` (USB file transfer evaluation) — image files now get OCR'd instead of having their raw binary bytes fed into the regex classifier (which previously just turned them into a wall of spaces via the JSON-escaping step).
+- Wired `TryOcrClipboardImage` into `ClipboardMonitor` — a pasted/copied image (e.g. a screenshot pasted into an email or chat app) is now OCR'd and run through the same `HandleClipboardEvent` classification path as typed/copied text.
+- Refactored the original screen-capture Stage-4 OCR block to call the new shared `RunTesseractOnFile` instead of duplicating the "shell out + read result" logic inline — the pixel-capture (`BitBlt`/`GetDIBits`) portion is untouched.
+
+### Scope / known limitation
+
+Raster images only. Multi-page scanned PDFs are **not** covered — that needs a PDF rasterizer (e.g. poppler's `pdftoppm`) as an additional endpoint dependency, which is a separate, larger change (tracked as a P2 item in `ENTERPRISE_AUDIT.md`).
+
+### ⚠️ Not yet verified
+
+This C++ code was written and reviewed for correctness (each new/edited block was checked for local brace/paren balance) but **has not been compiled or run on a real Windows machine** — there is no Windows/C++ toolchain in the environment that wrote it. Build with the project's existing MSVC/CMake setup and test on a real endpoint (screen capture OCR, a saved `.png` with a fake SSN, a USB-copied scanned image, and a pasted screenshot) before shipping to production.
+
+---
+
 ## 🔧 ML Classification Wiring + Enterprise Audit Correction (July 14, 2026)
 
 ### Summary

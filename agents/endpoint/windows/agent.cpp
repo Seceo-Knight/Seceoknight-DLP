@@ -312,6 +312,152 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
      content.resize(file.gcount());
      return content;
  }
+
+// ==================== Tesseract OCR (shared) ====================
+//
+// Extends the OCR capability that already existed only for real-time
+// screen-capture blocking (screenClassifier's Stage 4, further below) to
+// three more channels the agent already watches: file writes/saves,
+// USB file transfers, and clipboard image paste. All three funnel
+// through RunTesseractOnFile(), which shells out to the same
+// tesseract.exe that install-agent.ps1 Step 4 already auto-installs via
+// Chocolatey — no new endpoint dependency is introduced.
+//
+// Scope: raster image files only (.png/.jpg/.jpeg/.bmp/.tiff/.gif), which
+// Tesseract's leptonica backend reads natively. Multi-page scanned PDFs
+// are NOT covered here — that needs a PDF rasterizer (e.g. poppler's
+// pdftoppm) as an additional endpoint dependency and is a larger,
+// separate change.
+//
+// NOTE: this code has not been compiled or run on a real Windows
+// machine — there is no Windows/C++ toolchain available in the
+// environment that wrote it. Build and test on a real endpoint before
+// shipping to production.
+
+// Runs `tesseract <imagePath> <outputBase> --psm 6 -l eng` on an image
+// file already on disk and returns the recognized text, or "" if
+// tesseract.exe isn't on PATH, the file isn't readable, or OCR finds
+// nothing. Never throws — every call site treats "" as "no OCR signal,
+// fall back to the existing behavior" rather than an error.
+std::string RunTesseractOnFile(const std::string& imagePath) {
+    try {
+        std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\\Windows\\Temp");
+        // Unique per call — file monitor, USB transfer, clipboard, and
+        // screen-capture OCR can all fire concurrently on different
+        // threads, so a fixed temp filename would let them clobber
+        // each other's output.
+        std::string uniqueTag = std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()) + "_" +
+            std::to_string(GetCurrentThreadId());
+        std::string outBase = tempDir + "\\cs_ocr_" + uniqueTag;
+
+        std::string tessCmd = "tesseract \"" + imagePath + "\" \"" + outBase +
+                               "\" --psm 6 -l eng 2>nul";
+        int tessResult = system(tessCmd.c_str());
+
+        std::string ocrText;
+        std::string ocrFile = outBase + ".txt";
+        if (tessResult == 0) {
+            std::ifstream ifs(ocrFile);
+            if (ifs.is_open()) {
+                std::stringstream ss;
+                ss << ifs.rdbuf();
+                ocrText = ss.str();
+                ifs.close();
+            }
+        }
+        DeleteFileA(ocrFile.c_str());
+        return ocrText;
+    } catch (...) {
+        return "";
+    }
+}
+
+// Raster extensions Tesseract/leptonica reads directly without needing
+// re-encoding first.
+bool IsOcrCandidateExtension(const std::string& ext) {
+    std::string lowerExt = ext;
+    std::transform(lowerExt.begin(), lowerExt.end(), lowerExt.begin(), ::tolower);
+    static const std::set<std::string> kOcrExtensions = {
+        ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".gif"
+    };
+    return kOcrExtensions.count(lowerExt) > 0;
+}
+
+// Convenience wrapper for file-based monitors (file-write and USB
+// transfer): OCRs filePath if its extension looks like a raster image,
+// returns "" (no-op) for every other file type so normal text-based
+// classification (ReadFileContent) is completely unaffected.
+std::string OcrImageFileIfApplicable(const std::string& filePath) {
+    std::string ext;
+    try { ext = fs::path(filePath).extension().string(); } catch (...) { return ""; }
+    if (!IsOcrCandidateExtension(ext)) return "";
+    return RunTesseractOnFile(filePath);
+}
+
+// Must be called with the clipboard already open (i.e. from inside a
+// successful OpenClipboard(...) block, matching the pattern the
+// existing CF_UNICODETEXT handling already uses). Reads a CF_DIB bitmap
+// off the clipboard if present, reconstructs it as a standalone .bmp
+// file, OCRs it, and returns the recognized text — or "" if there's no
+// image on the clipboard, or anything about the DIB looks malformed.
+// Never throws.
+std::string TryOcrClipboardImage() {
+    try {
+        HANDLE hDib = GetClipboardData(CF_DIB);
+        if (hDib == nullptr) return "";
+
+        BITMAPINFO* pbmi = static_cast<BITMAPINFO*>(GlobalLock(hDib));
+        if (pbmi == nullptr) return "";
+
+        std::string result;
+        int width  = pbmi->bmiHeader.biWidth;
+        int height = std::abs(pbmi->bmiHeader.biHeight);
+
+        DWORD paletteSize = 0;
+        if (pbmi->bmiHeader.biBitCount > 0 && pbmi->bmiHeader.biBitCount <= 8) {
+            DWORD colors = pbmi->bmiHeader.biClrUsed
+                ? pbmi->bmiHeader.biClrUsed
+                : (1u << pbmi->bmiHeader.biBitCount);
+            paletteSize = colors * sizeof(RGBQUAD);
+        }
+        DWORD headerSize = pbmi->bmiHeader.biSize + paletteSize;
+        DWORD imageSize  = pbmi->bmiHeader.biSizeImage;
+        if (imageSize == 0 && pbmi->bmiHeader.biBitCount > 0) {
+            DWORD rowSize = ((static_cast<DWORD>(width) * pbmi->bmiHeader.biBitCount + 31) / 32) * 4;
+            imageSize = rowSize * static_cast<DWORD>(height);
+        }
+
+        // Sanity bounds + a 50MB cap so a malformed/hostile DIB can't
+        // trigger a huge allocation or file write.
+        if (width > 0 && height > 0 && imageSize > 0 && imageSize < 50u * 1024u * 1024u) {
+            std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\\Windows\\Temp");
+            std::string bmpPath = tempDir + "\\cs_ocr_clip_" +
+                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".bmp";
+
+            BITMAPFILEHEADER bf = {};
+            bf.bfType    = 0x4D42; // 'BM'
+            bf.bfOffBits = sizeof(BITMAPFILEHEADER) + headerSize;
+            bf.bfSize    = bf.bfOffBits + imageSize;
+
+            HANDLE hF = CreateFileA(bmpPath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+            if (hF != INVALID_HANDLE_VALUE) {
+                DWORD wr;
+                WriteFile(hF, &bf, sizeof(bf), &wr, NULL);
+                WriteFile(hF, pbmi, headerSize + imageSize, &wr, NULL);
+                CloseHandle(hF);
+
+                result = RunTesseractOnFile(bmpPath);
+                DeleteFileA(bmpPath.c_str());
+            }
+        }
+
+        GlobalUnlock(hDib);
+        return result;
+    } catch (...) {
+        return "";
+    }
+}
  
  // ==================== JSON Helper ====================
  
@@ -2711,9 +2857,16 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                          if (y + h > vy + vh) h = (vy + vh) - y;
 
                          if (w > 16 && h > 16) {
+                             // Capture the foreground window's pixels (unchanged
+                             // from the original implementation), then hand off
+                             // to the shared RunTesseractOnFile() helper — same
+                             // helper the file-write, USB-transfer, and
+                             // clipboard-image OCR paths use — instead of
+                             // duplicating the "shell out + read result" logic
+                             // inline here.
                              std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\\Windows\\Temp");
-                             std::string tempBmp = tempDir + "\\cs_ocr_fg.bmp";
-                             std::string tempTxt = tempDir + "\\cs_ocr_fg_result";
+                             std::string tempBmp = tempDir + "\\cs_ocr_fg_" +
+                                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".bmp";
 
                              HDC hScreenDC = GetDC(NULL);
                              HDC hMemDC    = CreateCompatibleDC(hScreenDC);
@@ -2745,22 +2898,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                              SelectObject(hMemDC, old);
                              DeleteObject(hBmp); DeleteDC(hMemDC); ReleaseDC(NULL, hScreenDC);
 
-                             std::string tessCmd = "tesseract \"" + tempBmp + "\" \"" + tempTxt + "\" --psm 6 -l eng 2>nul";
-                             int tessResult = system(tessCmd.c_str());
-
-                             std::string ocrText;
-                             std::string ocrFile = tempTxt + ".txt";
-                             if (tessResult == 0) {
-                                 std::ifstream ifs(ocrFile);
-                                 if (ifs.is_open()) {
-                                     std::stringstream ss; ss << ifs.rdbuf();
-                                     ocrText = ss.str();
-                                     ifs.close();
-                                 }
-                             }
-
+                             std::string ocrText = RunTesseractOnFile(tempBmp);
                              DeleteFileA(tempBmp.c_str());
-                             DeleteFileA(ocrFile.c_str());
 
                              if (ocrText.length() > 10) {
                                  logger.Debug("Tesseract OCR (foreground window) extracted " +
@@ -3976,6 +4115,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                  }
                  
                  if (OpenClipboard(nullptr)) {
+                     bool handledText = false;
                      HANDLE hData = GetClipboardData(CF_UNICODETEXT);
                      if (hData != nullptr) {
                          wchar_t* pData = static_cast<wchar_t*>(GlobalLock(hData));
@@ -3986,10 +4126,26 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                              
                              if (!text.empty() && text != lastClipboard) {
                                  lastClipboard = text;
+                                 handledText = true;
                                  HandleClipboardEvent(text, lastActiveWindow);
                              }
                          }
                      }
+
+                     // No new text this cycle — check for a pasted/copied
+                     // image (screenshot, scanned photo, etc.) and OCR it.
+                     // Mirrors the text path above: only fires when the
+                     // clipboard content actually changed.
+                     if (!handledText) {
+                         std::string ocrText = TryOcrClipboardImage();
+                         if (!ocrText.empty() && ocrText != lastClipboard) {
+                             lastClipboard = ocrText;
+                             logger.Info("OCR extracted " + std::to_string(ocrText.size()) +
+                                         " chars from clipboard image");
+                             HandleClipboardEvent(ocrText, lastActiveWindow);
+                         }
+                     }
+
                      CloseClipboard();
                  }
              } catch (...) {
@@ -5244,7 +5400,19 @@ if (shouldMonitor) {
                     // Only read and classify files under max size
                     if (fileSize < config.GetClassification().maxFileSizeMB * 1024 * 1024) {
                         fileHash = CalculateFileHash(filePath);
-                        content = ReadFileContent(filePath);
+
+                        // OCR raster image files (screenshots, scanned photos,
+                        // etc.) instead of feeding raw binary bytes into the
+                        // regex/keyword classifier — everything else keeps
+                        // using the existing text path unchanged.
+                        std::string ocrText = OcrImageFileIfApplicable(filePath);
+                        if (!ocrText.empty()) {
+                            content = ocrText;
+                            logger.Info("OCR extracted " + std::to_string(ocrText.size()) +
+                                        " chars from image file: " + filePath);
+                        } else {
+                            content = ReadFileContent(filePath);
+                        }
                         
                         logger.Debug("Read file content: " + filePath + " (" + std::to_string(content.size()) + " bytes) [Event: " + eventSubtype + "]");
                         
@@ -6403,17 +6571,28 @@ if (shouldMonitor) {
                 return result;
             }
 
-            // Read file content
-            std::ifstream file(filePath, std::ios::binary);
-            if (!file.is_open()) {
-                logger.Warning("Cannot open file for classification: " + filePath);
-                result.reason = "Cannot read file";
-                return result;
-            }
+            // Read file content — OCR raster images instead of sending raw
+            // binary bytes (which the escaping loop below would just turn
+            // into a wall of spaces anyway). Everything else keeps using
+            // the existing binary-read path unchanged.
+            std::string fileContent;
+            std::string ocrText = OcrImageFileIfApplicable(filePath);
+            if (!ocrText.empty()) {
+                fileContent = ocrText;
+                logger.Info("OCR extracted " + std::to_string(ocrText.size()) +
+                            " chars from image file for USB transfer evaluation: " + filePath);
+            } else {
+                std::ifstream file(filePath, std::ios::binary);
+                if (!file.is_open()) {
+                    logger.Warning("Cannot open file for classification: " + filePath);
+                    result.reason = "Cannot read file";
+                    return result;
+                }
 
-            std::string fileContent((std::istreambuf_iterator<char>(file)),
-                                   std::istreambuf_iterator<char>());
-            file.close();
+                fileContent.assign((std::istreambuf_iterator<char>(file)),
+                                    std::istreambuf_iterator<char>());
+                file.close();
+            }
 
             // Escape the file content for JSON (basic escaping)
             std::string escapedContent;
