@@ -66,6 +66,9 @@ const REPORT_TYPES = [
   { value: 'policies', label: 'Policy Effectiveness' },
   { value: 'compliance', label: 'Compliance Report' },
   { value: 'incident_detail', label: 'Incident Detail Report' },
+  { value: 'gdpr_art30', label: 'GDPR Article 30 (Records of Processing)' },
+  { value: 'hipaa_breach', label: 'HIPAA Breach Notification' },
+  { value: 'pci_scope', label: 'PCI DSS Scope Report' },
 ]
 
 const STATUS_CONFIG = {

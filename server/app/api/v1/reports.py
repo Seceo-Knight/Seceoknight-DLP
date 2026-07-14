@@ -31,7 +31,10 @@ class GenerateReportRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=500)
     report_types: List[str] = Field(
         ...,
-        description="One or more of: summary, violations, trends, violators, policies, compliance",
+        description=(
+            "One or more of: summary, violations, trends, violators, policies, "
+            "compliance, incident_detail, gdpr_art30, hipaa_breach, pci_scope"
+        ),
         min_items=1,
     )
     start_date: datetime
@@ -126,7 +129,10 @@ async def generate_report(
     immediately so the frontend can poll /reports/{id} for status.
     """
     # Validate report_types
-    valid_types = {"summary", "violations", "trends", "violators", "policies", "compliance", "incident_detail"}
+    valid_types = {
+        "summary", "violations", "trends", "violators", "policies", "compliance", "incident_detail",
+        "gdpr_art30", "hipaa_breach", "pci_scope",
+    }
     invalid = [t for t in body.report_types if t not in valid_types]
     if invalid:
         raise HTTPException(

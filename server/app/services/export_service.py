@@ -199,6 +199,24 @@ class ExportService:
             incidents = analytics_data.get("incidents", []) if isinstance(analytics_data, dict) else []
             return ExportService.export_to_csv(incidents)
 
+        elif report_type == "gdpr_art30":
+            # analytics_data is {"processing_activities": [...], ...} — the
+            # activities list is the natural tabular row set for GDPR Art. 30.
+            activities = analytics_data.get("processing_activities", []) if isinstance(analytics_data, dict) else []
+            return ExportService.export_to_csv(activities)
+
+        elif report_type == "hipaa_breach":
+            # analytics_data is {"candidates": [...], ...}
+            candidates = analytics_data.get("candidates", []) if isinstance(analytics_data, dict) else []
+            return ExportService.export_to_csv(candidates)
+
+        elif report_type == "pci_scope":
+            # analytics_data is {"in_scope_agents": [...], "pci_events": [...], ...}
+            # Agents are the primary CDE-scope inventory row set; events are
+            # available separately in the PDF and via the incident_detail report.
+            agents = analytics_data.get("in_scope_agents", []) if isinstance(analytics_data, dict) else []
+            return ExportService.export_to_csv(agents)
+
         else:
             # Generic export
             return ExportService.export_to_csv(analytics_data)
@@ -354,6 +372,9 @@ class ExportService:
             "compliance":        ExportService._create_summary_pdf_content,
             "policies":          ExportService._create_policy_violations_pdf_content,
             "incident_detail":   ExportService._create_incident_detail_pdf_content,
+            "gdpr_art30":        ExportService._create_gdpr_art30_pdf_content,
+            "hipaa_breach":      ExportService._create_hipaa_breach_pdf_content,
+            "pci_scope":         ExportService._create_pci_scope_pdf_content,
         }
         builder = dispatch.get(report_type, ExportService._create_summary_pdf_content)
         elements.extend(builder(data, styles, heading_style))
@@ -970,5 +991,443 @@ class ExportService:
                 f"in the selected period. Download the CSV export for the complete dataset.",
                 note_style,
             ))
+
+        return elements
+
+    # ── Compliance report shared helper ─────────────────────────────────────
+
+    @staticmethod
+    def _manual_review_box(
+        fields: Dict[str, Any],
+        note: str,
+        styles: Any,
+        title: str = "⚠  REQUIRES MANUAL COMPLETION",
+    ) -> List:
+        """
+        Amber-bordered callout box listing fields this report genuinely
+        cannot populate from the platform's own data (e.g. controller
+        identity, legal risk-of-harm conclusions). Used by the GDPR and
+        HIPAA compliance report builders so blank/unknown legal fields are
+        visually impossible to mistake for a completed answer.
+        """
+        AMBER_BG = colors.HexColor('#fffbeb')
+        AMBER_BORDER = colors.HexColor('#d97706')
+
+        box_title_style = ParagraphStyle(
+            'ManualReviewTitle', parent=styles['Normal'],
+            fontSize=10, fontName='Helvetica-Bold',
+            textColor=AMBER_BORDER, spaceAfter=4,
+        )
+        box_field_style = ParagraphStyle(
+            'ManualReviewField', parent=styles['Normal'],
+            fontSize=8, textColor=GRAY_700, leading=11,
+        )
+        box_note_style = ParagraphStyle(
+            'ManualReviewNote', parent=styles['Normal'],
+            fontSize=7.5, textColor=colors.HexColor('#92400e'),
+            leading=10, spaceBefore=6,
+        )
+
+        inner: list = [Paragraph(title, box_title_style)]
+        for key, value in fields.items():
+            if key in ("manual_review_required", "note"):
+                continue
+            label = key.replace("_", " ").title()
+            shown = value if value not in (None, "") else "— not set —"
+            inner.append(Paragraph(f"<b>{label}:</b> {shown}", box_field_style))
+        inner.append(Paragraph(note, box_note_style))
+
+        box = Table([[inner]], colWidths=[6.9 * inch])
+        box.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), AMBER_BG),
+            ('BOX', (0, 0), (-1, -1), 1, AMBER_BORDER),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        return [KeepTogether([box]), Spacer(1, 0.2 * inch)]
+
+    # ── GDPR Article 30 — Records of Processing Activities ──────────────────
+
+    @staticmethod
+    def _create_gdpr_art30_pdf_content(
+        data: Dict[str, Any],
+        styles: Any,
+        heading_style: ParagraphStyle
+    ) -> List:
+        elements: List = []
+        body_style = ParagraphStyle(
+            'GdprBody', parent=styles['Normal'], fontSize=8, textColor=GRAY_700, leading=10,
+        )
+
+        elements.append(Paragraph("GDPR Article 30 — Records of Processing Activities", heading_style))
+        period = data.get("period", {})
+        elements.append(Paragraph(
+            f"Period: {period.get('start', '—')[:10]} to {period.get('end', '—')[:10]}",
+            styles['Normal'],
+        ))
+        elements.append(Spacer(1, 0.15 * inch))
+
+        # Manual-completion fields — controller identity, recipients, transfers
+        manual = data.get("manual_fields", {})
+        elements.extend(ExportService._manual_review_box(
+            manual, manual.get("note", ""), styles,
+            title="⚠  CONTROLLER / RECIPIENT / TRANSFER DETAILS — REQUIRES DPO COMPLETION",
+        ))
+
+        # Processing activities
+        elements.append(Paragraph("Processing Activities", heading_style))
+        activities = data.get("processing_activities", [])
+        if not activities:
+            elements.append(Paragraph("No active policies found.", styles['Normal']))
+        else:
+            table_data = [["Activity", "Purpose", "Status", "Type", "Compliance Tags"]]
+            for a in activities[:60]:
+                tags = ", ".join(a.get("compliance_tags") or []) or "—"
+                table_data.append([
+                    Paragraph(str(a.get("activity_name", ""))[:35], body_style),
+                    Paragraph(str(a.get("purpose", ""))[:45], body_style),
+                    a.get("status", ""),
+                    a.get("policy_type", "") or "—",
+                    Paragraph(tags[:30], body_style),
+                ])
+            table = Table(table_data, colWidths=[1.6*inch, 2.2*inch, 0.8*inch, 0.9*inch, 1.4*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), BRAND_NAVY),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, GRAY_100]),
+            ]))
+            elements.append(table)
+            if len(activities) > 60:
+                elements.append(Paragraph(f"(Showing first 60 of {len(activities)})", styles['Italic']))
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # Categories of personal data
+        elements.append(Paragraph("Categories of Personal Data Processed", heading_style))
+        cats = data.get("data_categories", [])
+        if not cats:
+            elements.append(Paragraph("No data labels configured.", styles['Normal']))
+        else:
+            table_data = [["Category", "Severity", "Description"]]
+            for c in cats:
+                table_data.append([
+                    c.get("name", ""),
+                    c.get("severity", ""),
+                    Paragraph(str(c.get("description") or "—")[:60], body_style),
+                ])
+            table = Table(table_data, colWidths=[1.5*inch, 1.0*inch, 4.4*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), BRAND_NAVY),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, GRAY_100]),
+            ]))
+            elements.append(table)
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # Data subject categories (by department)
+        elements.append(Paragraph("Categories of Data Subjects (by Department)", heading_style))
+        subjects = data.get("data_subject_categories", [])
+        if not subjects:
+            elements.append(Paragraph("No events recorded in this period.", styles['Normal']))
+        else:
+            table_data = [["Department", "Events in Period"]]
+            for s in subjects[:30]:
+                table_data.append([s.get("department", ""), f"{s.get('event_count', 0):,}"])
+            table = Table(table_data, colWidths=[4*inch, 2*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), BRAND_NAVY),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, GRAY_100]),
+            ]))
+            elements.append(table)
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # Retention
+        elements.append(Paragraph("Envisaged Time Limits for Erasure (Retention)", heading_style))
+        ret = data.get("retention", {})
+        table_data = [
+            ["Event Retention", f"{ret.get('event_retention_days', '—')} days"],
+            ["OpenSearch (log-store) Retention", f"{ret.get('opensearch_retention_days', '—')} days"],
+            ["Compliance Floor", f"{ret.get('compliance_floor_days', '—')} days minimum"],
+        ]
+        table = Table(table_data, colWidths=[3*inch, 3*inch])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), GRAY_100),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ]))
+        elements.append(table)
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # Security measures
+        elements.append(Paragraph("Technical & Organisational Security Measures (Art. 32)", heading_style))
+        sec = data.get("security_measures", {})
+        for item in sec.get("implemented", []):
+            elements.append(Paragraph(f"✓ {item}", body_style))
+        elements.append(Spacer(1, 0.1 * inch))
+        if sec.get("known_gaps"):
+            elements.append(Paragraph("Known gaps (from the platform's own security audit):", styles['Heading3']))
+            gap_style = ParagraphStyle('GdprGap', parent=body_style, textColor=RED_HDR)
+            for item in sec["known_gaps"]:
+                elements.append(Paragraph(f"⚠ {item}", gap_style))
+        if sec.get("source"):
+            elements.append(Spacer(1, 0.05 * inch))
+            elements.append(Paragraph(sec["source"], styles['Italic']))
+
+        return elements
+
+    # ── HIPAA Breach Notification ────────────────────────────────────────────
+
+    @staticmethod
+    def _create_hipaa_breach_pdf_content(
+        data: Dict[str, Any],
+        styles: Any,
+        heading_style: ParagraphStyle
+    ) -> List:
+        elements: List = []
+        body_style = ParagraphStyle(
+            'HipaaBody', parent=styles['Normal'], fontSize=8, textColor=GRAY_700, leading=10,
+        )
+
+        elements.append(Paragraph("HIPAA Breach Notification — Candidate Incident Review", heading_style))
+        period = data.get("period", {})
+        elements.append(Paragraph(
+            f"Period: {period.get('start', '—')[:10]} to {period.get('end', '—')[:10]}",
+            styles['Normal'],
+        ))
+        elements.append(Spacer(1, 0.15 * inch))
+
+        notif = data.get("notification_fields", {})
+        elements.extend(ExportService._manual_review_box(
+            notif, notif.get("note", ""), styles,
+            title="⚠  RISK ASSESSMENT & NOTIFICATION DETAILS — REQUIRES PRIVACY OFFICER REVIEW",
+        ))
+
+        counts = data.get("summary_counts", {})
+        elements.append(Paragraph("Summary", heading_style))
+        summary_data = [[
+            Paragraph(f"<b>{counts.get('total_candidates', 0)}</b><br/>Candidate Incidents", body_style),
+            Paragraph(f"<b>{counts.get('likely_exposure', 0)}</b><br/>Likely Exposure", body_style),
+            Paragraph(f"<b>{counts.get('prevented_by_policy', 0)}</b><br/>Prevented by Policy", body_style),
+        ]]
+        summary_table = Table(summary_data, colWidths=[2.3*inch]*3)
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), BRAND_NAVY),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, 0.2 * inch))
+
+        elements.append(Paragraph("Candidate PHI-Related Incidents", heading_style))
+        candidates = data.get("candidates", [])
+        if not candidates:
+            elements.append(Paragraph(
+                "No incidents matched PHI-indicating classification labels for this period.",
+                styles['Normal'],
+            ))
+            return elements
+
+        table_data = [["Date", "Severity", "Matched On", "Action", "Exposure", "File / Path", "Department"]]
+        row_styles: List = []
+        for idx, c in enumerate(candidates[:100], start=1):
+            exposure = "LIKELY" if c.get("exposure_likely") else "prevented"
+            exposure_color = "#dc2626" if c.get("exposure_likely") else "#16a34a"
+            table_data.append([
+                Paragraph((c.get("incident_created_at") or "—")[:10], body_style),
+                (c.get("severity") or "").upper(),
+                c.get("matched_keyword", ""),
+                (c.get("action_taken") or "").upper(),
+                Paragraph(f"<font color='{exposure_color}'><b>{exposure}</b></font>", body_style),
+                Paragraph(str(c.get("file_name") or c.get("file_path") or "—")[:30], body_style),
+                Paragraph(str(c.get("department") or "—")[:20], body_style),
+            ])
+            if c.get("exposure_likely"):
+                row_styles.append(("BACKGROUND", (0, idx), (-1, idx), RED_BG))
+
+        table = Table(
+            table_data,
+            colWidths=[0.8*inch, 0.7*inch, 0.9*inch, 0.8*inch, 0.8*inch, 1.6*inch, 1.1*inch],
+            repeatRows=1,
+        )
+        base_style = [
+            ('BACKGROUND', (0, 0), (-1, 0), RED_HDR),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 7.5),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor("#d1d5db")),
+        ] + row_styles
+        table.setStyle(TableStyle(base_style))
+        elements.append(table)
+
+        if len(candidates) > 100:
+            elements.append(Spacer(1, 0.15 * inch))
+            elements.append(Paragraph(
+                f"(Showing first 100 of {len(candidates)} candidates — download the CSV for the full list)",
+                styles['Italic'],
+            ))
+
+        return elements
+
+    # ── PCI DSS Scope ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _create_pci_scope_pdf_content(
+        data: Dict[str, Any],
+        styles: Any,
+        heading_style: ParagraphStyle
+    ) -> List:
+        elements: List = []
+        body_style = ParagraphStyle(
+            'PciBody', parent=styles['Normal'], fontSize=8, textColor=GRAY_700, leading=10,
+        )
+        caveat_style = ParagraphStyle(
+            'PciCaveat', parent=styles['Normal'], fontSize=8, textColor=colors.HexColor('#92400e'), leading=11,
+        )
+
+        elements.append(Paragraph("PCI DSS Scope Report", heading_style))
+        period = data.get("period", {})
+        elements.append(Paragraph(
+            f"Period: {period.get('start', '—')[:10]} to {period.get('end', '—')[:10]}",
+            styles['Normal'],
+        ))
+        elements.append(Spacer(1, 0.1 * inch))
+
+        caveat_box = Table([[Paragraph(data.get("scope_caveat", ""), caveat_style)]], colWidths=[6.9*inch])
+        caveat_box.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#fffbeb')),
+            ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#d97706')),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        elements.append(caveat_box)
+        elements.append(Spacer(1, 0.2 * inch))
+
+        counts = data.get("counts", {})
+        elements.append(Paragraph("Scope Summary", heading_style))
+        summary_data = [[
+            Paragraph(f"<b>{counts.get('pci_policies', 0)}</b><br/>PCI-Tagged Policies", body_style),
+            Paragraph(f"<b>{counts.get('in_scope_agents', 0)}</b><br/>In-Scope Endpoints", body_style),
+            Paragraph(f"<b>{counts.get('pci_events_in_period', 0)}</b><br/>Detections in Period", body_style),
+            Paragraph(f"<b>{counts.get('flagged_files', 0)}</b><br/>Flagged Files", body_style),
+        ]]
+        summary_table = Table(summary_data, colWidths=[1.7*inch]*4)
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), BRAND_NAVY),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # PCI-tagged policies
+        elements.append(Paragraph("PCI-DSS-Tagged Policies", heading_style))
+        policies = data.get("pci_policies", [])
+        if not policies:
+            elements.append(Paragraph("No policies are currently tagged for PCI-DSS.", styles['Normal']))
+        else:
+            table_data = [["Policy", "Status", "Severity", "Compliance Tags"]]
+            for p in policies:
+                tags = ", ".join(p.get("compliance_tags") or []) or "—"
+                table_data.append([
+                    Paragraph(str(p.get("policy_name", ""))[:35], body_style),
+                    p.get("status", ""),
+                    p.get("severity", "") or "—",
+                    Paragraph(tags[:35], body_style),
+                ])
+            table = Table(table_data, colWidths=[2.2*inch, 1.0*inch, 1.0*inch, 2.5*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), BRAND_NAVY),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, GRAY_100]),
+            ]))
+            elements.append(table)
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # In-scope agents
+        elements.append(Paragraph("In-Scope Endpoints", heading_style))
+        agents = data.get("in_scope_agents", [])
+        if not agents:
+            elements.append(Paragraph(
+                "No endpoints currently have a PCI-tagged policy applied.", styles['Normal'],
+            ))
+        else:
+            table_data = [["Endpoint", "Hostname", "OS", "IP Address", "Status"]]
+            for a in agents[:80]:
+                table_data.append([
+                    Paragraph(str(a.get("name", ""))[:30], body_style),
+                    Paragraph(str(a.get("hostname", ""))[:25], body_style),
+                    str(a.get("os", "") or "—"),
+                    a.get("ip_address", "") or "—",
+                    (a.get("status") or "").upper(),
+                ])
+            table = Table(table_data, colWidths=[1.8*inch, 1.8*inch, 1.0*inch, 1.3*inch, 0.8*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), BRAND_NAVY),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, GRAY_100]),
+            ]))
+            elements.append(table)
+            if len(agents) > 80:
+                elements.append(Paragraph(f"(Showing first 80 of {len(agents)})", styles['Italic']))
+        elements.append(Spacer(1, 0.2 * inch))
+
+        # Detections
+        elements.append(Paragraph("Cardholder-Data Detections in Period", heading_style))
+        events = data.get("pci_events", [])
+        if not events:
+            elements.append(Paragraph("No cardholder-data-pattern detections in this period.", styles['Normal']))
+        else:
+            table_data = [["Timestamp", "Endpoint", "File", "Detected Label", "Action", "Confidence"]]
+            for e in events[:80]:
+                table_data.append([
+                    Paragraph((e.get("timestamp") or "—")[:19].replace("T", " "), body_style),
+                    Paragraph(str(e.get("agent_id") or "—")[:20], body_style),
+                    Paragraph(str(e.get("file_name") or "—")[:25], body_style),
+                    e.get("detected_label", "") or "—",
+                    (e.get("action") or "").upper(),
+                    f"{e.get('confidence_score')}%" if e.get("confidence_score") is not None else "—",
+                ])
+            table = Table(table_data, colWidths=[1.2*inch, 1.2*inch, 1.5*inch, 1.1*inch, 0.9*inch, 0.8*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), RED_HDR),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 7.5),
+                ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor("#d1d5db")),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, RED_BG]),
+            ]))
+            elements.append(table)
+            if data.get("pci_events_truncated"):
+                elements.append(Paragraph(
+                    "(Capped at 200 detections for this period — download the CSV export for the complete set)",
+                    styles['Italic'],
+                ))
 
         return elements

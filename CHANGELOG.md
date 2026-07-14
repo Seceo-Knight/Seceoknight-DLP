@@ -8,6 +8,33 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📋 Compliance Report Templates — GDPR Art. 30 / HIPAA Breach / PCI Scope (July 14, 2026)
+
+### Summary
+
+Closed the "No Compliance Report Templates" gap from `ENTERPRISE_AUDIT.md` (was P2, 1 week estimate). The existing on-demand reporting pipeline (`POST /api/v1/reports/generate` → Celery task → branded PDF/CSV via `ExportService`) previously only produced generic summary/trends/violators-style analytics reports — nothing shaped for an actual regulatory filing. Three new report types close that gap.
+
+### Added
+
+- **`server/app/services/compliance_report_service.py`** (new) — `ComplianceReportService` with three data-fetching methods:
+  - `get_gdpr_article_30_data()` — Records of Processing Activities: derives processing activities from active policies, categories of personal data from `DataLabel`, categories of data subjects from event department breakdowns, and retention periods from `RetentionConfig`. Controller identity, recipients, and third-country transfers are **not** in the schema and are returned explicitly flagged `manual_review_required: true` rather than fabricated.
+  - `get_hipaa_breach_notification_data()` — surfaces candidate PHI-related incidents via keyword-matched classification labels, distinguishing `action=blocked/quarantined` (prevented) from `action=allowed/logged` (likely exposure). The legal risk-of-harm determination required by 45 CFR 164.402 is explicitly left for a privacy officer, not decided by the system.
+  - `get_pci_dss_scope_data()` — DLP-visibility CDE scope: PCI-tagged policies, the endpoints they're applied to (via `PolicyAgent`), real cardholder-data-pattern detections in the period, and flagged `ClassifiedFile` rows. Framed throughout as DLP visibility, not a certified QSA scope determination.
+- **`server/app/services/export_service.py`** — three new PDF content builders (`_create_gdpr_art30_pdf_content`, `_create_hipaa_breach_pdf_content`, `_create_pci_scope_pdf_content`) registered in the existing `export_to_pdf` dispatch table, plus matching CSV branches in `export_analytics_to_csv`. Added a shared `_manual_review_box()` helper that renders unanswerable legal/identity fields in an amber-bordered "REQUIRES MANUAL COMPLETION" callout so they can never be mistaken for a completed answer.
+- **`server/app/api/v1/reports.py`** / **`server/app/tasks/reporting_tasks.py`** — new `report_type` slugs `gdpr_art30`, `hipaa_breach`, `pci_scope` threaded through the API's `valid_types` gate and the Celery task's `_fetch_report_data()` dispatch + PDF title map.
+- **`dashboard/src/pages/Reports.tsx`** — three new entries in the report-type selection grid.
+- **`server/tests/test_compliance_reports.py`** (new, 12 tests) — covers real-data population for all three report types, keyword-match filtering (PHI/PCI included vs. excluded), exposure-vs-prevented classification for HIPAA, and — the important half — that every field the schema can't answer comes back `None` + `manual_review_required: true` rather than guessed.
+
+### Verification
+
+Ran the 12 new tests against the in-memory SQLite test DB (all passing) and separately generated real PDF/CSV output for all three types — including empty-state (no matching policies/events/incidents) — via direct `ExportService` calls with data shaped exactly like each fetcher's real output, confirming valid non-empty PDFs (`%PDF` header) and correct CSV columns with no rendering exceptions.
+
+### Caveat
+
+Keyword-based PHI/PCI matching (`"phi"`, `"hipaa"`, `"pci"`, `"credit_card"`, etc. against `DataLabel.name`) is a best-effort filter, not a certified detector — it only catches what a DataLabel was actually named. No human compliance reviewer has looked at an actual generated report yet; have a DPO/privacy officer sanity-check the first real one before relying on it externally. See `ENTERPRISE_AUDIT.md` gap #8 for the full breakdown of what's automated versus what's flagged for manual completion.
+
+---
+
 ## 📄 PDF Content Extraction (Text Layer + Scanned-Page OCR) (July 14, 2026)
 
 ### Summary

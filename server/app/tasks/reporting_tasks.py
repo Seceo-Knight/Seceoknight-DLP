@@ -172,6 +172,20 @@ async def _fetch_report_data(
     Fetch analytics data for a single report type.
     Maps the API's report_types to AnalyticsService methods.
     """
+    if report_type in ("gdpr_art30", "hipaa_breach", "pci_scope"):
+        # Compliance report templates query the DB directly via
+        # ComplianceReportService rather than going through AnalyticsService.
+        if service.db is None:
+            return {}
+        from app.services.compliance_report_service import ComplianceReportService
+        compliance = ComplianceReportService(service.db)
+        if report_type == "gdpr_art30":
+            return await compliance.get_gdpr_article_30_data(start_date, end_date)
+        elif report_type == "hipaa_breach":
+            return await compliance.get_hipaa_breach_notification_data(start_date, end_date)
+        else:
+            return await compliance.get_pci_dss_scope_data(start_date, end_date)
+
     analytics = service.analytics
     if analytics is None:
         return {}
@@ -261,6 +275,9 @@ async def _run_custom_reports(
                         "violators": "Top Violators Report",
                         "policies": "Policy Analysis Report",
                         "compliance": "Compliance Overview Report",
+                        "gdpr_art30": "GDPR Article 30 — Records of Processing Activities",
+                        "hipaa_breach": "HIPAA Breach Notification Report",
+                        "pci_scope": "PCI DSS Scope Report",
                     }
                     title = f"{report_name} — {type_titles.get(report_type, report_type.title() + ' Report')}"
                     try:

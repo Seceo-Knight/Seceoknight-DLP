@@ -33,6 +33,14 @@ _Date: June 2026 — updated July 14, 2026_
 > compiled or run on a real Windows machine — verify on an actual endpoint
 > before shipping to production.
 
+> **Update (July 14, 2026):** Gap #8, "No Compliance Report Templates," is
+> resolved — GDPR Article 30, HIPAA breach notification, and PCI DSS scope
+> report types are now generatable from the dashboard's Reports page. See
+> gap #8 below for the specifics of what's genuinely automated versus what's
+> flagged for manual DPO/privacy-officer completion; this does not by itself
+> change the Audit & Compliance domain score below, since that score also
+> reflects the still-open audit-logging and encryption-at-rest gaps.
+
 ---
 
 ## Summary Score
@@ -178,12 +186,15 @@ _Date: June 2026 — updated July 14, 2026_
 
 ---
 
-#### 8. No Compliance Report Templates
-**What's missing:** The export endpoint produces raw event CSVs. There are no pre-built GDPR Article 30 records-of-processing reports, HIPAA breach notification templates, or PCI DSS scope reports.
+#### 8. ✅ RESOLVED (July 14, 2026) — Compliance Report Templates
+**Was missing:** The export endpoint produced raw event CSVs only. No pre-built GDPR Article 30 records-of-processing report, HIPAA breach notification template, or PCI DSS scope report existed.
 
-**Enterprise standard:** Purview ships 150+ compliance templates out of the box.
+**Now:** `ComplianceReportService` (`server/app/services/compliance_report_service.py`) adds three new report types — `gdpr_art30`, `hipaa_breach`, `pci_scope` — wired through the existing on-demand reporting pipeline (`POST /api/v1/reports/generate` → Celery → branded PDF via `ExportService` + CSV export), selectable from the dashboard's Reports page alongside the existing report types.
 
-**Fix:** Add a `reporting_service` that assembles events, policies, and users into named compliance report formats. About 1 week.
+**Caveat — read before relying on these for an actual filing or audit:**
+- These reports assemble everything the platform genuinely knows (active policies, DataLabel categories, retention config, events, incidents, agents, classification labels) into the correct *structure* for each regulation. They deliberately do **not** invent facts the schema has no way to know: GDPR controller/DPO identity, categories of recipients, and third-country transfer mechanisms come back explicitly marked `manual_review_required: true` for a DPO to fill in; the HIPAA report's risk-of-harm conclusion and notification dates are likewise left for a privacy officer, since 45 CFR 164.402's breach determination is a legal judgment call this system cannot make.
+- HIPAA/PCI candidate matching is a **keyword filter** against classification-label names (`"phi"`, `"hipaa"`, `"pci"`, `"credit_card"`, etc.) — not a certified PHI/cardholder-data detector. It will miss anything whose DataLabel wasn't named with a recognizable keyword, and the PCI scope report is explicitly framed as "DLP visibility into the CDE," not a formal QSA-validated scope determination (network segments and payment infrastructure without an installed agent are invisible to it).
+- Covered by `server/tests/test_compliance_reports.py` (12 tests) exercising both the real-data paths and the empty/manual-field-flagging paths against an in-memory DB, plus a manual PDF/CSV rendering smoke test for all three types (including empty-state) — but no human compliance reviewer has looked at the actual generated PDFs yet. Have your DPO/privacy officer sanity-check the first real one before using it externally.
 
 ---
 
@@ -212,7 +223,7 @@ Native file-selection detection for browser uploads already exists (see Agent Pl
 | P1 | Build + test new agent OCR/PDF code on real Windows | 1–2 days | Verifies the July 14 file/USB/clipboard/PDF OCR wiring before production |
 | P2 | Email DLP (Exchange/Gmail content scan) | 1–2 weeks | Closes email exfiltration channel |
 | P2 | Field-level DB encryption | 2 days | HIPAA/PCI-DSS compliance |
-| P2 | Compliance report templates | 1 week | Enterprise compliance reporting |
+| ~~P2~~ | ~~Compliance report templates~~ | ~~1 week~~ | **Done July 14, 2026** — see gap #8 |
 | P3 | macOS agent | 3–4 weeks | macOS endpoint coverage |
 | P3 | Browser extension (content-level) | 2–3 weeks | Payload-level web upload coverage |
 | P3 | EV code signing for driver | Process | Production kernel driver deployment |
