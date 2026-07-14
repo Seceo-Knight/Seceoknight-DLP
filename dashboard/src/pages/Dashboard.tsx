@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   Server, AlertCircle, FileText, ShieldAlert, Shield, Activity,
-  TrendingUp,
+  TrendingUp, LayoutDashboard,
 } from 'lucide-react'
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -13,6 +13,9 @@ import {
 import StatsCard from '@/components/StatsCard'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
+import { PageHeader } from '@/components/ui/page-header'
+import { Card } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   getStats, getEventTimeSeries, getEventsByType, getEventsBySeverity,
 } from '@/lib/api'
@@ -31,65 +34,40 @@ const formatDateTimeIST = (d: Date) =>
     timeZone: IST_TIMEZONE, dateStyle: 'long', timeStyle: 'long',
   }).format(d)
 
-// ── Color tokens ────────────────────────────────────────────────────────
-// Stable severity → hex map. Critical+High lean red/orange (alarm),
-// medium amber, low blue. Driven by spec PART 1.
-const SEVERITY_COLORS: Record<string, string> = {
-  critical: '#dc2626',
-  high:     '#ea580c',
-  medium:   '#f59e0b',
-  low:      '#3b82f6',
-  info:     '#64748b',
-}
-
-// Distinct, harmonious palette for event-type pie segments. Avoids the
-// default rainbow and keeps colours from clashing with the severity
-// red/orange family.
+// Distinct, harmonious palette for event-type pie segments.
 const TYPE_PALETTE = [
-  '#4f46e5', '#0ea5e9', '#10b981', '#f59e0b',
-  '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6',
+  '#5B7EFF', '#2DD4BF', '#FB923C', '#F87171', '#7B9EFF', '#34D399', '#FBBF24', '#60A5FA',
 ]
 
-// ── Custom tooltips (PART 4 hover tooltips) ─────────────────────────────
-function ChartTooltip({
-  active, payload, label, labelFormatter, drillHint,
-}: any) {
+const SEVERITY_COLORS: Record<string, string> = {
+  critical: '#F87171',
+  high:     '#FB923C',
+  medium:   '#FBBF24',
+  low:      '#5B7EFF',
+  info:     '#A0A0B8',
+}
+
+// ── Custom tooltip ───────────────────────────────────────────────────────
+function ChartTooltip({ active, payload, label, labelFormatter, drillHint }: any) {
   if (!active || !payload?.length) return null
   return (
     <div
-      className="rounded-md px-3 py-2 text-xs"
-      style={{
-        background: RECHARTS_CONFIG.tooltipBackground,
-        border: `0.5px solid ${RECHARTS_CONFIG.tooltipBorder}`,
-        color: CHART_COLORS.text.primary,
-        boxShadow: 'none',
-      }}
+      className="rounded-md border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-lg"
     >
       {label !== undefined && (
-        <div className="font-medium mb-1" style={{ color: CHART_COLORS.text.secondary }}>
+        <div className="mb-1 font-medium text-muted-foreground">
           {labelFormatter ? labelFormatter(label) : label}
         </div>
       )}
       {payload.map((p: any, i: number) => (
-        <div key={i} className="flex items-center gap-2 tabular-nums" style={{ color: CHART_COLORS.text.primary }}>
-          <span
-            className="inline-block w-2 h-2 rounded-full"
-            style={{ background: p.color || p.payload?.fill || CHART_COLORS.primary }}
-          />
-          <span style={{ color: CHART_COLORS.text.secondary }}>{p.name ?? p.dataKey}:</span>
-          <span className="font-semibold">{Number(p.value).toLocaleString()}</span>
+        <div key={i} className="flex items-center gap-2 tabular-nums">
+          <span className="inline-block h-2 w-2 rounded-full" style={{ background: p.color || p.payload?.fill || CHART_COLORS.primary }} />
+          <span className="text-muted-foreground">{p.name ?? p.dataKey}:</span>
+          <span className="font-semibold text-foreground">{Number(p.value).toLocaleString()}</span>
         </div>
       ))}
-      {/* PART 5: surface "click to drill down" affordance in the tooltip
-          itself so the action is discoverable without a separate hint. */}
       {drillHint && (
-        <div
-          className="mt-1.5 pt-1.5 text-[10px] font-medium uppercase tracking-wider"
-          style={{
-            borderTop: `1px solid ${CHART_COLORS.backgrounds.tertiary}`,
-            color: CHART_COLORS.primary,
-          }}
-        >
+        <div className="mt-1.5 border-t border-border pt-1.5 text-[10px] font-medium uppercase tracking-wider text-primary">
           ↗ Click to filter by {drillHint}
         </div>
       )}
@@ -122,14 +100,12 @@ export default function Dashboard() {
     queryFn: getEventsBySeverity,
   })
 
-  // Derived: agent health % for the green stat card subtext.
   const agentHealth = useMemo(() => {
     if (!stats?.total_agents) return null
     const pct = (stats.active_agents / stats.total_agents) * 100
     return Number.isFinite(pct) ? Math.round(pct) : null
   }, [stats])
 
-  // Block rate for the orange stat card subtext.
   const blockRate = useMemo(() => {
     if (!stats?.total_events) return null
     const pct = ((stats.blocked_events ?? 0) / stats.total_events) * 100
@@ -142,30 +118,25 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="space-y-8">
-      {/* Header */}
-      <header className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">
-            Security Operations
-          </h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Real-time view of DLP activity across endpoints and channels.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-gray-500">
-          <span className="live-dot" />
-          <span className="font-medium text-gray-700">Live</span>
-          <span aria-hidden>·</span>
-          <span>Refreshes every 5s</span>
-          {isFetching && (
-            <span className="text-indigo-600 font-medium ml-1">syncing…</span>
-          )}
-        </div>
-      </header>
+    <div className="space-y-6">
+      <PageHeader
+        icon={LayoutDashboard}
+        title="Security Operations"
+        description="Real-time view of DLP activity across endpoints and channels."
+        actions={
+          <div className="flex items-center gap-2 rounded-full border border-success/30 bg-success/10 px-3 py-1.5 text-xs font-medium text-success">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-success" />
+            </span>
+            Live · refreshes every 5s
+            {isFetching && <span className="ml-1 text-primary">syncing…</span>}
+          </div>
+        }
+      />
 
-      {/* Stat cards — every one is a drill-down anchor (PART 1) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
+      {/* Stat cards */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatsCard
           title="Total Events"
           value={(stats?.total_events ?? 0).toLocaleString()}
@@ -180,11 +151,7 @@ export default function Dashboard() {
           value={stats?.active_agents ?? 0}
           icon={Server}
           color="green"
-          subtext={
-            agentHealth !== null
-              ? `${agentHealth}% of ${stats?.total_agents ?? 0} online`
-              : 'awaiting heartbeats'
-          }
+          subtext={agentHealth !== null ? `${agentHealth}% of ${stats?.total_agents ?? 0} online` : 'awaiting heartbeats'}
           to="/agents"
           drillTooltip="Open the agents view"
         />
@@ -202,26 +169,15 @@ export default function Dashboard() {
           value={(stats?.blocked_events ?? 0).toLocaleString()}
           icon={ShieldAlert}
           color="orange"
-          subtext={
-            blockRate !== null
-              ? `${blockRate}% block rate`
-              : 'enforcement engaged'
-          }
+          subtext={blockRate !== null ? `${blockRate}% block rate` : 'enforcement engaged'}
           to={drillDownUrl({ action: 'blocked' })}
           drillTooltip="Investigate blocked events"
         />
       </div>
 
       {/* Row 1 — events over time + by type */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
-        {/* Area chart: spans 2/3 on lg */}
-        <ChartCard
-          title="Events Over Time"
-          subtitle="Hourly volume across all DLP modules"
-          icon={Activity}
-          accent="indigo"
-          className="lg:col-span-2"
-        >
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <ChartCard title="Events Over Time" subtitle="Hourly volume across all DLP modules" icon={Activity} accent="indigo" className="lg:col-span-2">
           {timeSeriesLoading ? (
             <ChartSkeleton />
           ) : timeSeries.length === 0 ? (
@@ -244,19 +200,10 @@ export default function Dashboard() {
                   tickFormatter={(v) => formatTimeIST(new Date(v))}
                   minTickGap={32}
                 />
-                <YAxis
-                  tick={{ fontSize: 11, fill: tickStyle.fill }}
-                  tickLine={false}
-                  axisLine={false}
-                  width={40}
-                />
+                <YAxis tick={{ fontSize: 11, fill: tickStyle.fill }} tickLine={false} axisLine={false} width={40} />
                 <Tooltip
                   cursor={{ stroke: RECHARTS_CONFIG.cursorStroke, strokeWidth: 1, strokeDasharray: '3 3', opacity: RECHARTS_CONFIG.cursorOpacity }}
-                  content={
-                    <ChartTooltip
-                      labelFormatter={(v: any) => formatDateTimeIST(new Date(v))}
-                    />
-                  }
+                  content={<ChartTooltip labelFormatter={(v: any) => formatDateTimeIST(new Date(v))} />}
                 />
                 <Area
                   type="monotone"
@@ -272,13 +219,7 @@ export default function Dashboard() {
           )}
         </ChartCard>
 
-        {/* Pie: spans 1/3 */}
-        <ChartCard
-          title="Events by Type"
-          subtitle="Breakdown of channels"
-          icon={TrendingUp}
-          accent="indigo"
-        >
+        <ChartCard title="Events by Type" subtitle="Breakdown of channels" icon={TrendingUp} accent="indigo">
           {typeLoading ? (
             <ChartSkeleton />
           ) : eventsByType.length === 0 ? (
@@ -298,7 +239,6 @@ export default function Dashboard() {
                   nameKey="type"
                   stroke={CHART_COLORS.backgrounds.surface}
                   strokeWidth={2}
-                  // PART 2: clicking a segment drills into that module.
                   onClick={(d: any) => {
                     const v = d?.payload?.type ?? d?.type
                     if (v) navigate(drillDownUrl({ module: String(v) }))
@@ -306,40 +246,27 @@ export default function Dashboard() {
                   cursor="pointer"
                 >
                   {eventsByType.map((_: any, idx: number) => (
-                    <Cell
-                      key={idx}
-                      fill={TYPE_PALETTE[idx % TYPE_PALETTE.length]}
-                      style={{ cursor: 'pointer', transition: 'opacity .15s' }}
-                    />
+                    <Cell key={idx} fill={TYPE_PALETTE[idx % TYPE_PALETTE.length]} style={{ cursor: 'pointer', transition: 'opacity .15s' }} />
                   ))}
                 </Pie>
                 <Tooltip content={<ChartTooltip drillHint="module" />} />
               </PieChart>
             </ResponsiveContainer>
           )}
-          {/* Custom legend — also clickable as a drill-down (PART 5
-              "highlight clickable elements" applies to legend items too). */}
           {eventsByType.length > 0 && (
             <ul className="mt-4 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
               {eventsByType.slice(0, 6).map((row: any, i: number) => (
                 <li
                   key={i}
-                  className="flex items-center gap-2 min-w-0 group cursor-pointer rounded px-1 py-0.5 -mx-1 hover:bg-indigo-50 transition-colors"
+                  className="group -mx-1 flex min-w-0 cursor-pointer items-center gap-2 rounded px-1 py-0.5 transition-colors hover:bg-accent"
                   title={`${DRILL_TOOLTIP}: module=${row.type}`}
-                  onClick={() =>
-                    navigate(drillDownUrl({ module: String(row.type ?? 'unknown') }))
-                  }
+                  onClick={() => navigate(drillDownUrl({ module: String(row.type ?? 'unknown') }))}
                 >
-                  <span
-                    className="h-2 w-2 rounded-full shrink-0"
-                    style={{ background: TYPE_PALETTE[i % TYPE_PALETTE.length] }}
-                  />
-                  <span className="text-gray-700 group-hover:text-indigo-700 truncate" title={row.type}>
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: TYPE_PALETTE[i % TYPE_PALETTE.length] }} />
+                  <span className="truncate text-muted-foreground group-hover:text-foreground" title={row.type}>
                     {row.type || 'unknown'}
                   </span>
-                  <span className="ml-auto font-mono text-gray-500 tabular-nums">
-                    {Number(row.count).toLocaleString()}
-                  </span>
+                  <span className="ml-auto font-mono tabular-nums text-muted-foreground">{Number(row.count).toLocaleString()}</span>
                 </li>
               ))}
             </ul>
@@ -348,14 +275,8 @@ export default function Dashboard() {
       </div>
 
       {/* Row 2 — severity bar + DLP actions */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
-        <ChartCard
-          title="Events by Severity"
-          subtitle="Distribution of risk levels"
-          icon={AlertCircle}
-          accent="red"
-          className="lg:col-span-2"
-        >
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <ChartCard title="Events by Severity" subtitle="Distribution of risk levels" icon={AlertCircle} accent="red" className="lg:col-span-2">
           {severityLoading ? (
             <ChartSkeleton />
           ) : eventsBySeverity.length === 0 ? (
@@ -372,26 +293,12 @@ export default function Dashboard() {
                   ))}
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={RECHARTS_CONFIG.gridStroke} vertical={false} />
-                <XAxis
-                  dataKey="severity"
-                  tick={{ fontSize: 11, fill: tickStyle.fill }}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 11, fill: tickStyle.fill }}
-                  tickLine={false}
-                  axisLine={false}
-                  width={40}
-                />
-                <Tooltip
-                  cursor={{ fill: 'rgba(91, 126, 255, 0.08)' }}
-                  content={<ChartTooltip drillHint="severity" />}
-                />
+                <XAxis dataKey="severity" tick={{ fontSize: 11, fill: tickStyle.fill }} tickLine={false} axisLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: tickStyle.fill }} tickLine={false} axisLine={false} width={40} />
+                <Tooltip cursor={{ fill: 'rgba(91, 126, 255, 0.08)' }} content={<ChartTooltip drillHint="severity" />} />
                 <Bar
                   dataKey="count"
                   radius={[8, 8, 0, 0]}
-                  // PART 2: clicking a bar drills into that severity.
                   onClick={(d: any) => {
                     const v = d?.payload?.severity ?? d?.severity
                     if (v) navigate(drillDownUrl({ severity: String(v) }))
@@ -399,11 +306,7 @@ export default function Dashboard() {
                   cursor="pointer"
                 >
                   {eventsBySeverity.map((entry: any, idx: number) => (
-                    <Cell
-                      key={idx}
-                      fill={`url(#grad-sev-${entry.severity})`}
-                      style={{ cursor: 'pointer' }}
-                    />
+                    <Cell key={idx} fill={`url(#grad-sev-${entry.severity})`} style={{ cursor: 'pointer' }} />
                   ))}
                 </Bar>
               </BarChart>
@@ -435,87 +338,59 @@ function ChartCard({
   children: React.ReactNode
 }) {
   const accentMap = {
-    indigo: 'from-indigo-500 to-blue-500',
-    red:    'from-red-500 to-rose-500',
-    orange: 'from-orange-500 to-amber-500',
-    green:  'from-emerald-500 to-green-500',
+    indigo: 'from-primary to-info',
+    red:    'from-critical to-destructive',
+    orange: 'from-warning to-critical',
+    green:  'from-success to-primary',
   }
   return (
-    <section className={cn('card-static relative overflow-hidden', className)}>
-      <div className={cn(
-        'absolute inset-x-0 top-0 h-[2px] rounded-t-2xl bg-gradient-to-r',
-        accentMap[accent],
-      )} />
-      <header className="flex items-start justify-between gap-3 mb-4">
+    <Card className={cn('relative overflow-hidden p-5', className)}>
+      <div className={cn('absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r', accentMap[accent])} />
+      <header className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h3 className="section-title flex items-center gap-2">
-            {Icon && <Icon className="h-4 w-4 text-gray-500" />}
+          <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
             {title}
           </h3>
-          {subtitle && <p className="mt-0.5 text-xs text-gray-500">{subtitle}</p>}
+          {subtitle && <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>}
         </div>
       </header>
       {children}
-    </section>
+    </Card>
   )
 }
 
 // ── DLP actions panel — three rich rows with hover state ────────────────
-function ActionsPanel({
-  stats,
-}: {
-  stats: { blocked: number; critical: number; total: number }
-}) {
+function ActionsPanel({ stats }: { stats: { blocked: number; critical: number; total: number } }) {
   const rows: Array<{
     label: string
     sub: string
     value: number
     icon: React.ComponentType<{ className?: string }>
-    accent: 'red' | 'orange' | 'indigo'
+    accent: 'critical' | 'warning' | 'primary'
     to: string
   }> = [
-    {
-      label: 'Blocked Events',
-      sub: 'Prevented by policy enforcement',
-      value: stats.blocked,
-      icon: ShieldAlert,
-      accent: 'red',
-      to: drillDownUrl({ action: 'blocked' }),
-    },
-    {
-      label: 'Critical Alerts',
-      sub: 'High-severity events outstanding',
-      value: stats.critical,
-      icon: AlertCircle,
-      accent: 'orange',
-      to: drillDownUrl({ severity: 'critical' }),
-    },
-    {
-      label: 'Total Events',
-      sub: 'Across every monitored channel',
-      value: stats.total,
-      icon: FileText,
-      accent: 'indigo',
-      to: drillDownUrl({}),
-    },
+    { label: 'Blocked Events',  sub: 'Prevented by policy enforcement',  value: stats.blocked,  icon: ShieldAlert, accent: 'critical', to: drillDownUrl({ action: 'blocked' }) },
+    { label: 'Critical Alerts', sub: 'High-severity events outstanding', value: stats.critical, icon: AlertCircle, accent: 'warning',  to: drillDownUrl({ severity: 'critical' }) },
+    { label: 'Total Events',    sub: 'Across every monitored channel',   value: stats.total,    icon: FileText,    accent: 'primary',  to: drillDownUrl({}) },
   ]
 
   return (
-    <section className="card-static relative overflow-hidden">
-      <div className="absolute inset-x-0 top-0 h-[2px] rounded-t-2xl bg-gradient-to-r from-indigo-500 via-orange-500 to-red-500" />
+    <Card className="relative overflow-hidden p-5">
+      <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-primary via-warning to-critical" />
       <header className="mb-4">
-        <h3 className="section-title flex items-center gap-2">
-          <Shield className="h-4 w-4 text-gray-500" />
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <Shield className="h-4 w-4 text-muted-foreground" />
           DLP Enforcement
         </h3>
-        <p className="mt-0.5 text-xs text-gray-500">Live policy outcomes — click to investigate</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">Live policy outcomes — click to investigate</p>
       </header>
-      <ul className="space-y-3">
+      <ul className="space-y-2.5">
         {rows.map((r) => (
           <ActionRow key={r.label} {...r} />
         ))}
       </ul>
-    </section>
+    </Card>
   )
 }
 
@@ -526,16 +401,10 @@ function ActionRow({
   sub: string
   value: number
   icon: React.ComponentType<{ className?: string }>
-  accent: 'red' | 'orange' | 'indigo'
+  accent: 'critical' | 'warning' | 'primary'
   to: string
 }) {
   const navigate = useNavigate()
-  const map = {
-    red:    { bg: 'from-red-50 to-rose-50',         text: 'text-red-700',     iconBg: 'bg-red-100 text-red-600',         border: 'border-red-100' },
-    orange: { bg: 'from-orange-50 to-amber-50',     text: 'text-orange-700',  iconBg: 'bg-orange-100 text-orange-600',   border: 'border-orange-100' },
-    indigo: { bg: 'from-indigo-50 to-blue-50',      text: 'text-indigo-700',  iconBg: 'bg-indigo-100 text-indigo-600',   border: 'border-indigo-100' },
-  } as const
-  const m = map[accent]
   return (
     <li
       onClick={() => navigate(to)}
@@ -550,40 +419,34 @@ function ActionRow({
       title={`${DRILL_TOOLTIP}: ${label}`}
       aria-label={`${label}: ${value.toLocaleString()}. ${DRILL_TOOLTIP}.`}
       className={cn(
-        'group relative flex items-center justify-between gap-3 p-3 rounded-xl border cursor-pointer',
-        'bg-gradient-to-br', m.bg, m.border,
-        'transition-all duration-200 hover:shadow-md hover:-translate-y-0.5',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2',
+        'group relative flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border p-3',
+        `bg-${accent}/5`,
+        'transition-all duration-200 hover:-translate-y-0.5 hover:bg-accent',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
       )}
     >
-      <div className="flex items-center gap-3 min-w-0">
-        <div className={cn('h-10 w-10 rounded-lg flex items-center justify-center', m.iconBg)}>
-          <Icon className="h-5 w-5" />
+      <div className="flex min-w-0 items-center gap-3">
+        <div className={cn('flex h-9 w-9 items-center justify-center rounded-lg', `bg-${accent}/15 text-${accent}`)}>
+          <Icon className="h-4.5 w-4.5" />
         </div>
         <div className="min-w-0">
-          <p className="font-semibold text-gray-900 truncate">{label}</p>
-          <p className="text-xs text-gray-600 truncate">{sub}</p>
+          <p className="truncate text-sm font-semibold text-foreground">{label}</p>
+          <p className="truncate text-xs text-muted-foreground">{sub}</p>
         </div>
       </div>
-      <span className={cn('text-2xl font-bold tabular-nums', m.text)}>
-        {value.toLocaleString()}
-      </span>
+      <span className={cn('text-xl font-bold tabular-nums', `text-${accent}`)}>{value.toLocaleString()}</span>
     </li>
   )
 }
 
 // ── State stand-ins ────────────────────────────────────────────────────
 function ChartSkeleton() {
-  return (
-    <div className="h-[300px] flex items-center justify-center">
-      <div className="h-full w-full rounded-lg bg-gradient-to-br from-gray-100 to-gray-50 animate-pulse" />
-    </div>
-  )
+  return <Skeleton className="h-[300px] w-full" />
 }
 
 function ChartEmpty() {
   return (
-    <div className="h-[300px] flex items-center justify-center text-sm text-gray-400 italic">
+    <div className="flex h-[300px] items-center justify-center text-sm italic text-muted-foreground">
       No data yet — agents will populate this as events arrive.
     </div>
   )

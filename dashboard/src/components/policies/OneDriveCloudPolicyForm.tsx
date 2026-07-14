@@ -168,16 +168,16 @@ export default function OneDriveCloudPolicyForm({
 
         {loading ? (
           <div className="flex items-center justify-center p-8 bg-gray-900/30 rounded-lg border border-dashed border-gray-700">
-            <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         ) : connections.length === 0 ? (
           <div className="text-center p-8 bg-gray-900/30 rounded-lg border border-dashed border-gray-700 space-y-3">
-            <div className="inline-flex p-3 rounded-full bg-gray-800 text-gray-400">
+            <div className="inline-flex p-3 rounded-full bg-gray-800 text-muted-foreground/70">
               <Cloud className="h-6 w-6" />
             </div>
             <div>
-              <p className="font-medium text-gray-300">No accounts connected</p>
-              <p className="text-sm text-gray-500">Connect a OneDrive account to start monitoring</p>
+              <p className="font-medium text-muted-foreground/50">No accounts connected</p>
+              <p className="text-sm text-muted-foreground">Connect a OneDrive account to start monitoring</p>
             </div>
             <button
               onClick={handleConnect}
@@ -214,22 +214,22 @@ export default function OneDriveCloudPolicyForm({
                   <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold text-lg ${
                     config.connectionId === conn.id
                       ? 'bg-indigo-600 text-white'
-                      : 'bg-gray-700 text-gray-400'
+                      : 'bg-gray-700 text-muted-foreground/70'
                   }`}>
                     {conn.connection_name?.[0] || conn.microsoft_user_email?.[0] || 'O'}
                   </div>
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className={`text-sm font-medium truncate ${
-                    config.connectionId === conn.id ? 'text-white' : 'text-gray-300'
+                    config.connectionId === conn.id ? 'text-white' : 'text-muted-foreground/50'
                   }`}>
                     {conn.connection_name || 'OneDrive'}
                   </p>
-                  <p className="text-sm text-gray-500 truncate">
+                  <p className="text-sm text-muted-foreground truncate">
                     {conn.microsoft_user_email}
                   </p>
                   {conn.monitoring_since && (
-                    <p className="text-xs text-gray-500 truncate">
+                    <p className="text-xs text-muted-foreground truncate">
                       Monitoring since {formatDate(conn.monitoring_since)}
                     </p>
                   )}
@@ -246,7 +246,7 @@ export default function OneDriveCloudPolicyForm({
             <button
               onClick={handleConnect}
               disabled={connecting}
-              className="relative rounded-lg border border-dashed border-gray-600 p-4 flex items-center justify-center space-x-2 hover:border-gray-500 hover:bg-gray-800 transition-all text-gray-400 hover:text-gray-300"
+              className="relative rounded-lg border border-dashed border-gray-600 p-4 flex items-center justify-center space-x-2 hover:border-gray-500 hover:bg-gray-800 transition-all text-muted-foreground/70 hover:text-muted-foreground/50"
             >
               <Plus className="h-5 w-5" />
               <span className="text-sm font-medium">Add Another</span>
@@ -261,7 +261,7 @@ export default function OneDriveCloudPolicyForm({
           <label className="block text-sm font-medium text-gray-200">
             Protected Folders
           </label>
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-muted-foreground/70">
             Select the folders you want to monitor for activity.
           </p>
           
@@ -274,13 +274,13 @@ export default function OneDriveCloudPolicyForm({
           <div className="mt-4 rounded-lg border border-gray-700 bg-gray-900/40 p-4 space-y-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-sm text-gray-300">
+                <p className="text-sm text-muted-foreground/50">
                   Monitoring since{' '}
                   <span className="font-medium text-white">
                     {monitoringSince ? formatDate(monitoringSince) : 'Not initialized yet'}
                   </span>
                 </p>
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-muted-foreground">
                   Only OneDrive activity after this timestamp will appear in the dashboard.
                 </p>
               </div>
@@ -303,7 +303,7 @@ export default function OneDriveCloudPolicyForm({
             </div>
 
             <div className="border border-gray-800 rounded-md overflow-hidden">
-              <div className="bg-gray-800/60 px-3 py-2 text-xs text-gray-400 flex items-center justify-between">
+              <div className="bg-gray-800/60 px-3 py-2 text-xs text-muted-foreground/70 flex items-center justify-between">
                 <span>Selected Folders</span>
                 {baselineLoading && (
                   <span className="flex items-center gap-1 text-indigo-300">
@@ -313,13 +313,13 @@ export default function OneDriveCloudPolicyForm({
                 )}
               </div>
               {selectedFolderBaselines.length === 0 ? (
-                <div className="p-4 text-xs text-gray-500">No folders selected yet.</div>
+                <div className="p-4 text-xs text-muted-foreground">No folders selected yet.</div>
               ) : (
                 <div className="divide-y divide-gray-800 text-xs">
                   {selectedFolderBaselines.map((folder) => (
                     <div key={folder.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-3 py-2">
-                      <div className="text-gray-300 font-medium truncate">{folder.name}</div>
-                      <div className="text-gray-500 mt-1 sm:mt-0">
+                      <div className="text-muted-foreground/50 font-medium truncate">{folder.name}</div>
+                      <div className="text-muted-foreground mt-1 sm:mt-0">
                         {folder.baseline ? formatDate(folder.baseline) : 'Pending baseline'}
                       </div>
                     </div>
@@ -347,7 +347,7 @@ export default function OneDriveCloudPolicyForm({
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border ${
                 !customPolling && config.pollingInterval === interval
                   ? 'bg-indigo-600 border-indigo-600 text-white'
-                  : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
+                  : 'bg-gray-800 border-gray-700 text-muted-foreground/50 hover:bg-gray-700'
               }`}
             >
               {interval} min
@@ -358,7 +358,7 @@ export default function OneDriveCloudPolicyForm({
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border ${
               customPolling
                 ? 'bg-indigo-600 border-indigo-600 text-white'
-                : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
+                : 'bg-gray-800 border-gray-700 text-muted-foreground/50 hover:bg-gray-700'
             }`}
           >
             Custom
@@ -373,13 +373,13 @@ export default function OneDriveCloudPolicyForm({
               max="1440"
               value={config.pollingInterval}
               onChange={(e) => updateConfig('pollingInterval', Math.max(1, parseInt(e.target.value) || 1))}
-              className="w-24 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+              className="w-24 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
             />
-            <span className="text-sm text-gray-400">minutes</span>
+            <span className="text-sm text-muted-foreground/70">minutes</span>
           </div>
         )}
         
-        <p className="text-xs text-gray-500 mt-1">
+        <p className="text-xs text-muted-foreground mt-1">
           How frequently the system checks OneDrive for new activity.
         </p>
       </div>

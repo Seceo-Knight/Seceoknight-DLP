@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Shield, Plus, Edit, Trash2, Power, PowerOff, TestTube, Search, Filter } from 'lucide-react'
+import { Shield, Plus, Edit, Trash2, Power, PowerOff, TestTube, Search } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import RuleModal from '@/components/rules/RuleModal'
@@ -107,8 +107,8 @@ export default function Rules() {
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Classification Rules</h1>
-          <p className="mt-1 text-sm text-gray-600">
+          <h1 className="text-2xl font-bold text-foreground">Classification Rules</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             Manage detection rules for data classification
           </p>
         </div>
@@ -132,51 +132,51 @@ export default function Rules() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="card">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <Shield className="h-5 w-5 text-blue-600" />
+              <div className="p-2 bg-blue-500/15 rounded-lg">
+                <Shield className="h-5 w-5 text-blue-400" />
               </div>
               <div>
-                <p className="text-sm text-gray-600">Total Rules</p>
-                <p className="text-2xl font-bold text-gray-900">{stats.total_rules}</p>
+                <p className="text-sm text-muted-foreground">Total Rules</p>
+                <p className="text-2xl font-bold text-foreground">{stats.total_rules}</p>
               </div>
             </div>
           </div>
           <div className="card">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-green-100 rounded-lg">
-                <Power className="h-5 w-5 text-green-600" />
+              <div className="p-2 bg-green-500/15 rounded-lg">
+                <Power className="h-5 w-5 text-green-400" />
               </div>
               <div>
-                <p className="text-sm text-gray-600">Enabled</p>
-                <p className="text-2xl font-bold text-green-600">{stats.enabled_rules}</p>
+                <p className="text-sm text-muted-foreground">Enabled</p>
+                <p className="text-2xl font-bold text-green-400">{stats.enabled_rules}</p>
               </div>
             </div>
           </div>
           <div className="card">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-gray-100 rounded-lg">
-                <PowerOff className="h-5 w-5 text-gray-600" />
+              <div className="p-2 bg-secondary rounded-lg">
+                <PowerOff className="h-5 w-5 text-muted-foreground" />
               </div>
               <div>
-                <p className="text-sm text-gray-600">Disabled</p>
-                <p className="text-2xl font-bold text-gray-600">{stats.disabled_rules}</p>
+                <p className="text-sm text-muted-foreground">Disabled</p>
+                <p className="text-2xl font-bold text-muted-foreground">{stats.disabled_rules}</p>
               </div>
             </div>
           </div>
           <div className="card">
             <div>
-              <p className="text-xs text-gray-600 mb-2">By Type</p>
+              <p className="text-xs text-muted-foreground mb-2">By Type</p>
               <div className="space-y-1 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Regex:</span>
+                  <span className="text-muted-foreground">Regex:</span>
                   <span className="font-medium">{stats.by_type.regex}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Keyword:</span>
+                  <span className="text-muted-foreground">Keyword:</span>
                   <span className="font-medium">{stats.by_type.keyword}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Dictionary:</span>
+                  <span className="text-muted-foreground">Dictionary:</span>
                   <span className="font-medium">{stats.by_type.dictionary}</span>
                 </div>
               </div>
@@ -189,13 +189,13 @@ export default function Rules() {
       <div className="card">
         <div className="flex gap-3 items-center">
           <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground/70" />
             <input
               type="text"
               placeholder="Search rules by name, category, or type..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full pl-10 pr-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
           <div className="flex gap-2">
@@ -207,7 +207,7 @@ export default function Rules() {
                   'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
                   filter === type
                     ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    : 'bg-secondary text-foreground/90 hover:bg-accent'
                 )}
               >
                 {type === 'all' ? 'All' : type.charAt(0).toUpperCase() + type.slice(1)}
@@ -237,9 +237,9 @@ export default function Rules() {
               {filteredRules?.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="text-center py-12">
-                    <Shield className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-                    <p className="text-gray-600 font-medium">No rules found</p>
-                    <p className="text-sm text-gray-500 mt-1">
+                    <Shield className="h-12 w-12 text-muted-foreground/70 mx-auto mb-3" />
+                    <p className="text-muted-foreground font-medium">No rules found</p>
+                    <p className="text-sm text-muted-foreground mt-1">
                       {searchQuery
                         ? 'Try adjusting your search query'
                         : 'Create your first classification rule'}
@@ -248,15 +248,15 @@ export default function Rules() {
                 </tr>
               ) : (
                 filteredRules?.map((rule) => (
-                  <tr key={rule.id} className="hover:bg-gray-50">
+                  <tr key={rule.id} className="hover:bg-accent">
                     <td>
                       <button
                         onClick={() => handleToggle(rule.id, rule.enabled)}
                         className={cn(
                           'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium',
                           rule.enabled
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-gray-100 text-gray-800'
+                            ? 'bg-green-500/15 text-green-300'
+                            : 'bg-secondary text-foreground'
                         )}
                       >
                         {rule.enabled ? (
@@ -274,9 +274,9 @@ export default function Rules() {
                     </td>
                     <td>
                       <div>
-                        <div className="font-medium text-gray-900">{rule.name}</div>
+                        <div className="font-medium text-foreground">{rule.name}</div>
                         {rule.description && (
-                          <div className="text-xs text-gray-500 mt-1">
+                          <div className="text-xs text-muted-foreground mt-1">
                             {rule.description.length > 60
                               ? rule.description.substring(0, 60) + '...'
                               : rule.description}
@@ -285,15 +285,15 @@ export default function Rules() {
                       </div>
                     </td>
                     <td>
-                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-500/15 text-blue-300">
                         {rule.type}
                       </span>
                     </td>
                     <td>
                       {rule.category ? (
-                        <span className="text-sm text-gray-700">{rule.category}</span>
+                        <span className="text-sm text-foreground/90">{rule.category}</span>
                       ) : (
-                        <span className="text-sm text-gray-400">-</span>
+                        <span className="text-sm text-muted-foreground/70">-</span>
                       )}
                     </td>
                     <td>
@@ -302,12 +302,12 @@ export default function Rules() {
                           className={cn(
                             'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium',
                             rule.severity === 'critical'
-                              ? 'bg-red-100 text-red-800'
+                              ? 'bg-red-500/15 text-red-300'
                               : rule.severity === 'high'
-                              ? 'bg-orange-100 text-orange-800'
+                              ? 'bg-orange-500/15 text-orange-300'
                               : rule.severity === 'medium'
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : 'bg-green-100 text-green-800'
+                              ? 'bg-yellow-500/15 text-yellow-300'
+                              : 'bg-green-500/15 text-green-300'
                           )}
                         >
                           {rule.severity}
@@ -315,17 +315,17 @@ export default function Rules() {
                       )}
                     </td>
                     <td>
-                      <span className="text-sm font-mono text-gray-700">
+                      <span className="text-sm font-mono text-foreground/90">
                         {rule.weight.toFixed(2)}
                       </span>
                     </td>
                     <td>
                       <div>
-                        <div className="text-sm font-medium text-gray-900">
+                        <div className="text-sm font-medium text-foreground">
                           {rule.match_count.toLocaleString()}
                         </div>
                         {rule.last_matched_at && (
-                          <div className="text-xs text-gray-500">
+                          <div className="text-xs text-muted-foreground">
                             {formatRelativeTime(rule.last_matched_at)}
                           </div>
                         )}
@@ -335,14 +335,14 @@ export default function Rules() {
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => handleEdit(rule)}
-                          className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                          className="p-1 text-blue-400 hover:bg-blue-500/10 rounded transition-colors"
                           title="Edit rule"
                         >
                           <Edit className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => handleDelete(rule.id, rule.name)}
-                          className="p-1 text-red-600 hover:bg-red-50 rounded transition-colors"
+                          className="p-1 text-red-400 hover:bg-red-500/10 rounded transition-colors"
                           title="Delete rule"
                         >
                           <Trash2 className="h-4 w-4" />

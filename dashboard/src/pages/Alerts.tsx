@@ -89,8 +89,8 @@ export default function Alerts() {
     <div className="space-y-6">
       {/* Page Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Alerts</h1>
-        <p className="mt-1 text-sm text-gray-600">
+        <h1 className="text-2xl font-bold text-foreground">Alerts</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
           Manage security alerts from DLP policies
         </p>
       </div>
@@ -102,12 +102,12 @@ export default function Alerts() {
           onClick={() => setFilter('all')}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 rounded-lg">
-              <ShieldAlert className="h-5 w-5 text-blue-600" />
+            <div className="p-2 bg-blue-500/15 rounded-lg">
+              <ShieldAlert className="h-5 w-5 text-blue-400" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Total Alerts</p>
-              <p className="text-2xl font-bold text-blue-600">{totalAlertsCount}</p>
+              <p className="text-sm text-muted-foreground">Total Alerts</p>
+              <p className="text-2xl font-bold text-blue-400">{totalAlertsCount}</p>
             </div>
           </div>
         </div>
@@ -117,12 +117,12 @@ export default function Alerts() {
           onClick={() => setFilter('high')}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-orange-100 rounded-lg">
-              <AlertTriangle className="h-5 w-5 text-orange-600" />
+            <div className="p-2 bg-orange-500/15 rounded-lg">
+              <AlertTriangle className="h-5 w-5 text-orange-400" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">High Alerts</p>
-              <p className="text-2xl font-bold text-orange-600">
+              <p className="text-sm text-muted-foreground">High Alerts</p>
+              <p className="text-2xl font-bold text-orange-400">
                 {highAlertsCount}
               </p>
             </div>
@@ -134,12 +134,12 @@ export default function Alerts() {
           onClick={() => setFilter('critical')}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-red-100 rounded-lg">
-              <AlertCircle className="h-5 w-5 text-red-600" />
+            <div className="p-2 bg-red-500/15 rounded-lg">
+              <AlertCircle className="h-5 w-5 text-red-400" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Critical Alerts</p>
-              <p className="text-2xl font-bold text-red-600">
+              <p className="text-sm text-muted-foreground">Critical Alerts</p>
+              <p className="text-2xl font-bold text-red-400">
                 {criticalAlertsCount}
               </p>
             </div>
@@ -150,34 +150,34 @@ export default function Alerts() {
       {/* Search Bar */}
       <div className="card">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground/70" />
           <input
             type="text"
             placeholder="Search alerts by title, description, agent ID, severity..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+            className="w-full pl-10 pr-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
         </div>
       </div>
 
       {/* Alerts List */}
       <div className="card p-0">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="font-semibold text-gray-900">
+        <div className="px-6 py-4 border-b border-border">
+          <h3 className="font-semibold text-foreground">
             {filter === 'all' ? 'All Alerts' : filter === 'high' ? 'High Severity Alerts' : 'Critical Severity Alerts'}
             {searchQuery && ` - Search: "${searchQuery}"`}
           </h3>
         </div>
 
-        <div className="divide-y divide-gray-200">
+        <div className="divide-y divide-border">
           {!filteredAlerts || filteredAlerts.length === 0 ? (
             <div className="p-12 text-center">
-              <AlertCircle className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-              <p className="text-gray-600 font-medium">
+              <AlertCircle className="h-12 w-12 text-muted-foreground/70 mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">
                 {searchQuery ? 'No alerts found' : filter === 'all' ? 'No alerts' : `No ${filter} severity alerts`}
               </p>
-              <p className="text-sm text-gray-500 mt-1">
+              <p className="text-sm text-muted-foreground mt-1">
                 {searchQuery
                   ? 'Try adjusting your search query'
                   : filter === 'all'
@@ -190,7 +190,7 @@ export default function Alerts() {
             filteredAlerts.map((alert) => (
               <div
                 key={alert.id}
-                className="p-4 hover:bg-gray-50 cursor-pointer transition-colors"
+                className="p-4 hover:bg-accent cursor-pointer transition-colors"
                 onClick={() => handleAlertClick(alert)}
               >
                 <div className="flex items-start gap-4">
@@ -212,17 +212,17 @@ export default function Alerts() {
                       )}
                     </div>
 
-                    <h4 className="font-medium text-gray-900">{alert.title}</h4>
-                    <p className="mt-1 text-sm text-gray-600">
+                    <h4 className="font-medium text-foreground">{alert.title}</h4>
+                    <p className="mt-1 text-sm text-muted-foreground">
                       {alert.description}
                     </p>
 
-                    <div className="mt-2 flex items-center gap-3 text-xs text-gray-500">
+                    <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
                       <span>Agent: {alert.agent_id}</span>
                       <span>•</span>
                       <span>{formatRelativeTime(alert.created_at)}</span>
                       <span>•</span>
-                      <code className="bg-gray-100 px-1 py-0.5 rounded">
+                      <code className="bg-secondary px-1 py-0.5 rounded">
                         {alert.event_id}
                       </code>
                     </div>

@@ -78,6 +78,11 @@ export default function SSOCallback() {
             email: (claims.email as string) || '',
             role: (claims.role as string) || 'VIEWER',
             id: (claims.sub as string) || '',
+            // Same placeholder as the normal login flow's JWT-decode path
+            // (lib/store/auth.ts) — the access token doesn't carry a
+            // permissions claim, so this list is populated lazily by the
+            // first authenticated /me fetch.
+            permissions: [],
           },
         })
 
@@ -105,7 +110,7 @@ export default function SSOCallback() {
           <h2 className="text-xl font-semibold text-white mb-2">
             SSO Login Failed
           </h2>
-          <p className="text-gray-400 mb-6">{error}</p>
+          <p className="text-muted-foreground/70 mb-6">{error}</p>
           <a
             href="/login"
             className="inline-block px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors"
@@ -125,7 +130,7 @@ export default function SSOCallback() {
         <h2 className="text-lg font-semibold text-white mb-1">
           Signing you in...
         </h2>
-        <p className="text-gray-400 text-sm">
+        <p className="text-muted-foreground/70 text-sm">
           Verifying SSO credentials with the server
         </p>
       </div>

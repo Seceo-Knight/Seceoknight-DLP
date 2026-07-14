@@ -189,17 +189,17 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-6 z-50">
-      <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-card rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
         <form onSubmit={handleSubmit}>
           {/* Header */}
-          <div className="flex items-center justify-between p-6 border-b border-gray-200">
-            <h3 className="text-2xl font-bold text-gray-900">
+          <div className="flex items-center justify-between p-6 border-b border-border">
+            <h3 className="text-2xl font-bold text-foreground">
               {isEdit ? 'Edit Rule' : 'Create Rule'}
             </h3>
             <button
               type="button"
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition-colors"
+              className="text-muted-foreground/70 hover:text-foreground transition-colors"
             >
               <X className="w-6 h-6" />
             </button>
@@ -210,7 +210,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
             {/* Basic Info */}
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-foreground/90 mb-2">
                   Rule Name *
                 </label>
                 <input
@@ -224,7 +224,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-foreground/90 mb-2">
                   Description
                 </label>
                 <textarea
@@ -238,7 +238,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-foreground/90 mb-2">
                     Rule Type *
                   </label>
                   <select
@@ -255,7 +255,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-foreground/90 mb-2">
                     Category
                   </label>
                   <input
@@ -273,7 +273,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
             {formData.type === 'regex' && (
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-foreground/90 mb-2">
                     Regex Pattern *
                   </label>
                   <input
@@ -283,7 +283,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                     className="input w-full font-mono text-sm"
                     placeholder="e.g., \b\d{3}-\d{2}-\d{4}\b"
                   />
-                  <p className="text-xs text-gray-500 mt-1">
+                  <p className="text-xs text-muted-foreground mt-1">
                     Use standard regex syntax. Backslashes will be properly escaped.
                   </p>
                 </div>
@@ -293,7 +293,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
             {formData.type === 'keyword' && (
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-foreground/90 mb-2">
                     Keywords *
                   </label>
                   <div className="flex gap-2 mb-2">
@@ -317,13 +317,13 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                     {formData.keywords?.map((keyword) => (
                       <span
                         key={keyword}
-                        className="inline-flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm"
+                        className="inline-flex items-center gap-1 px-3 py-1 bg-blue-500/15 text-blue-300 rounded-full text-sm"
                       >
                         {keyword}
                         <button
                           type="button"
                           onClick={() => removeKeyword(keyword)}
-                          className="hover:text-blue-900"
+                          className="hover:text-blue-300"
                         >
                           <X className="h-3 w-3" />
                         </button>
@@ -340,9 +340,9 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                     onChange={(e) =>
                       setFormData({ ...formData, case_sensitive: e.target.checked })
                     }
-                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    className="rounded border-border text-blue-400 focus:ring-blue-500"
                   />
-                  <label htmlFor="case-sensitive" className="ml-2 text-sm text-gray-700">
+                  <label htmlFor="case-sensitive" className="ml-2 text-sm text-foreground/90">
                     Case sensitive matching
                   </label>
                 </div>
@@ -351,7 +351,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
 
             {formData.type === 'dictionary' && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-foreground/90 mb-2">
                   Dictionary Path *
                 </label>
                 <input
@@ -363,7 +363,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                   className="input w-full font-mono text-sm"
                   placeholder="/app/dictionaries/medical_terms.txt"
                 />
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-muted-foreground mt-1">
                   Path to dictionary file containing one word per line
                 </p>
               </div>
@@ -372,7 +372,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
             {/* Scoring */}
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-foreground/90 mb-2">
                   Threshold (Min Matches)
                 </label>
                 <input
@@ -384,13 +384,13 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                   }
                   className="input w-full"
                 />
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-muted-foreground mt-1">
                   Minimum matches required to trigger
                 </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-foreground/90 mb-2">
                   Weight (0.0 - 1.0)
                 </label>
                 <input
@@ -404,7 +404,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                   }
                   className="input w-full"
                 />
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-muted-foreground mt-1">
                   Contribution to confidence score
                 </p>
               </div>
@@ -412,7 +412,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
 
             {/* Classification */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-foreground/90 mb-2">
                 Severity
               </label>
               <select
@@ -428,7 +428,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-foreground/90 mb-2">
                 Classification Labels
               </label>
               <div className="flex gap-2 mb-2">
@@ -448,13 +448,13 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                 {formData.classification_labels?.map((label) => (
                   <span
                     key={label}
-                    className="inline-flex items-center gap-1 px-3 py-1 bg-purple-100 text-purple-800 rounded-full text-sm"
+                    className="inline-flex items-center gap-1 px-3 py-1 bg-purple-500/15 text-purple-300 rounded-full text-sm"
                   >
                     {label}
                     <button
                       type="button"
                       onClick={() => removeLabel(label)}
-                      className="hover:text-purple-900"
+                      className="hover:text-purple-300"
                     >
                       <X className="h-3 w-3" />
                     </button>
@@ -464,7 +464,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Tags</label>
+              <label className="block text-sm font-medium text-foreground/90 mb-2">Tags</label>
               <div className="flex gap-2 mb-2">
                 <input
                   type="text"
@@ -482,13 +482,13 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                 {formData.tags?.map((tag) => (
                   <span
                     key={tag}
-                    className="inline-flex items-center gap-1 px-3 py-1 bg-gray-100 text-gray-800 rounded-full text-sm"
+                    className="inline-flex items-center gap-1 px-3 py-1 bg-secondary text-foreground rounded-full text-sm"
                   >
                     {tag}
                     <button
                       type="button"
                       onClick={() => removeTag(tag)}
-                      className="hover:text-gray-900"
+                      className="hover:text-foreground"
                     >
                       <X className="h-3 w-3" />
                     </button>
@@ -504,16 +504,16 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                 id="enabled"
                 checked={formData.enabled}
                 onChange={(e) => setFormData({ ...formData, enabled: e.target.checked })}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                className="rounded border-border text-blue-400 focus:ring-blue-500"
               />
-              <label htmlFor="enabled" className="ml-2 text-sm text-gray-700">
+              <label htmlFor="enabled" className="ml-2 text-sm text-foreground/90">
                 Enable this rule immediately
               </label>
             </div>
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-200 bg-gray-50">
+          <div className="flex items-center justify-end gap-3 p-6 border-t border-border bg-muted/30">
             <button type="button" onClick={onClose} className="btn-secondary">
               Cancel
             </button>

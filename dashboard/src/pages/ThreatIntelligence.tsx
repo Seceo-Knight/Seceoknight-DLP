@@ -12,7 +12,10 @@ const IOC_TYPES = ['ipv4', 'ipv6', 'domain', 'url', 'email', 'file_sha256', 'fil
 const TLPS = ['white', 'green', 'amber', 'red']
 
 const tlpClass: Record<string, string> = {
-  white: 'bg-cs-hair-2 text-cs-ink-2',
+  // TLP:WHITE has no dedicated semantic color — use the neutral badge
+  // treatment. (Previously referenced undefined `cs-hair-2`/`cs-ink-2`
+  // utility classes that produced no CSS rule at all.)
+  white: 'badge bg-secondary text-muted-foreground',
   green: 'badge-success',
   amber: 'badge-warning',
   red: 'badge-danger',

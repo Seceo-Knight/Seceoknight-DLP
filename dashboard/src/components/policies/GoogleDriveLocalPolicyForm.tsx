@@ -116,11 +116,11 @@ export default function GoogleDriveLocalPolicyForm({ config, onChange }: GoogleD
             value={config.basePath}
             onChange={(e) => handleBasePathChange(e.target.value)}
             placeholder="G:\\My Drive\\"
-            className="flex-1 px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="flex-1 px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
-          <span className="text-sm text-gray-400">(Default Windows Google Drive sync location)</span>
+          <span className="text-sm text-muted-foreground/70">(Default Windows Google Drive sync location)</span>
         </div>
-        <p className="mt-2 text-xs text-gray-400">
+        <p className="mt-2 text-xs text-muted-foreground/70">
           Default path is usually <code>G:\My Drive\</code>. Leave empty to monitor the entire drive if your path differs.
         </p>
       </div>
@@ -128,7 +128,7 @@ export default function GoogleDriveLocalPolicyForm({ config, onChange }: GoogleD
       {/* Monitored Folders */}
       <div>
         <label className="block text-sm font-medium text-gray-200 mb-3">
-          Monitored Folders <span className="text-gray-400">(within Google Drive)</span>
+          Monitored Folders <span className="text-muted-foreground/70">(within Google Drive)</span>
         </label>
         <div className="space-y-2">
           {config.monitoredFolders.length > 0 && (
@@ -138,11 +138,11 @@ export default function GoogleDriveLocalPolicyForm({ config, onChange }: GoogleD
                   key={index}
                   className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg"
                 >
-                  <Folder className="w-4 h-4 text-gray-400" />
+                  <Folder className="w-4 h-4 text-muted-foreground/70" />
                   <span className="text-sm text-gray-200">{folder}</span>
                   <button
                     onClick={() => handleRemoveFolder(index)}
-                    className="text-gray-400 hover:text-red-400 transition-colors"
+                    className="text-muted-foreground/70 hover:text-red-400 transition-colors"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -157,7 +157,7 @@ export default function GoogleDriveLocalPolicyForm({ config, onChange }: GoogleD
               onChange={(e) => setNewFolder(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleAddFolder()}
               placeholder="Folder1 or Folder1/Subfolder"
-              className="flex-1 px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="flex-1 px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
             <button
               onClick={handleAddFolder}
@@ -167,7 +167,7 @@ export default function GoogleDriveLocalPolicyForm({ config, onChange }: GoogleD
               Add Folder
             </button>
           </div>
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-muted-foreground/70">
             Specify folders within Google Drive to monitor. Leave empty to monitor entire drive.
           </p>
         </div>
@@ -176,7 +176,7 @@ export default function GoogleDriveLocalPolicyForm({ config, onChange }: GoogleD
       {/* File Extensions */}
       <div>
         <label className="block text-sm font-medium text-gray-200 mb-3">
-          File Extensions <span className="text-gray-400">(optional)</span>
+          File Extensions <span className="text-muted-foreground/70">(optional)</span>
         </label>
         <div className="space-y-3">
           <div className="flex flex-wrap gap-2">
@@ -189,7 +189,7 @@ export default function GoogleDriveLocalPolicyForm({ config, onChange }: GoogleD
                   className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
                     isSelected
                       ? 'bg-indigo-600 text-white'
-                      : 'bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700'
+                      : 'bg-gray-800 text-muted-foreground/50 hover:bg-gray-700 border border-gray-700'
                   }`}
                 >
                   {ext}
@@ -209,7 +209,7 @@ export default function GoogleDriveLocalPolicyForm({ config, onChange }: GoogleD
                     <span className="text-sm text-gray-200">{ext}</span>
                     <button
                       onClick={() => handleRemoveExtension(ext)}
-                      className="text-gray-400 hover:text-red-400 transition-colors"
+                      className="text-muted-foreground/70 hover:text-red-400 transition-colors"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -224,7 +224,7 @@ export default function GoogleDriveLocalPolicyForm({ config, onChange }: GoogleD
               onChange={(e) => setNewExtension(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleAddCustomExtension()}
               placeholder=".custom"
-              className="flex-1 px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="flex-1 px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
             <button
               onClick={handleAddCustomExtension}
@@ -248,7 +248,7 @@ export default function GoogleDriveLocalPolicyForm({ config, onChange }: GoogleD
                 type="checkbox"
                 checked={config.events[event]}
                 onChange={() => handleToggleEvent(event)}
-                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
+                className="h-4 w-4 text-indigo-400 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
               />
               <span className="text-sm text-gray-200 capitalize">{event}</span>
             </label>

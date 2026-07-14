@@ -16,11 +16,11 @@ const PolicyContextMenu = forwardRef<HTMLDivElement, PolicyContextMenuProps>(
     return (
       <div
         ref={ref}
-        className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
+        className="absolute right-0 top-full mt-1 w-48 bg-card rounded-lg shadow-lg border border-border py-1 z-50"
       >
         <button
           onClick={onViewDetails}
-          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors"
+          className="w-full px-4 py-2 text-left text-sm text-foreground/90 hover:bg-accent flex items-center gap-2 transition-colors"
         >
           <Eye className="h-4 w-4" />
           View Details
@@ -28,7 +28,7 @@ const PolicyContextMenu = forwardRef<HTMLDivElement, PolicyContextMenuProps>(
 
         <button
           onClick={onEdit}
-          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors"
+          className="w-full px-4 py-2 text-left text-sm text-foreground/90 hover:bg-accent flex items-center gap-2 transition-colors"
         >
           <Edit className="h-4 w-4" />
           Edit Policy
@@ -36,27 +36,27 @@ const PolicyContextMenu = forwardRef<HTMLDivElement, PolicyContextMenuProps>(
 
         <button
           onClick={onDuplicate}
-          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors"
+          className="w-full px-4 py-2 text-left text-sm text-foreground/90 hover:bg-accent flex items-center gap-2 transition-colors"
         >
           <Copy className="h-4 w-4" />
           Duplicate Policy
         </button>
 
-        <div className="border-t border-gray-200 my-1" />
+        <div className="border-t border-border my-1" />
 
         <button
           onClick={onToggleStatus}
-          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors"
+          className="w-full px-4 py-2 text-left text-sm text-foreground/90 hover:bg-accent flex items-center gap-2 transition-colors"
         >
           <Power className="h-4 w-4" />
           {policy.enabled ? 'Deactivate' : 'Activate'}
         </button>
 
-        <div className="border-t border-gray-200 my-1" />
+        <div className="border-t border-border my-1" />
 
         <button
           onClick={onDelete}
-          className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-2 transition-colors"
+          className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 flex items-center gap-2 transition-colors"
         >
           <Trash2 className="h-4 w-4" />
           Delete Policy

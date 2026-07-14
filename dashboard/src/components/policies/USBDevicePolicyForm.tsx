@@ -31,11 +31,11 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               type="checkbox"
               checked={config.events.connect}
               onChange={() => handleToggleEvent('connect')}
-              className="w-4 h-4 text-indigo-600 rounded"
+              className="w-4 h-4 text-indigo-400 rounded"
             />
             <div>
               <div className="text-white font-medium text-sm">Device Connection</div>
-              <div className="text-gray-400 text-xs">Monitor when USB devices are connected</div>
+              <div className="text-muted-foreground/70 text-xs">Monitor when USB devices are connected</div>
             </div>
           </label>
 
@@ -44,11 +44,11 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               type="checkbox"
               checked={config.events.disconnect}
               onChange={() => handleToggleEvent('disconnect')}
-              className="w-4 h-4 text-indigo-600 rounded"
+              className="w-4 h-4 text-indigo-400 rounded"
             />
             <div>
               <div className="text-white font-medium text-sm">Device Disconnection</div>
-              <div className="text-gray-400 text-xs">Monitor when USB devices are disconnected</div>
+              <div className="text-muted-foreground/70 text-xs">Monitor when USB devices are disconnected</div>
             </div>
           </label>
 
@@ -57,11 +57,11 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               type="checkbox"
               checked={config.events.fileTransfer}
               onChange={() => handleToggleEvent('fileTransfer')}
-              className="w-4 h-4 text-indigo-600 rounded"
+              className="w-4 h-4 text-indigo-400 rounded"
             />
             <div>
               <div className="text-white font-medium text-sm">File Transfer</div>
-              <div className="text-gray-400 text-xs">Monitor file transfer operations on USB devices</div>
+              <div className="text-muted-foreground/70 text-xs">Monitor file transfer operations on USB devices</div>
             </div>
           </label>
         </div>
@@ -80,11 +80,11 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               value="alert"
               checked={config.action === 'alert'}
               onChange={() => onChange({ ...config, action: 'alert' })}
-              className="w-4 h-4 text-indigo-600"
+              className="w-4 h-4 text-indigo-400"
             />
             <div>
               <div className="text-white font-medium text-sm">Alert</div>
-              <div className="text-gray-400 text-xs">Send alert notification</div>
+              <div className="text-muted-foreground/70 text-xs">Send alert notification</div>
             </div>
           </label>
 
@@ -95,11 +95,11 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               value="log"
               checked={config.action === 'log'}
               onChange={() => onChange({ ...config, action: 'log' })}
-              className="w-4 h-4 text-indigo-600"
+              className="w-4 h-4 text-indigo-400"
             />
             <div>
               <div className="text-white font-medium text-sm">Log Only</div>
-              <div className="text-gray-400 text-xs">Log the event without sending alerts</div>
+              <div className="text-muted-foreground/70 text-xs">Log the event without sending alerts</div>
             </div>
           </label>
 
@@ -110,11 +110,11 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
               value="block"
               checked={config.action === 'block'}
               onChange={() => onChange({ ...config, action: 'block' })}
-              className="w-4 h-4 text-indigo-600"
+              className="w-4 h-4 text-indigo-400"
             />
             <div>
               <div className="text-white font-medium text-sm">Block Device</div>
-              <div className="text-gray-400 text-xs">Block USB device access (if supported)</div>
+              <div className="text-muted-foreground/70 text-xs">Block USB device access (if supported)</div>
             </div>
           </label>
         </div>

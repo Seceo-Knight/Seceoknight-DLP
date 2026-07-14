@@ -81,7 +81,7 @@ export default function PolicyTypeSelector({ selectedType, onSelectType }: Polic
     <div className="space-y-4">
       <div>
         <h3 className="text-lg font-semibold text-white mb-2">Select Policy Type (v2)</h3>
-        <p className="text-sm text-gray-400">Choose the type of monitoring policy you want to create</p>
+        <p className="text-sm text-muted-foreground/70">Choose the type of monitoring policy you want to create</p>
       </div>
       
       <div className="grid grid-cols-2 gap-4">
@@ -95,14 +95,14 @@ export default function PolicyTypeSelector({ selectedType, onSelectType }: Polic
               className={`p-4 rounded-xl border-2 transition-all text-left ${
                 isSelected
                   ? 'border-indigo-500 bg-indigo-900/30 text-white'
-                  : 'border-gray-600 bg-gray-900/30 text-gray-400 hover:border-gray-500 hover:text-gray-300'
+                  : 'border-gray-600 bg-gray-900/30 text-muted-foreground/70 hover:border-gray-500 hover:text-muted-foreground/50'
               }`}
             >
               <div className="flex items-start gap-3">
                 <div className={`p-2 rounded-lg ${
                   isSelected 
                     ? 'bg-indigo-800/50 text-indigo-300' 
-                    : 'bg-gray-800/50 text-gray-500'
+                    : 'bg-gray-800/50 text-muted-foreground'
                 }`}>
                   <Icon className="w-5 h-5" />
                 </div>

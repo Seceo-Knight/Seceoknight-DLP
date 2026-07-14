@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import {
   Lock, ShieldCheck, Eye, EyeOff, Server, Database,
   Bell, Globe, Info, ChevronRight, CheckCircle2, AlertCircle,
-  Cloud, HardDrive, User, Wifi, WifiOff, Mail, Plus, X, Send, Archive,
+  Cloud, HardDrive, WifiOff, Mail, Plus, X, Send, Archive,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import {
@@ -269,8 +269,8 @@ export default function Settings() {
     <div className="flex flex-col h-full">
       {/* Page Header */}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-        <p className="mt-1 text-sm text-gray-500">Manage your account, security, and platform preferences</p>
+        <h1 className="text-2xl font-bold text-foreground">Settings</h1>
+        <p className="mt-1 text-sm text-muted-foreground">Manage your account, security, and platform preferences</p>
       </div>
 
       <div className="flex gap-8 flex-1 min-h-0">
@@ -278,7 +278,7 @@ export default function Settings() {
         {/* ── Left Nav ── */}
         <div className="w-60 shrink-0">
           <div className="sticky top-0">
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 px-3">Configuration</p>
+            <p className="text-[10px] font-bold text-muted-foreground/70 uppercase tracking-widest mb-2 px-3">Configuration</p>
             <nav className="space-y-0.5">
               {tabs.map((tab) => {
                 const Icon = tab.icon
@@ -286,15 +286,15 @@ export default function Settings() {
                 return (
                   <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                     className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left transition-all group ${
-                      isActive ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                      isActive ? 'bg-blue-500/10 text-blue-400' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
                     }`}
                   >
-                    <div className={`p-1.5 rounded-lg shrink-0 ${isActive ? 'bg-blue-100' : 'bg-gray-100 group-hover:bg-gray-200'}`}>
-                      <Icon className={`h-4 w-4 ${isActive ? 'text-blue-600' : 'text-gray-500'}`} />
+                    <div className={`p-1.5 rounded-lg shrink-0 ${isActive ? 'bg-blue-500/15' : 'bg-secondary group-hover:bg-accent'}`}>
+                      <Icon className={`h-4 w-4 ${isActive ? 'text-blue-400' : 'text-muted-foreground'}`} />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className={`text-sm font-medium truncate ${isActive ? 'text-blue-700' : ''}`}>{tab.label}</p>
-                      <p className="text-[11px] text-gray-400 truncate">{tab.description}</p>
+                      <p className={`text-sm font-medium truncate ${isActive ? 'text-blue-400' : ''}`}>{tab.label}</p>
+                      <p className="text-[11px] text-muted-foreground/70 truncate">{tab.description}</p>
                     </div>
                     {isActive && <ChevronRight className="h-3.5 w-3.5 text-blue-400 shrink-0" />}
                   </button>
@@ -316,14 +316,14 @@ export default function Settings() {
                   {(user?.full_name || user?.email || 'A').charAt(0).toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-base font-semibold text-gray-900 truncate">{user?.full_name || '—'}</p>
-                  <p className="text-sm text-gray-500 truncate">{user?.email}</p>
+                  <p className="text-base font-semibold text-foreground truncate">{user?.full_name || '—'}</p>
+                  <p className="text-sm text-muted-foreground truncate">{user?.email}</p>
                 </div>
                 <div className="shrink-0 flex flex-col items-end gap-1.5">
-                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700 uppercase tracking-wide">
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-500/15 text-indigo-400 uppercase tracking-wide">
                     {user?.role}
                   </span>
-                  <span className="text-xs text-gray-400">
+                  <span className="text-xs text-muted-foreground/70">
                     {user?.organization || 'SeceoKnight'}
                   </span>
                 </div>
@@ -331,57 +331,57 @@ export default function Settings() {
 
               {/* Change Password */}
               <div className="card">
-                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
-                  <div className="p-2.5 bg-purple-50 rounded-xl border border-purple-100">
-                    <Lock className="h-5 w-5 text-purple-600" />
+                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-border">
+                  <div className="p-2.5 bg-purple-500/10 rounded-xl border border-purple-500/20">
+                    <Lock className="h-5 w-5 text-purple-400" />
                   </div>
                   <div>
-                    <h2 className="font-semibold text-gray-900">Change Password</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">Update your login credentials</p>
+                    <h2 className="font-semibold text-foreground">Change Password</h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">Update your login credentials</p>
                   </div>
                 </div>
 
                 <form onSubmit={handleChangePassword}>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                     <div className="md:col-span-2">
-                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Current Password</label>
+                      <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Current Password</label>
                       <div className="relative">
                         <input type={showCurrent ? 'text' : 'password'} value={currentPassword}
                           onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Enter current password"
                           className="input pr-10" required />
                         <button type="button" onClick={() => setShowCurrent(!showCurrent)}
-                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
+                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted-foreground/70 hover:text-foreground">
                           {showCurrent ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">New Password</label>
+                      <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">New Password</label>
                       <div className="relative">
                         <input type={showNew ? 'text' : 'password'} value={newPassword}
                           onChange={(e) => setNewPassword(e.target.value)} placeholder="Enter new password"
                           className="input pr-10" required />
                         <button type="button" onClick={() => setShowNew(!showNew)}
-                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
+                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted-foreground/70 hover:text-foreground">
                           {showNew ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Confirm New Password</label>
+                      <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Confirm New Password</label>
                       <div className="relative">
                         <input type={showConfirm ? 'text' : 'password'} value={confirmPassword}
                           onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirm new password"
                           className="input pr-10" required />
                         <button type="button" onClick={() => setShowConfirm(!showConfirm)}
-                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600">
+                          className="absolute inset-y-0 right-0 pr-3 flex items-center text-muted-foreground/70 hover:text-foreground">
                           {showConfirm ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
                     </div>
                   </div>
-                  <p className="mt-3 text-xs text-gray-400">Min. 7 characters — must include uppercase, lowercase, digit and special character.</p>
-                  <div className="mt-5 pt-4 border-t border-gray-100">
+                  <p className="mt-3 text-xs text-muted-foreground/70">Min. 7 characters — must include uppercase, lowercase, digit and special character.</p>
+                  <div className="mt-5 pt-4 border-t border-border">
                     <button type="submit" disabled={changingPassword}
                       className="btn-primary disabled:opacity-50 disabled:cursor-not-allowed px-6">
                       {changingPassword ? 'Updating...' : 'Update Password'}
@@ -397,18 +397,18 @@ export default function Settings() {
           {/* ── TWO-FACTOR AUTH ── */}
           {activeTab === 'mfa' && (
             <div className="card">
-              <div className="flex items-center justify-between mb-6 pb-5 border-b border-gray-100">
+              <div className="flex items-center justify-between mb-6 pb-5 border-b border-border">
                 <div className="flex items-center gap-3">
-                  <div className={`p-2.5 rounded-xl border ${mfaEnabled ? 'bg-green-50 border-green-100' : 'bg-gray-50 border-gray-200'}`}>
-                    <ShieldCheck className={`h-5 w-5 ${mfaEnabled ? 'text-green-600' : 'text-gray-400'}`} />
+                  <div className={`p-2.5 rounded-xl border ${mfaEnabled ? 'bg-green-500/10 border-green-500/20' : 'bg-muted/30 border-border'}`}>
+                    <ShieldCheck className={`h-5 w-5 ${mfaEnabled ? 'text-green-400' : 'text-muted-foreground/70'}`} />
                   </div>
                   <div>
-                    <h2 className="font-semibold text-gray-900">Two-Factor Authentication</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">TOTP via Google Authenticator, Authy or 1Password</p>
+                    <h2 className="font-semibold text-foreground">Two-Factor Authentication</h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">TOTP via Google Authenticator, Authy or 1Password</p>
                   </div>
                 </div>
                 <span className={`px-3 py-1 rounded-full text-xs font-bold tracking-wide ${
-                  mfaEnabled ? 'bg-green-100 text-green-700' : 'bg-red-50 text-red-600 border border-red-100'
+                  mfaEnabled ? 'bg-green-500/15 text-green-400' : 'bg-red-500/10 text-red-400 border border-red-500/20'
                 }`}>
                   {mfaEnabled ? '● Enabled' : '○ Disabled'}
                 </span>
@@ -417,11 +417,11 @@ export default function Settings() {
               {mfaStep === 'idle' && (
                 <div className="space-y-5">
                   {mfaEnabled ? (
-                    <div className="flex items-start gap-4 p-5 bg-green-50 border border-green-200 rounded-xl">
-                      <CheckCircle2 className="h-6 w-6 text-green-600 mt-0.5 shrink-0" />
+                    <div className="flex items-start gap-4 p-5 bg-green-500/10 border border-green-500/30 rounded-xl">
+                      <CheckCircle2 className="h-6 w-6 text-green-400 mt-0.5 shrink-0" />
                       <div>
-                        <p className="font-semibold text-green-800">Your account is protected</p>
-                        <p className="text-sm text-green-700 mt-1 leading-relaxed">
+                        <p className="font-semibold text-green-300">Your account is protected</p>
+                        <p className="text-sm text-green-400 mt-1 leading-relaxed">
                           MFA is active. Every login requires a TOTP code from your authenticator app in addition to your password.
                           Only your administrator can disable MFA — contact them if you lose access to your authenticator.
                         </p>
@@ -429,11 +429,11 @@ export default function Settings() {
                     </div>
                   ) : (
                     <>
-                      <div className="flex items-start gap-4 p-5 bg-amber-50 border border-amber-200 rounded-xl">
-                        <AlertCircle className="h-6 w-6 text-amber-600 mt-0.5 shrink-0" />
+                      <div className="flex items-start gap-4 p-5 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+                        <AlertCircle className="h-6 w-6 text-amber-400 mt-0.5 shrink-0" />
                         <div>
-                          <p className="font-semibold text-amber-800">MFA is not enabled</p>
-                          <p className="text-sm text-amber-700 mt-1 leading-relaxed">
+                          <p className="font-semibold text-amber-300">MFA is not enabled</p>
+                          <p className="text-sm text-amber-400 mt-1 leading-relaxed">
                             Your account is currently protected by password only. Enable two-factor authentication to significantly increase your account security.
                           </p>
                         </div>
@@ -444,11 +444,11 @@ export default function Settings() {
                           { step: '2', title: 'Scan QR code', desc: 'Link the app to your account' },
                           { step: '3', title: 'Verify code', desc: 'Confirm with a one-time code' },
                         ].map((s) => (
-                          <div key={s.step} className="flex gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200">
-                            <span className="h-7 w-7 rounded-full bg-blue-100 text-blue-700 font-bold text-sm flex items-center justify-center shrink-0">{s.step}</span>
+                          <div key={s.step} className="flex gap-3 p-4 bg-muted/30 rounded-xl border border-border">
+                            <span className="h-7 w-7 rounded-full bg-blue-500/15 text-blue-400 font-bold text-sm flex items-center justify-center shrink-0">{s.step}</span>
                             <div>
-                              <p className="text-sm font-semibold text-gray-900">{s.title}</p>
-                              <p className="text-xs text-gray-500 mt-0.5">{s.desc}</p>
+                              <p className="text-sm font-semibold text-foreground">{s.title}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5">{s.desc}</p>
                             </div>
                           </div>
                         ))}
@@ -467,11 +467,11 @@ export default function Settings() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-4">
                     <div>
-                      <p className="font-semibold text-gray-900 mb-1">Step 1 — Scan the QR code</p>
-                      <p className="text-sm text-gray-500">Open your authenticator app and scan the QR code to link it to your account.</p>
+                      <p className="font-semibold text-foreground mb-1">Step 1 — Scan the QR code</p>
+                      <p className="text-sm text-muted-foreground">Open your authenticator app and scan the QR code to link it to your account.</p>
                     </div>
                     {mfaQrCode && (
-                      <div className="inline-block p-4 bg-white border-2 border-gray-200 rounded-2xl shadow-sm">
+                      <div className="inline-block p-4 bg-white border-2 border-slate-500/40 rounded-2xl shadow-sm">
                         <img src={`data:image/png;base64,${mfaQrCode}`} alt="MFA QR Code" className="w-52 h-52" />
                       </div>
                     )}
@@ -484,23 +484,23 @@ export default function Settings() {
                   </div>
                   <div className="space-y-4">
                     <div>
-                      <p className="font-semibold text-gray-900 mb-1">Can't scan?</p>
-                      <p className="text-sm text-gray-500">Enter this key manually in your authenticator app.</p>
+                      <p className="font-semibold text-foreground mb-1">Can't scan?</p>
+                      <p className="text-sm text-muted-foreground">Enter this key manually in your authenticator app.</p>
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Secret Key</label>
-                      <div className="flex items-center gap-2 p-3 bg-gray-50 border border-gray-200 rounded-xl">
-                        <code className="flex-1 text-sm font-mono tracking-widest text-gray-800 break-all"
+                      <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Secret Key</label>
+                      <div className="flex items-center gap-2 p-3 bg-muted/30 border border-border rounded-xl">
+                        <code className="flex-1 text-sm font-mono tracking-widest text-foreground break-all"
                           style={{ filter: showSecret ? 'none' : 'blur(4px)', userSelect: showSecret ? 'auto' : 'none' }}>
                           {mfaSecret}
                         </code>
                         <button type="button" onClick={() => setShowSecret(!showSecret)}
-                          className="p-1.5 text-gray-400 hover:text-gray-600 shrink-0 rounded-lg hover:bg-gray-200 transition-colors">
+                          className="p-1.5 text-muted-foreground/70 hover:text-foreground shrink-0 rounded-lg hover:bg-accent transition-colors">
                           {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
                     </div>
-                    <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-700 space-y-1">
+                    <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl text-xs text-blue-400 space-y-1">
                       <p className="font-semibold">Supported apps</p>
                       <p>Google Authenticator · Authy · Microsoft Authenticator · 1Password · Bitwarden</p>
                     </div>
@@ -511,11 +511,11 @@ export default function Settings() {
               {mfaStep === 'setup_verify' && (
                 <div className="max-w-md space-y-5">
                   <div>
-                    <p className="font-semibold text-gray-900 mb-1">Step 2 — Verify the code</p>
-                    <p className="text-sm text-gray-500">Enter the 6-digit code currently shown in your authenticator app to confirm setup.</p>
+                    <p className="font-semibold text-foreground mb-1">Step 2 — Verify the code</p>
+                    <p className="text-sm text-muted-foreground">Enter the 6-digit code currently shown in your authenticator app to confirm setup.</p>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Verification Code</label>
+                    <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Verification Code</label>
                     <input type="text" inputMode="numeric" maxLength={6}
                       value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ''))}
                       autoFocus placeholder="000000"
@@ -537,42 +537,42 @@ export default function Settings() {
           {activeTab === 'system' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="card">
-                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
-                  <div className="p-2.5 bg-blue-50 rounded-xl border border-blue-100">
-                    <Server className="h-5 w-5 text-blue-600" />
+                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-border">
+                  <div className="p-2.5 bg-blue-500/10 rounded-xl border border-blue-500/20">
+                    <Server className="h-5 w-5 text-blue-400" />
                   </div>
                   <div>
-                    <h2 className="font-semibold text-gray-900">API Configuration</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">Manager endpoint settings</p>
+                    <h2 className="font-semibold text-foreground">API Configuration</h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">Manager endpoint settings</p>
                   </div>
                 </div>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Manager API URL</label>
-                    <div className="px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 font-mono break-all">{API_URL}</div>
-                    <p className="mt-1 text-xs text-gray-400">Backend API for this deployment</p>
+                    <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Manager API URL</label>
+                    <div className="px-3 py-2.5 bg-muted/30 border border-border rounded-lg text-sm text-foreground/90 font-mono break-all">{API_URL}</div>
+                    <p className="mt-1 text-xs text-muted-foreground/70">Backend API for this deployment</p>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Data Refresh Interval</label>
+                    <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Data Refresh Interval</label>
                     <select className="input">
                       <option>5 seconds</option>
                       <option>10 seconds</option>
                       <option>30 seconds</option>
                       <option>60 seconds</option>
                     </select>
-                    <p className="mt-1 text-xs text-gray-400">Dashboard polling frequency for live data</p>
+                    <p className="mt-1 text-xs text-muted-foreground/70">Dashboard polling frequency for live data</p>
                   </div>
                 </div>
               </div>
 
               <div className="card">
-                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
-                  <div className="p-2.5 bg-green-50 rounded-xl border border-green-100">
-                    <Database className="h-5 w-5 text-green-600" />
+                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-border">
+                  <div className="p-2.5 bg-green-500/10 rounded-xl border border-green-500/20">
+                    <Database className="h-5 w-5 text-green-400" />
                   </div>
                   <div>
-                    <h2 className="font-semibold text-gray-900">OpenSearch</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">Event storage and search engine</p>
+                    <h2 className="font-semibold text-foreground">OpenSearch</h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">Event storage and search engine</p>
                   </div>
                 </div>
                 <div className="space-y-4">
@@ -582,39 +582,39 @@ export default function Settings() {
                     { label: 'Retention Period', value: '90 days', hint: 'Events older than 90 days are auto-purged' },
                   ].map((f) => (
                     <div key={f.label}>
-                      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">{f.label}</label>
-                      <div className="px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 font-mono">{f.value}</div>
-                      {f.hint && <p className="mt-1 text-xs text-gray-400">{f.hint}</p>}
+                      <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">{f.label}</label>
+                      <div className="px-3 py-2.5 bg-muted/30 border border-border rounded-lg text-sm text-foreground/90 font-mono">{f.value}</div>
+                      {f.hint && <p className="mt-1 text-xs text-muted-foreground/70">{f.hint}</p>}
                     </div>
                   ))}
                 </div>
 
                 {/* Log retention — DB-backed, admin-editable, 90-day compliance floor */}
                 {isSuperAdmin && (
-                  <form onSubmit={handleSaveRetention} className="space-y-4 pt-4 mt-4 border-t border-gray-100">
+                  <form onSubmit={handleSaveRetention} className="space-y-4 pt-4 mt-4 border-t border-border">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-gray-900">Log Retention</span>
+                      <span className="text-sm font-semibold text-foreground">Log Retention</span>
                       {retention && (
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-500">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-secondary text-muted-foreground">
                           source: {retention.source}
                         </span>
                       )}
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Event log retention (days)</label>
+                        <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Event log retention (days)</label>
                         <input type="number" min={retention?.minimum_days ?? 90} className="input"
                           value={retForm.event_retention_days}
                           onChange={(e) => setRetForm({ ...retForm, event_retention_days: Number(e.target.value) })} />
                       </div>
                       <div>
-                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Index log retention (days)</label>
+                        <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Index log retention (days)</label>
                         <input type="number" min={retention?.minimum_days ?? 90} className="input"
                           value={retForm.opensearch_retention_days}
                           onChange={(e) => setRetForm({ ...retForm, opensearch_retention_days: Number(e.target.value) })} />
                       </div>
                     </div>
-                    <p className="text-xs text-gray-400">
+                    <p className="text-xs text-muted-foreground/70">
                       Minimum {retention?.minimum_days ?? 90} days — enforced server-side. Applied daily by the cleanup task; logs newer than the window are always retained.
                     </p>
                     <button type="submit" disabled={savingRetention}
@@ -631,7 +631,7 @@ export default function Settings() {
           {activeTab === 'notifications' && (
             <div className="space-y-6">
               {emailSettingsLoading && (
-                <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
                   <div className="h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
                   Loading settings…
                 </div>
@@ -641,76 +641,76 @@ export default function Settings() {
               <div className="card">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="p-2.5 bg-yellow-50 rounded-xl border border-yellow-100">
-                      <Bell className="h-5 w-5 text-yellow-600" />
+                    <div className="p-2.5 bg-yellow-500/10 rounded-xl border border-yellow-500/20">
+                      <Bell className="h-5 w-5 text-yellow-400" />
                     </div>
                     <div>
-                      <h2 className="font-semibold text-gray-900">Email Alerts</h2>
-                      <p className="text-xs text-gray-500 mt-0.5">Send email when a policy violation is detected</p>
+                      <h2 className="font-semibold text-foreground">Email Alerts</h2>
+                      <p className="text-xs text-muted-foreground mt-0.5">Send email when a policy violation is detected</p>
                     </div>
                   </div>
                   <label className="relative inline-flex items-center cursor-pointer shrink-0">
                     <input type="checkbox" className="sr-only peer"
                       checked={emailSettings.enabled}
                       onChange={e => setEmailSettings(s => ({ ...s, enabled: e.target.checked }))} />
-                    <div className="w-10 h-5 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600" />
+                    <div className="w-10 h-5 bg-secondary rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-500/40 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600" />
                   </label>
                 </div>
               </div>
 
               {/* ── SMTP Configuration ── */}
               <div className="card">
-                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
-                  <div className="p-2.5 bg-blue-50 rounded-xl border border-blue-100">
-                    <Mail className="h-5 w-5 text-blue-600" />
+                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-border">
+                  <div className="p-2.5 bg-blue-500/10 rounded-xl border border-blue-500/20">
+                    <Mail className="h-5 w-5 text-blue-400" />
                   </div>
                   <div>
-                    <h2 className="font-semibold text-gray-900">SMTP Configuration</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">Outgoing mail server settings</p>
+                    <h2 className="font-semibold text-foreground">SMTP Configuration</h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">Outgoing mail server settings</p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">SMTP Host</label>
+                    <label className="block text-xs font-medium text-foreground/90 mb-1">SMTP Host</label>
                     <input type="text" value={emailSettings.smtp_host}
                       onChange={e => setEmailSettings(s => ({ ...s, smtp_host: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="smtp.gmail.com" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">SMTP Port</label>
+                    <label className="block text-xs font-medium text-foreground/90 mb-1">SMTP Port</label>
                     <input type="number" value={emailSettings.smtp_port}
                       onChange={e => setEmailSettings(s => ({ ...s, smtp_port: parseInt(e.target.value) || 587 }))}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="587" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Username / Email</label>
+                    <label className="block text-xs font-medium text-foreground/90 mb-1">Username / Email</label>
                     <input type="text" value={emailSettings.smtp_user}
                       onChange={e => setEmailSettings(s => ({ ...s, smtp_user: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="alerts@yourcompany.com" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">Password / App Password</label>
+                    <label className="block text-xs font-medium text-foreground/90 mb-1">Password / App Password</label>
                     <input type="password" value={emailSettings.smtp_password}
                       onChange={e => setEmailSettings(s => ({ ...s, smtp_password: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="Leave blank to keep existing" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">From Name</label>
+                    <label className="block text-xs font-medium text-foreground/90 mb-1">From Name</label>
                     <input type="text" value={emailSettings.smtp_from_name}
                       onChange={e => setEmailSettings(s => ({ ...s, smtp_from_name: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="SeceoKnight DLP" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">From Email</label>
+                    <label className="block text-xs font-medium text-foreground/90 mb-1">From Email</label>
                     <input type="email" value={emailSettings.smtp_from_email}
                       onChange={e => setEmailSettings(s => ({ ...s, smtp_from_email: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="noreply@yourcompany.com" />
                   </div>
                 </div>
@@ -720,29 +720,29 @@ export default function Settings() {
                     <input type="checkbox" checked={emailSettings.smtp_tls}
                       onChange={e => setEmailSettings(s => ({ ...s, smtp_tls: e.target.checked }))}
                       className="rounded" />
-                    <span className="text-sm text-gray-700">Use STARTTLS</span>
+                    <span className="text-sm text-foreground/90">Use STARTTLS</span>
                   </label>
-                  <span className="text-xs text-gray-400">(recommended for port 587)</span>
+                  <span className="text-xs text-muted-foreground/70">(recommended for port 587)</span>
                 </div>
               </div>
 
               {/* ── Alert Recipients ── */}
               <div className="card">
-                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
-                  <div className="p-2.5 bg-orange-50 rounded-xl border border-orange-100">
-                    <AlertCircle className="h-5 w-5 text-orange-600" />
+                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-border">
+                  <div className="p-2.5 bg-orange-500/10 rounded-xl border border-orange-500/20">
+                    <AlertCircle className="h-5 w-5 text-orange-400" />
                   </div>
                   <div>
-                    <h2 className="font-semibold text-gray-900">Alert Recipients</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">Who receives automatic violation alerts</p>
+                    <h2 className="font-semibold text-foreground">Alert Recipients</h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">Who receives automatic violation alerts</p>
                   </div>
                 </div>
 
                 <div className="mb-4">
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Minimum Severity to Trigger Email</label>
+                  <label className="block text-xs font-medium text-foreground/90 mb-1">Minimum Severity to Trigger Email</label>
                   <select value={emailSettings.min_severity}
                     onChange={e => setEmailSettings(s => ({ ...s, min_severity: e.target.value }))}
-                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
+                    className="px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-card">
                     <option value="critical">Critical only</option>
                     <option value="high">High and above</option>
                     <option value="medium">Medium and above</option>
@@ -754,7 +754,7 @@ export default function Settings() {
                   <input type="email" value={newRecipient}
                     onChange={e => setNewRecipient(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addRecipient() }}}
-                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     placeholder="admin@yourcompany.com" />
                   <button onClick={addRecipient}
                     className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors">
@@ -763,13 +763,13 @@ export default function Settings() {
                 </div>
 
                 {emailSettings.alert_recipients.length === 0 ? (
-                  <p className="text-sm text-gray-400 py-3">No recipients added. Emails will not be sent.</p>
+                  <p className="text-sm text-muted-foreground/70 py-3">No recipients added. Emails will not be sent.</p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {emailSettings.alert_recipients.map(r => (
-                      <span key={r} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 text-blue-800 text-xs font-medium rounded-full">
+                      <span key={r} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500/10 border border-blue-500/30 text-blue-300 text-xs font-medium rounded-full">
                         {r}
-                        <button onClick={() => removeRecipient(r)} className="text-blue-400 hover:text-blue-700">
+                        <button onClick={() => removeRecipient(r)} className="text-blue-400 hover:text-blue-400">
                           <X className="h-3 w-3" />
                         </button>
                       </span>
@@ -791,7 +791,7 @@ export default function Settings() {
                   <div className="flex gap-2 flex-1">
                     <input type="email" value={testEmailAddress}
                       onChange={e => setTestEmailAddress(e.target.value)}
-                      className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="Send test email to…" />
                     <button onClick={handleTestEmail} disabled={testEmailSending || !testEmailAddress}
                       className="flex items-center gap-1.5 px-4 py-2 bg-gray-700 text-white text-sm font-medium rounded-lg hover:bg-gray-800 disabled:opacity-50 transition-colors shrink-0">
@@ -802,7 +802,7 @@ export default function Settings() {
                     </button>
                   </div>
                 </div>
-                <p className="text-xs text-gray-400 mt-3">
+                <p className="text-xs text-muted-foreground/70 mt-3">
                   Save settings before sending a test. For Gmail, use an App Password (not your login password).
                 </p>
               </div>
@@ -813,13 +813,13 @@ export default function Settings() {
           {activeTab === 'integrations' && (
             <div className="space-y-6">
               <div className="card">
-                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
-                  <div className="p-2.5 bg-emerald-50 rounded-xl border border-emerald-100">
-                    <Globe className="h-5 w-5 text-emerald-600" />
+                <div className="flex items-center gap-3 mb-6 pb-5 border-b border-border">
+                  <div className="p-2.5 bg-emerald-500/10 rounded-xl border border-emerald-500/20">
+                    <Globe className="h-5 w-5 text-emerald-400" />
                   </div>
                   <div>
-                    <h2 className="font-semibold text-gray-900">Cloud Storage Connectors</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">Connect cloud storage providers for DLP monitoring</p>
+                    <h2 className="font-semibold text-foreground">Cloud Storage Connectors</h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">Connect cloud storage providers for DLP monitoring</p>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -828,8 +828,8 @@ export default function Settings() {
                       name: 'Google Drive',
                       desc: 'Monitor file access, sharing, and data exfiltration across Google Workspace',
                       icon: HardDrive,
-                      color: 'bg-blue-50 border-blue-100',
-                      iconColor: 'text-blue-600',
+                      color: 'bg-blue-500/10 border-blue-500/20',
+                      iconColor: 'text-blue-400',
                       btnColor: 'bg-blue-600 hover:bg-blue-700',
                       loading: isConnectingDrive,
                       onClick: handleDriveConnect,
@@ -838,8 +838,8 @@ export default function Settings() {
                       name: 'Microsoft OneDrive',
                       desc: 'Monitor SharePoint and OneDrive activity across Microsoft 365',
                       icon: Cloud,
-                      color: 'bg-indigo-50 border-indigo-100',
-                      iconColor: 'text-indigo-600',
+                      color: 'bg-indigo-500/10 border-indigo-500/20',
+                      iconColor: 'text-indigo-400',
                       btnColor: 'bg-indigo-600 hover:bg-indigo-700',
                       loading: isConnectingOneDrive,
                       onClick: handleOneDriveConnect,
@@ -847,17 +847,17 @@ export default function Settings() {
                   ].map((conn) => {
                     const Icon = conn.icon
                     return (
-                      <div key={conn.name} className="p-5 border border-gray-200 rounded-xl hover:border-gray-300 hover:shadow-sm transition-all">
+                      <div key={conn.name} className="p-5 border border-border rounded-xl hover:border-primary/40 hover:shadow-sm transition-all">
                         <div className="flex items-start gap-4">
                           <div className={`p-3 rounded-xl border ${conn.color} shrink-0`}>
                             <Icon className={`h-6 w-6 ${conn.iconColor}`} />
                           </div>
                           <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-gray-900">{conn.name}</p>
-                            <p className="text-xs text-gray-500 mt-1 leading-relaxed">{conn.desc}</p>
+                            <p className="font-semibold text-foreground">{conn.name}</p>
+                            <p className="text-xs text-muted-foreground mt-1 leading-relaxed">{conn.desc}</p>
                             <div className="flex items-center gap-1.5 mt-2">
-                              <WifiOff className="h-3 w-3 text-gray-400" />
-                              <span className="text-xs text-gray-400">Not connected</span>
+                              <WifiOff className="h-3 w-3 text-muted-foreground/70" />
+                              <span className="text-xs text-muted-foreground/70">Not connected</span>
                             </div>
                           </div>
                         </div>
@@ -876,13 +876,13 @@ export default function Settings() {
           {/* ── ABOUT ── */}
           {activeTab === 'about' && (
             <div className="card">
-              <div className="flex items-center gap-3 mb-6 pb-5 border-b border-gray-100">
-                <div className="p-2.5 bg-gray-100 rounded-xl border border-gray-200">
-                  <Info className="h-5 w-5 text-gray-600" />
+              <div className="flex items-center gap-3 mb-6 pb-5 border-b border-border">
+                <div className="p-2.5 bg-secondary rounded-xl border border-border">
+                  <Info className="h-5 w-5 text-muted-foreground" />
                 </div>
                 <div>
-                  <h2 className="font-semibold text-gray-900">About SeceoKnight DLP</h2>
-                  <p className="text-xs text-gray-500 mt-0.5">Platform version and technology stack</p>
+                  <h2 className="font-semibold text-foreground">About SeceoKnight DLP</h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">Platform version and technology stack</p>
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -896,9 +896,9 @@ export default function Settings() {
                   { label: 'License', value: 'Apache 2.0' },
                   { label: 'Support', value: 'support@seceoknight.com' },
                 ].map((row) => (
-                  <div key={row.label} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-100">
-                    <span className="text-sm text-gray-500">{row.label}</span>
-                    <span className="text-sm font-semibold text-gray-900">{row.value}</span>
+                  <div key={row.label} className="flex items-center justify-between p-4 bg-muted/30 rounded-xl border border-border">
+                    <span className="text-sm text-muted-foreground">{row.label}</span>
+                    <span className="text-sm font-semibold text-foreground">{row.value}</span>
                   </div>
                 ))}
               </div>

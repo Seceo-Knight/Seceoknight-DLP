@@ -34,25 +34,25 @@ export default function PolicyDetailsModal({ isOpen, policy, onClose }: PolicyDe
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto border border-gray-200 shadow-xl"
+        className="bg-card rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto border border-border shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200 sticky top-0 bg-white z-10">
+        <div className="flex items-center justify-between p-6 border-b border-border sticky top-0 bg-card z-10">
           <div className="flex items-center gap-3">
             <div className={`p-2 rounded-lg ${severityColor.bg}`}>
               <Icon className={`h-6 w-6 ${severityColor.icon}`} />
             </div>
             <div>
-              <h3 className="text-2xl font-bold text-gray-900">{policy.name}</h3>
-              <p className="text-sm text-gray-600 mt-1">{getPolicyTypeLabel(policy.type)}</p>
+              <h3 className="text-2xl font-bold text-foreground">{policy.name}</h3>
+              <p className="text-sm text-muted-foreground mt-1">{getPolicyTypeLabel(policy.type)}</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+            className="p-2 rounded-lg hover:bg-accent transition-colors"
           >
-            <X className="h-5 w-5 text-gray-500" />
+            <X className="h-5 w-5 text-muted-foreground" />
           </button>
         </div>
 
@@ -60,32 +60,32 @@ export default function PolicyDetailsModal({ isOpen, policy, onClose }: PolicyDe
         <div className="p-6 space-y-6">
           {/* Basic Information */}
           <div>
-            <h4 className="text-lg font-semibold text-gray-900 mb-4">Basic Information</h4>
+            <h4 className="text-lg font-semibold text-foreground mb-4">Basic Information</h4>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-sm font-medium text-gray-600">Status</label>
+                <label className="text-sm font-medium text-muted-foreground">Status</label>
                 <p className="mt-1">
                   {policy.enabled ? (
                     <span className="badge badge-success">Active</span>
                   ) : (
-                    <span className="badge bg-gray-100 text-gray-600">Inactive</span>
+                    <span className="badge bg-secondary text-muted-foreground">Inactive</span>
                   )}
                 </p>
               </div>
               <div>
-                <label className="text-sm font-medium text-gray-600">Severity</label>
+                <label className="text-sm font-medium text-muted-foreground">Severity</label>
                 <p className="mt-1">
                   <span className={`badge ${severityColor.badge}`}>{policy.severity}</span>
                 </p>
               </div>
               <div>
-                <label className="text-sm font-medium text-gray-600">Priority</label>
-                <p className="mt-1 text-gray-900 font-medium">{policy.priority}</p>
+                <label className="text-sm font-medium text-muted-foreground">Priority</label>
+                <p className="mt-1 text-foreground font-medium">{policy.priority}</p>
               </div>
               {policy.violations !== undefined && (
                 <div>
-                  <label className="text-sm font-medium text-gray-600">Violations</label>
-                  <p className="mt-1 text-gray-900 font-medium">{policy.violations}</p>
+                  <label className="text-sm font-medium text-muted-foreground">Violations</label>
+                  <p className="mt-1 text-foreground font-medium">{policy.violations}</p>
                 </div>
               )}
             </div>
@@ -94,15 +94,15 @@ export default function PolicyDetailsModal({ isOpen, policy, onClose }: PolicyDe
           {/* Description */}
           {policy.description && (
             <div>
-              <label className="text-sm font-medium text-gray-600">Description</label>
-              <p className="mt-1 text-gray-900">{policy.description}</p>
+              <label className="text-sm font-medium text-muted-foreground">Description</label>
+              <p className="mt-1 text-foreground">{policy.description}</p>
             </div>
           )}
 
           {/* Scope */}
           <div>
-            <label className="text-sm font-medium text-gray-600">Scope</label>
-            <p className="mt-1 text-gray-900">
+            <label className="text-sm font-medium text-muted-foreground">Scope</label>
+            <p className="mt-1 text-foreground">
               {policy.agentIds && policy.agentIds.length > 0
                 ? `Selected agents (${policy.agentIds.length}): ${policy.agentIds.join(', ')}`
                 : 'All agents'}
@@ -111,9 +111,9 @@ export default function PolicyDetailsModal({ isOpen, policy, onClose }: PolicyDe
 
           {/* Configuration */}
           <div>
-            <h4 className="text-lg font-semibold text-gray-900 mb-4">Configuration</h4>
-            <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-              <pre className="text-sm text-gray-700 whitespace-pre-wrap">
+            <h4 className="text-lg font-semibold text-foreground mb-4">Configuration</h4>
+            <div className="bg-muted/30 rounded-lg p-4 border border-border">
+              <pre className="text-sm text-foreground/90 whitespace-pre-wrap">
                 {JSON.stringify(policy.config, null, 2)}
               </pre>
             </div>
@@ -121,43 +121,43 @@ export default function PolicyDetailsModal({ isOpen, policy, onClose }: PolicyDe
 
           {/* Metadata */}
           <div>
-            <h4 className="text-lg font-semibold text-gray-900 mb-4">Metadata</h4>
+            <h4 className="text-lg font-semibold text-foreground mb-4">Metadata</h4>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="text-sm font-medium text-gray-600">Created</label>
-                <p className="mt-1 text-gray-900">{formatDate(policy.createdAt)}</p>
+                <label className="text-sm font-medium text-muted-foreground">Created</label>
+                <p className="mt-1 text-foreground">{formatDate(policy.createdAt)}</p>
               </div>
               <div>
-                <label className="text-sm font-medium text-gray-600">Last Updated</label>
-                <p className="mt-1 text-gray-900">{formatDate(policy.updatedAt)}</p>
+                <label className="text-sm font-medium text-muted-foreground">Last Updated</label>
+                <p className="mt-1 text-foreground">{formatDate(policy.updatedAt)}</p>
               </div>
               {policy.createdBy && (
                 <div>
-                  <label className="text-sm font-medium text-gray-600">Created By</label>
-                  <p className="mt-1 text-gray-900">{policy.createdBy}</p>
+                  <label className="text-sm font-medium text-muted-foreground">Created By</label>
+                  <p className="mt-1 text-foreground">{policy.createdBy}</p>
                 </div>
               )}
               {policy.lastViolation && (
                 <div>
-                  <label className="text-sm font-medium text-gray-600">Last Violation</label>
-                  <p className="mt-1 text-gray-900">{formatDate(policy.lastViolation)}</p>
+                  <label className="text-sm font-medium text-muted-foreground">Last Violation</label>
+                  <p className="mt-1 text-foreground">{formatDate(policy.lastViolation)}</p>
                 </div>
               )}
             </div>
           </div>
 
           {/* Raw JSON Data (Expandable) */}
-          <div className="border-t border-gray-200 pt-4">
+          <div className="border-t border-border pt-4">
             <button
               onClick={() => setShowJson(!showJson)}
-              className="flex items-center gap-2 text-gray-600 hover:text-gray-900 transition-colors w-full"
+              className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors w-full"
             >
               {showJson ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
               <span className="text-sm font-medium">View Raw JSON Data</span>
             </button>
             {showJson && (
-              <div className="mt-4 bg-gray-50 rounded-lg p-4 border border-gray-200">
-                <pre className="text-xs text-gray-700 overflow-x-auto">
+              <div className="mt-4 bg-muted/30 rounded-lg p-4 border border-border">
+                <pre className="text-xs text-foreground/90 overflow-x-auto">
                   {JSON.stringify(policy, null, 2)}
                 </pre>
               </div>
@@ -166,10 +166,10 @@ export default function PolicyDetailsModal({ isOpen, policy, onClose }: PolicyDe
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end p-6 border-t border-gray-200 sticky bottom-0 bg-white">
+        <div className="flex justify-end p-6 border-t border-border sticky bottom-0 bg-card">
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+            className="px-4 py-2 bg-secondary text-foreground/90 rounded-lg hover:bg-accent transition-colors"
           >
             Close
           </button>

@@ -139,11 +139,11 @@ export default function UserManagement() {
   if (!canManage) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
-        <Shield className="w-16 h-16 text-gray-400 mb-4" />
-        <h2 className="text-2xl font-semibold text-gray-800 mb-2">
+        <Shield className="w-16 h-16 text-muted-foreground/70 mb-4" />
+        <h2 className="text-2xl font-semibold text-foreground mb-2">
           You don't have access to User Management
         </h2>
-        <p className="text-gray-500 max-w-md">
+        <p className="text-muted-foreground max-w-md">
           The <code>manage_users</code> permission is required. Contact your
           administrator if you believe this is an error.
         </p>
@@ -155,11 +155,11 @@ export default function UserManagement() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-            <UsersIcon className="w-8 h-8 text-indigo-600" />
+          <h1 className="text-3xl font-bold text-foreground flex items-center gap-3">
+            <UsersIcon className="w-8 h-8 text-indigo-400" />
             User Management
           </h1>
-          <p className="text-gray-500 mt-1">
+          <p className="text-muted-foreground mt-1">
             Create, edit, revoke, and permanently delete DLP accounts. All
             actions are audited.
           </p>
@@ -173,7 +173,7 @@ export default function UserManagement() {
         </button>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
         {usersQ.isLoading ? (
           <div className="flex items-center justify-center p-12">
             <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
@@ -181,20 +181,20 @@ export default function UserManagement() {
         ) : usersQ.isError ? (
           <div className="p-8 text-center">
             <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
-            <p className="text-gray-700 font-medium">Failed to load users.</p>
+            <p className="text-foreground/90 font-medium">Failed to load users.</p>
             <button
               onClick={() => usersQ.refetch()}
-              className="mt-3 text-indigo-600 hover:underline"
+              className="mt-3 text-indigo-400 hover:underline"
             >
               Retry
             </button>
           </div>
         ) : sortedUsers.length === 0 ? (
-          <div className="p-12 text-center text-gray-500">No users yet.</div>
+          <div className="p-12 text-center text-muted-foreground">No users yet.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
+              <thead className="bg-muted/30 border-b border-border">
                 <tr>
                   <Th>Email</Th>
                   <Th>Username</Th>
@@ -208,13 +208,13 @@ export default function UserManagement() {
                   <Th className="text-right pr-6">Actions</Th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-border">
                 {sortedUsers.map((u) => (
-                  <tr key={u.id} className="hover:bg-gray-50 transition-colors">
-                    <Td className="font-medium text-gray-900">{u.email}</Td>
-                    <Td>{u.username || <span className="text-gray-400">—</span>}</Td>
+                  <tr key={u.id} className="hover:bg-accent transition-colors">
+                    <Td className="font-medium text-foreground">{u.email}</Td>
+                    <Td>{u.username || <span className="text-muted-foreground/70">—</span>}</Td>
                     <Td>{u.full_name}</Td>
-                    <Td>{u.department || <span className="text-gray-400">—</span>}</Td>
+                    <Td>{u.department || <span className="text-muted-foreground/70">—</span>}</Td>
                     <Td>
                       <RoleBadge role={u.role} />
                     </Td>
@@ -331,7 +331,7 @@ export default function UserManagement() {
 function Th({ children, className = '' }: any) {
   return (
     <th
-      className={`px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider ${className}`}
+      className={`px-6 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider ${className}`}
     >
       {children}
     </th>
@@ -340,7 +340,7 @@ function Th({ children, className = '' }: any) {
 
 function Td({ children, className = '' }: any) {
   return (
-    <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-700 ${className}`}>
+    <td className={`px-6 py-4 whitespace-nowrap text-sm text-foreground/90 ${className}`}>
       {children}
     </td>
   )
@@ -348,16 +348,16 @@ function Td({ children, className = '' }: any) {
 
 function RoleBadge({ role }: { role: string }) {
   const colors: Record<string, string> = {
-    ADMIN:   'bg-red-100 text-red-800',
-    ANALYST: 'bg-blue-100 text-blue-800',
-    MANAGER: 'bg-purple-100 text-purple-800',
-    VIEWER:  'bg-gray-100 text-gray-800',
-    AGENT:   'bg-emerald-100 text-emerald-800',
-    THREAT_ADMIN:           'bg-orange-100 text-orange-800',
-    DATA_PROTECTION_ADMIN:  'bg-teal-100 text-teal-800',
-    ACCESS_CONTROL_ADMIN:   'bg-indigo-100 text-indigo-800',
+    ADMIN:   'bg-red-500/15 text-red-300',
+    ANALYST: 'bg-blue-500/15 text-blue-300',
+    MANAGER: 'bg-purple-500/15 text-purple-300',
+    VIEWER:  'bg-secondary text-foreground',
+    AGENT:   'bg-emerald-500/15 text-emerald-300',
+    THREAT_ADMIN:           'bg-orange-500/15 text-orange-300',
+    DATA_PROTECTION_ADMIN:  'bg-teal-500/15 text-teal-300',
+    ACCESS_CONTROL_ADMIN:   'bg-indigo-500/15 text-indigo-300',
   }
-  const cls = colors[role?.toUpperCase()] || 'bg-gray-100 text-gray-800'
+  const cls = colors[role?.toUpperCase()] || 'bg-secondary text-foreground'
   return (
     <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold ${cls}`}>
       {role}
@@ -367,13 +367,13 @@ function RoleBadge({ role }: { role: string }) {
 
 function MfaBadge({ enabled }: { enabled: boolean }) {
   return enabled ? (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-800">
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-green-500/15 text-green-300">
       <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
       On
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 text-gray-500">
-      <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-secondary text-muted-foreground">
+      <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60" />
       Off
     </span>
   )
@@ -381,13 +381,13 @@ function MfaBadge({ enabled }: { enabled: boolean }) {
 
 function StatusBadge({ active }: { active: boolean }) {
   return active ? (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-green-100 text-green-800">
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-green-500/15 text-green-300">
       <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
       Active
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-gray-100 text-gray-600">
-      <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-secondary text-muted-foreground">
+      <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60" />
       Inactive
     </span>
   )
@@ -404,13 +404,13 @@ function PermissionSummary({
 }) {
   return (
     <span
-      className="text-xs text-gray-600"
+      className="text-xs text-muted-foreground"
       title={`${effective} effective permissions (role defaults + ${direct} direct grant${direct === 1 ? '' : 's'})`}
     >
-      <span className="font-medium text-gray-800">{effective}</span>
-      <span className="text-gray-400"> / {total}</span>
+      <span className="font-medium text-foreground">{effective}</span>
+      <span className="text-muted-foreground/70"> / {total}</span>
       {direct > 0 && (
-        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-100 text-indigo-700">
+        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/15 text-indigo-400">
           +{direct} direct
         </span>
       )}
@@ -432,9 +432,9 @@ function IconButton({
   disabled?: boolean
 }) {
   const colorMap: Record<string, string> = {
-    indigo: 'hover:bg-indigo-100 text-indigo-600',
-    yellow: 'hover:bg-yellow-100 text-yellow-600',
-    red:    'hover:bg-red-100 text-red-600',
+    indigo: 'hover:bg-indigo-500/15 text-indigo-400',
+    yellow: 'hover:bg-yellow-500/15 text-yellow-400',
+    red:    'hover:bg-red-500/15 text-red-400',
   }
   return (
     <button
@@ -688,7 +688,7 @@ function EditUserDialog({
             onChange={(e) => update('is_active', e.target.checked)}
             className="h-4 w-4"
           />
-          <label htmlFor="active-toggle" className="text-sm text-gray-700">
+          <label htmlFor="active-toggle" className="text-sm text-foreground/90">
             Account is active
           </label>
         </div>
@@ -724,9 +724,9 @@ function HardDeleteDialog({
   return (
     <Modal title="Delete user permanently" onClose={onClose}>
       <div className="space-y-4">
-        <div className="flex items-start gap-3 p-3 rounded-lg bg-red-50 border border-red-200">
-          <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
-          <div className="text-sm text-red-800">
+        <div className="flex items-start gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/30">
+          <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-red-300">
             <p className="font-semibold">This cannot be undone.</p>
             <p className="mt-1">
               The row will be removed from the database. Audit entries they
@@ -734,8 +734,8 @@ function HardDeleteDialog({
             </p>
           </div>
         </div>
-        <p className="text-sm text-gray-700">
-          Type <code className="px-1 py-0.5 bg-gray-100 rounded text-gray-900">{user.email}</code> to confirm.
+        <p className="text-sm text-foreground/90">
+          Type <code className="px-1 py-0.5 bg-secondary rounded text-foreground">{user.email}</code> to confirm.
         </p>
         <input
           type="text"
@@ -749,7 +749,7 @@ function HardDeleteDialog({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-gray-700 hover:bg-gray-100"
+            className="px-4 py-2 rounded-lg text-foreground/90 hover:bg-accent"
           >
             Cancel
           </button>
@@ -803,36 +803,36 @@ function PermissionPicker({
 
   if (permsCatalog.length === 0) {
     return (
-      <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-500">
+      <div className="p-3 rounded-lg bg-muted/30 border border-border text-sm text-muted-foreground">
         Loading permission catalog…
       </div>
     )
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 p-3">
+    <div className="rounded-lg border border-border p-3">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-medium text-gray-800">
+        <span className="text-sm font-medium text-foreground">
           Direct Permissions
-          <span className="ml-2 text-xs text-gray-500 font-normal">
+          <span className="ml-2 text-xs text-muted-foreground font-normal">
             {selected.length} of {permsCatalog.length} selected
           </span>
         </span>
       </div>
       {helpText && (
-        <p className="text-xs text-gray-500 mb-3">{helpText}</p>
+        <p className="text-xs text-muted-foreground mb-3">{helpText}</p>
       )}
       <div className="space-y-3">
         {Object.entries(groups).map(([group, perms]) => (
           <div key={group}>
-            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">
+            <div className="text-xs font-semibold text-muted-foreground/70 uppercase tracking-wide mb-1.5">
               {group}
             </div>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
               {perms.map((p) => (
                 <label
                   key={p.id}
-                  className="flex items-start gap-2 cursor-pointer hover:bg-gray-50 px-2 py-1 rounded"
+                  className="flex items-start gap-2 cursor-pointer hover:bg-accent px-2 py-1 rounded"
                 >
                   <input
                     type="checkbox"
@@ -841,11 +841,11 @@ function PermissionPicker({
                     onChange={() => onToggle(p.name)}
                   />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-gray-800 font-mono truncate">
+                    <div className="text-sm text-foreground font-mono truncate">
                       {p.name}
                     </div>
                     {p.description && (
-                      <div className="text-xs text-gray-500 truncate">
+                      <div className="text-xs text-muted-foreground truncate">
                         {p.description}
                       </div>
                     )}
@@ -899,17 +899,17 @@ function Modal({
       <div
         // max-h caps the card to leave breathing room top+bottom; min-h-0 on
         // the flex child lets the body's overflow-y-auto actually scroll.
-        className={`bg-white rounded-xl shadow-xl w-full flex flex-col max-h-[calc(100vh-4rem)] ${
+        className={`bg-card rounded-xl shadow-xl w-full flex flex-col max-h-[calc(100vh-4rem)] ${
           wide ? 'max-w-2xl' : 'max-w-md'
         }`}
         role="dialog"
         aria-modal="true"
       >
         <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
-          <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+          <h2 className="text-lg font-semibold text-foreground">{title}</h2>
           <button
             onClick={onClose}
-            className="p-1 rounded hover:bg-gray-100 text-gray-500"
+            className="p-1 rounded hover:bg-accent text-muted-foreground"
             aria-label="Close dialog"
           >
             <X className="w-5 h-5" />
@@ -932,7 +932,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="block text-sm font-medium text-gray-700 mb-1">
+      <span className="block text-sm font-medium text-foreground/90 mb-1">
         {label}
         {required && <span className="text-red-500 ml-1">*</span>}
       </span>
@@ -955,7 +955,7 @@ function DialogActions({
       <button
         type="button"
         onClick={onClose}
-        className="px-4 py-2 rounded-lg text-gray-700 hover:bg-gray-100"
+        className="px-4 py-2 rounded-lg text-foreground/90 hover:bg-accent"
         disabled={isSubmitting}
       >
         Cancel

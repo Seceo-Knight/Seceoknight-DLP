@@ -1,294 +1,384 @@
-import { useState, useEffect } from 'react'
-import { AlertTriangle, Plus, X, MessageSquare, Send } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+
+import { Shield, Clock, User, Loader2, AlertTriangle, CheckCircle, Eye, RefreshCcw, ChevronDown, ChevronUp, ArrowUpDown, Siren } from 'lucide-react'
+import { getAutoIncidents, getAutoIncident, updateAutoIncident } from '@/lib/api'
+import { formatDateTimeIST, cn } from '@/lib/utils'
+import { PageHeader } from '@/components/ui/page-header'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import { tone, innerBox, labelCls, type Tone } from '@/lib/tone'
 import toast from 'react-hot-toast'
-import LoadingSpinner from '@/components/LoadingSpinner'
-import {
-  getIncidents,
-  getIncident,
-  createIncident,
-  updateIncident,
-  getIncidentComments,
-  addIncidentComment,
-  getIncidentStats,
-} from '@/lib/api'
-import { formatDateTimeIST } from '@/lib/utils'
 
-const SEVERITY_MAP: Record<number, { label: string; color: string }> = {
-  0: { label: 'Info', color: 'bg-gray-500/20 text-gray-300' },
-  1: { label: 'Low', color: 'bg-blue-500/20 text-blue-300' },
-  2: { label: 'Medium', color: 'bg-yellow-500/20 text-yellow-300' },
-  3: { label: 'High', color: 'bg-orange-500/20 text-orange-300' },
-  4: { label: 'Critical', color: 'bg-red-500/20 text-red-300' },
+const severityMap: Record<number, { label: string; t: Tone }> = {
+  0: { label: 'Info', t: 'gray' },
+  1: { label: 'Low', t: 'green' },
+  2: { label: 'Medium', t: 'yellow' },
+  3: { label: 'High', t: 'orange' },
+  4: { label: 'Critical', t: 'red' },
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  open: 'bg-red-500/20 text-red-300',
-  investigating: 'bg-yellow-500/20 text-yellow-300',
-  resolved: 'bg-green-500/20 text-green-300',
+const statusConfig: Record<string, { label: string; icon: any; t: Tone }> = {
+  open: { label: 'Open', icon: AlertTriangle, t: 'red' },
+  investigating: { label: 'Investigating', icon: Eye, t: 'yellow' },
+  resolved: { label: 'Resolved', icon: CheckCircle, t: 'green' },
 }
 
-export default function Incidents() {
-  const [incidents, setIncidents] = useState<any[]>([])
-  const [stats, setStats] = useState<any>(null)
-  const [loading, setLoading] = useState(true)
-  const [filterSeverity, setFilterSeverity] = useState<string>('')
-  const [filterStatus, setFilterStatus] = useState<string>('')
-  const [search, setSearch] = useState('')
-  const [selected, setSelected] = useState<any>(null)
-  const [comments, setComments] = useState<any[]>([])
-  const [newComment, setNewComment] = useState('')
-  const [showCreate, setShowCreate] = useState(false)
-  const [createForm, setCreateForm] = useState({ title: '', description: '', severity: 2, event_id: '' })
+function classificationTone(level?: string): Tone {
+  if (level === 'Restricted') return 'red'
+  if (level === 'Confidential') return 'orange'
+  if (level === 'Internal') return 'yellow'
+  return 'gray'
+}
 
-  const fetchData = async () => {
-    try {
-      const params: any = { limit: 100 }
-      if (filterSeverity !== '') params.severity = Number(filterSeverity)
-      if (filterStatus) params.status = filterStatus
-      const [inc, st] = await Promise.all([getIncidents(params), getIncidentStats().catch(() => null)])
-      setIncidents(Array.isArray(inc) ? inc : inc?.incidents || [])
-      if (st) setStats(st)
-    } catch (e: any) {
-      toast.error('Failed to load incidents')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => { fetchData() }, [filterSeverity, filterStatus])
-
-  const openDetail = async (inc: any) => {
-    setSelected(inc)
-    try {
-      const c = await getIncidentComments(inc.id || inc._id)
-      setComments(Array.isArray(c) ? c : c?.comments || [])
-    } catch { setComments([]) }
-  }
-
-  const handleStatusChange = async (status: string) => {
-    if (!selected) return
-    try {
-      await updateIncident(selected.id || selected._id, { status })
-      toast.success(`Status updated to ${status}`)
-      setSelected({ ...selected, status })
-      fetchData()
-    } catch { toast.error('Failed to update status') }
-  }
-
-  const handleAssign = async (assigned_to: string) => {
-    if (!selected) return
-    try {
-      await updateIncident(selected.id || selected._id, { assigned_to })
-      setSelected({ ...selected, assigned_to })
-      toast.success('Assignment updated')
-    } catch { toast.error('Failed to assign') }
-  }
-
-  const handleAddComment = async () => {
-    if (!newComment.trim() || !selected) return
-    try {
-      await addIncidentComment(selected.id || selected._id, newComment)
-      setNewComment('')
-      const c = await getIncidentComments(selected.id || selected._id)
-      setComments(Array.isArray(c) ? c : c?.comments || [])
-      toast.success('Comment added')
-    } catch { toast.error('Failed to add comment') }
-  }
-
-  const handleCreate = async () => {
-    if (!createForm.title.trim()) return toast.error('Title is required')
-    try {
-      await createIncident({
-        title: createForm.title,
-        severity: createForm.severity,
-        description: createForm.description || undefined,
-        event_id: createForm.event_id || undefined,
-      })
-      toast.success('Incident created')
-      setShowCreate(false)
-      setCreateForm({ title: '', description: '', severity: 2, event_id: '' })
-      fetchData()
-    } catch { toast.error('Failed to create incident') }
-  }
-
-  const filtered = incidents.filter((i) =>
-    search ? (i.title || '').toLowerCase().includes(search.toLowerCase()) : true
+function IncidentCard({ incident, onClick }: { incident: any; onClick: () => void }) {
+  const sev = severityMap[incident.severity] ?? severityMap[2]
+  return (
+    <div
+      onClick={onClick}
+      className="group rounded-xl border border-border bg-card p-4 hover:border-primary/40 hover:shadow-md hover:-translate-y-0.5 cursor-pointer transition-all"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <h4 className="text-foreground font-semibold text-sm truncate group-hover:text-primary transition-colors">{incident.title}</h4>
+          <p className="text-muted-foreground text-xs mt-1 truncate">{incident.description}</p>
+        </div>
+        <span className={cn('px-2.5 py-1 rounded-lg border text-xs font-semibold uppercase shrink-0', tone(sev.t))}>{sev.label}</span>
+      </div>
+      <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground flex-wrap">
+        {incident.user_email && (
+          <span className="flex items-center gap-1"><User className="w-3 h-3" />{incident.user_email}</span>
+        )}
+        {incident.event_count > 1 && <span className="text-warning font-medium">{incident.event_count} events</span>}
+        <span className="ml-auto flex items-center gap-1"><Clock className="w-3 h-3" />{formatDateTimeIST(incident.created_at)}</span>
+      </div>
+    </div>
   )
+}
 
-  if (loading) return <LoadingSpinner />
+function IncidentDetail({ incidentId, onClose }: { incidentId: string; onClose: () => void }) {
+  const [expandedEvent, setExpandedEvent] = useState<number | null>(null)
+  const queryClient = useQueryClient()
+
+  const { data: incident, isLoading } = useQuery({
+    queryKey: ['auto-incident', incidentId],
+    queryFn: () => getAutoIncident(incidentId),
+  })
+
+  const statusMutation = useMutation({
+    mutationFn: (newStatus: string) => updateAutoIncident(incidentId, { status: newStatus }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['auto-incidents'] })
+      queryClient.invalidateQueries({ queryKey: ['auto-incident', incidentId] })
+      toast.success('Status updated')
+    },
+    onError: () => toast.error('Failed to update'),
+  })
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-white flex items-center gap-2">
-          <AlertTriangle className="h-6 w-6" /> Incidents
-        </h1>
-        <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm">
-          <Plus className="h-4 w-4" /> Create Incident
-        </button>
-      </div>
-
-      {/* Stats Cards */}
-      {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[
-            { label: 'Open', value: stats.open ?? 0, color: 'text-red-400' },
-            { label: 'Investigating', value: stats.investigating ?? 0, color: 'text-yellow-400' },
-            { label: 'Resolved', value: stats.resolved ?? 0, color: 'text-green-400' },
-            { label: 'Total', value: stats.total ?? 0, color: 'text-white' },
-          ].map((s) => (
-            <div key={s.label} className="bg-[#1e2124] rounded-lg p-4 border border-gray-700">
-              <div className="text-sm text-gray-400">{s.label}</div>
-              <div className={`text-2xl font-bold ${s.color}`}>{s.value}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3">
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search incidents..." className="px-3 py-2 bg-[#1e2124] border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 w-64" />
-        <select value={filterSeverity} onChange={(e) => setFilterSeverity(e.target.value)} className="px-3 py-2 bg-[#1e2124] border border-gray-700 rounded-lg text-white text-sm">
-          <option value="">All Severities</option>
-          {[0, 1, 2, 3, 4].map((s) => <option key={s} value={s}>{SEVERITY_MAP[s].label}</option>)}
-        </select>
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-3 py-2 bg-[#1e2124] border border-gray-700 rounded-lg text-white text-sm">
-          <option value="">All Statuses</option>
-          <option value="open">Open</option>
-          <option value="investigating">Investigating</option>
-          <option value="resolved">Resolved</option>
-        </select>
-      </div>
-
-      {/* Table */}
-      <div className="bg-[#1e2124] rounded-lg border border-gray-700 overflow-x-auto">
-        <table className="w-full text-sm text-left">
-          <thead className="text-gray-400 border-b border-gray-700">
-            <tr>
-              <th className="px-4 py-3">Severity</th>
-              <th className="px-4 py-3">Title</th>
-              <th className="px-4 py-3">Event ID</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Assigned To</th>
-              <th className="px-4 py-3">Created</th>
-            </tr>
-          </thead>
-          <tbody className="text-white">
-            {filtered.length === 0 ? (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-500">No incidents found</td></tr>
-            ) : filtered.map((inc) => {
-              const sev = SEVERITY_MAP[inc.severity] || SEVERITY_MAP[0]
-              return (
-                <tr key={inc.id || inc._id} onClick={() => openDetail(inc)} className="border-b border-gray-700/50 hover:bg-[#2a2d2f] cursor-pointer">
-                  <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-medium ${sev.color}`}>{sev.label}</span></td>
-                  <td className="px-4 py-3 font-medium">{inc.title}</td>
-                  <td className="px-4 py-3 text-gray-400 font-mono text-xs">{inc.event_id || '-'}</td>
-                  <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[inc.status] || 'bg-gray-500/20 text-gray-300'}`}>{inc.status}</span></td>
-                  <td className="px-4 py-3 text-gray-400">{inc.assigned_to || '-'}</td>
-                  <td className="px-4 py-3 text-gray-400">{inc.created_at ? formatDateTimeIST(inc.created_at) : '-'}</td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Detail Modal */}
-      {selected && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setSelected(null)}>
-          <div className="bg-[#1e2124] rounded-lg border border-gray-700 w-full max-w-2xl max-h-[80vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-bold text-white">{selected.title}</h2>
-              <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-white"><X className="h-5 w-5" /></button>
-            </div>
-            <div className="space-y-4">
-              <div className="flex flex-wrap gap-3 text-sm">
-                <span className={`px-2 py-0.5 rounded text-xs font-medium ${(SEVERITY_MAP[selected.severity] || SEVERITY_MAP[0]).color}`}>{(SEVERITY_MAP[selected.severity] || SEVERITY_MAP[0]).label}</span>
-                <span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[selected.status] || ''}`}>{selected.status}</span>
-                {selected.event_id && <span className="text-gray-400 font-mono">Event: {selected.event_id}</span>}
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-4xl">
+        {isLoading || !incident ? (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          </div>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle className="text-xl">{incident.title}</DialogTitle>
+              <div className="flex gap-2 mt-1 flex-wrap">
+                <span className={cn('px-3 py-1 rounded-lg border text-xs font-semibold uppercase', tone((severityMap[incident.severity] ?? severityMap[2]).t))}>
+                  {(severityMap[incident.severity] ?? severityMap[2]).label}
+                </span>
+                <span className={cn('px-3 py-1 rounded-lg border text-xs font-semibold uppercase', tone((statusConfig[incident.status] || statusConfig.open).t))}>
+                  {incident.status}
+                </span>
+                {incident.classification_level && (
+                  <span className={cn('px-3 py-1 rounded-lg border text-xs font-semibold uppercase', tone(classificationTone(incident.classification_level)))}>
+                    {incident.classification_level}
+                  </span>
+                )}
               </div>
-              {selected.description && <p className="text-gray-300 text-sm">{selected.description}</p>}
+            </DialogHeader>
 
-              {/* Status buttons */}
-              <div className="flex gap-2">
-                {['open', 'investigating', 'resolved'].map((s) => (
-                  <button key={s} disabled={selected.status === s} onClick={() => handleStatusChange(s)}
-                    className={`px-3 py-1.5 rounded text-xs font-medium ${selected.status === s ? 'bg-gray-600 text-gray-400 cursor-not-allowed' : 'bg-[#2a2d2f] text-white hover:bg-[#353839]'}`}>
-                    {s.charAt(0).toUpperCase() + s.slice(1)}
-                  </button>
+            <div className="space-y-6">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {[
+                  { label: 'User', value: incident.user_email || 'Unknown' },
+                  { label: 'Agent', value: incident.agent_id?.slice(0, 12) || 'N/A' },
+                  { label: 'Events', value: incident.event_count || 1 },
+                  { label: 'Created', value: formatDateTimeIST(incident.created_at) },
+                ].map((item) => (
+                  <div key={item.label} className={innerBox}>
+                    <label className="text-xs text-muted-foreground block">{item.label}</label>
+                    <p className="text-foreground text-sm font-medium truncate">{item.value}</p>
+                  </div>
                 ))}
               </div>
 
-              {/* Assign */}
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Assign To</label>
-                <input value={selected.assigned_to || ''} onChange={(e) => setSelected({ ...selected, assigned_to: e.target.value })}
-                  onBlur={(e) => handleAssign(e.target.value)}
-                  className="px-3 py-2 bg-[#2a2d2f] border border-gray-700 rounded-lg text-white text-sm w-full" placeholder="Username" />
+              {incident.description && (
+                <div className={innerBox}>
+                  <label className={cn(labelCls, 'mb-2')}>Description</label>
+                  <p className="text-foreground/90 text-sm">{incident.description}</p>
+                </div>
+              )}
+
+              <div className={innerBox}>
+                <label className={cn(labelCls, 'mb-3')}>Update Status</label>
+                <div className="flex gap-2 flex-wrap">
+                  {['open', 'investigating', 'resolved'].map((s) => {
+                    const cfg = statusConfig[s]
+                    const active = incident.status === s
+                    return (
+                      <button
+                        key={s}
+                        onClick={() => statusMutation.mutate(s)}
+                        disabled={statusMutation.isPending}
+                        className={cn(
+                          'flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-all disabled:opacity-50',
+                          active ? tone(cfg.t) : 'border-border text-muted-foreground hover:text-foreground hover:border-primary/40',
+                        )}
+                      >
+                        <cfg.icon className="w-4 h-4" />{cfg.label}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
 
-              {/* Comments */}
-              <div>
-                <h3 className="text-sm font-medium text-gray-300 flex items-center gap-1 mb-2"><MessageSquare className="h-4 w-4" /> Comments</h3>
-                <div className="space-y-2 max-h-48 overflow-y-auto mb-2">
-                  {comments.length === 0 ? (
-                    <p className="text-gray-500 text-xs">No comments yet</p>
-                  ) : comments.map((c, i) => (
-                    <div key={i} className="bg-[#2a2d2f] rounded p-2 text-sm">
-                      <div className="text-xs text-gray-400 mb-1">{c.user || 'Unknown'} &middot; {c.created_at ? formatDateTimeIST(c.created_at) : ''}</div>
-                      <div className="text-gray-200">{c.comment || c.text}</div>
-                    </div>
-                  ))}
+              <details className={cn(innerBox, 'overflow-hidden p-0')}>
+                <summary className="px-4 py-3 text-sm font-medium text-foreground cursor-pointer hover:bg-accent">View Raw Incident Data</summary>
+                <pre className="px-4 pb-4 text-xs text-muted-foreground overflow-x-auto whitespace-pre-wrap">{JSON.stringify(incident, null, 2)}</pre>
+              </details>
+
+              {(incident.related_events || []).length > 0 && (
+                <div>
+                  <label className={cn(labelCls, 'mb-3')}>Related Events ({incident.related_events.length})</label>
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {incident.related_events.map((ev: any, idx: number) => (
+                      <div key={idx} className={cn(innerBox, 'overflow-hidden p-0')}>
+                        <div
+                          onClick={() => setExpandedEvent(expandedEvent === idx ? null : idx)}
+                          className="flex items-center justify-between p-3 cursor-pointer hover:bg-accent transition-colors"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className="text-foreground text-sm font-medium truncate">{ev.description || ev.event_type}</p>
+                            <p className="text-muted-foreground text-xs">{ev.event_type} | {ev.action_taken || 'logged'} | {formatDateTimeIST(ev.timestamp)}</p>
+                          </div>
+                          <div className="flex items-center gap-2 ml-3 shrink-0">
+                            {ev.classification_level && (
+                              <span className={cn('px-2 py-0.5 rounded text-xs font-medium border', tone(classificationTone(ev.classification_level)))}>
+                                {ev.classification_level}
+                              </span>
+                            )}
+                            {expandedEvent === idx ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+                          </div>
+                        </div>
+                        {expandedEvent === idx && (
+                          <div className="border-t border-border p-3 bg-muted/30">
+                            {ev.detected_content && (
+                              <div className="mb-3">
+                                <label className="text-xs text-muted-foreground block mb-1">Detected Content</label>
+                                <pre className="text-xs text-foreground/90 bg-card rounded p-2 border border-border whitespace-pre-wrap">{ev.detected_content}</pre>
+                              </div>
+                            )}
+                            {ev.classification_rules_matched && ev.classification_rules_matched.length > 0 && (
+                              <div className="mb-3">
+                                <label className="text-xs text-muted-foreground block mb-1">Matched Rules</label>
+                                <div className="flex gap-1.5 flex-wrap">
+                                  {ev.classification_rules_matched.map((r: string, i: number) => (
+                                    <span key={i} className={cn('px-2 py-0.5 rounded-full text-xs font-medium border', tone('purple'))}>{r}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            <details>
+                              <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">Raw JSON</summary>
+                              <pre className="mt-2 text-xs text-muted-foreground bg-card rounded p-2 border border-border overflow-x-auto whitespace-pre-wrap">{JSON.stringify(ev, null, 2)}</pre>
+                            </details>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  <input value={newComment} onChange={(e) => setNewComment(e.target.value)} placeholder="Add a comment..."
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddComment()}
-                    className="flex-1 px-3 py-2 bg-[#2a2d2f] border border-gray-700 rounded-lg text-white text-sm" />
-                  <button onClick={handleAddComment} className="px-3 py-2 bg-primary-600 hover:bg-primary-700 rounded-lg text-white"><Send className="h-4 w-4" /></button>
-                </div>
-              </div>
+              )}
             </div>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+type SortMode = 'severity' | 'newest' | 'oldest'
+
+function sortIncidents(list: any[], mode: SortMode) {
+  const copy = [...list]
+  if (mode === 'severity') copy.sort((a, b) => (b.severity || 0) - (a.severity || 0))
+  else if (mode === 'newest') copy.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+  else copy.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+  return copy
+}
+
+const PAGE_SIZE = 8
+
+function IncidentColumn({
+  title, icon: Icon, iconTone, incidents, emptyLabel, onSelect,
+}: {
+  title: string
+  icon: any
+  iconTone: Tone
+  incidents: any[]
+  emptyLabel: string
+  onSelect: (id: string) => void
+}) {
+  const [visible, setVisible] = useState(PAGE_SIZE)
+  const shown = incidents.slice(0, visible)
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-3">
+        <Icon className={cn('w-4 h-4', tone(iconTone).split(' ').find((c) => c.startsWith('text-')))} />
+        <h2 className="text-sm font-semibold uppercase text-foreground">{title} ({incidents.length})</h2>
+      </div>
+      <div className="space-y-3">
+        {incidents.length === 0 ? (
+          <div className="rounded-xl border border-border bg-muted/20 p-6 text-center">
+            <p className="text-muted-foreground text-sm">{emptyLabel}</p>
           </div>
+        ) : (
+          <>
+            {shown.map((inc: any) => (
+              <IncidentCard key={inc.id || inc.event_id} incident={inc} onClick={() => onSelect(inc.id || inc.event_id)} />
+            ))}
+            {incidents.length > visible && (
+              <Button variant="outline" size="sm" className="w-full" onClick={() => setVisible((v) => v + PAGE_SIZE)}>
+                Show {Math.min(PAGE_SIZE, incidents.length - visible)} more
+              </Button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default function IncidentsPage() {
+  const [selectedIncident, setSelectedIncident] = useState<string | null>(null)
+  const [sortMode, setSortMode] = useState<SortMode>('severity')
+
+  const { data, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ['auto-incidents'],
+    queryFn: () => getAutoIncidents({ limit: 200 }),
+    staleTime: 0,
+    refetchInterval: 15000,
+    retry: false,
+  })
+
+  const incidents = data?.incidents || []
+  const stats = data?.stats || { total: 0, open: 0, investigating: 0, resolved: 0 }
+
+  const openIncidents = useMemo(() => sortIncidents(incidents.filter((i: any) => i.status === 'open'), sortMode), [incidents, sortMode])
+  const investigatingIncidents = useMemo(() => sortIncidents(incidents.filter((i: any) => i.status === 'investigating'), sortMode), [incidents, sortMode])
+  const resolvedIncidents = useMemo(() => sortIncidents(incidents.filter((i: any) => i.status === 'resolved'), sortMode), [incidents, sortMode])
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        icon={Siren}
+        title="Incidents"
+        description="Auto-generated from blocked and critical DLP events."
+        actions={
+          <div className="flex items-center gap-2">
+            <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+            <Select value={sortMode} onValueChange={(v) => setSortMode(v as SortMode)}>
+              <SelectTrigger className="h-8 w-[140px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="severity">Severity</SelectItem>
+                <SelectItem value="newest">Newest first</SelectItem>
+                <SelectItem value="oldest">Oldest first</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+              <RefreshCcw className={cn('w-4 h-4', isFetching && 'animate-spin')} />
+              Refresh
+            </Button>
+          </div>
+        }
+      />
+
+      {/* Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        {[
+          { label: 'Total', value: stats.total, t: 'gray' as Tone },
+          { label: 'Open', value: stats.open, t: 'red' as Tone },
+          { label: 'Investigating', value: stats.investigating, t: 'yellow' as Tone },
+          { label: 'Resolved', value: stats.resolved, t: 'green' as Tone },
+        ].map((s) => (
+          <Card key={s.label} className="p-4">
+            <p className="text-muted-foreground text-xs uppercase">{s.label}</p>
+            <p className={cn('text-3xl font-bold mt-1', tone(s.t).split(' ').find((c) => c.startsWith('text-')) || 'text-foreground')}>
+              {s.value}
+            </p>
+          </Card>
+        ))}
+      </div>
+
+      {isLoading ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="space-y-3">
+              <Skeleton className="h-5 w-32" />
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          ))}
+        </div>
+      ) : incidents.length === 0 ? (
+        <Card className="p-0">
+          <EmptyState
+            icon={Shield}
+            title="No incidents"
+            description="Blocked or critical events will auto-generate incidents here."
+          />
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <IncidentColumn
+            title="Open"
+            icon={AlertTriangle}
+            iconTone="red"
+            incidents={openIncidents}
+            emptyLabel="No open incidents"
+            onSelect={setSelectedIncident}
+          />
+          <IncidentColumn
+            title="Investigating"
+            icon={Eye}
+            iconTone="yellow"
+            incidents={investigatingIncidents}
+            emptyLabel="No active investigations"
+            onSelect={setSelectedIncident}
+          />
+          <IncidentColumn
+            title="Resolved"
+            icon={CheckCircle}
+            iconTone="green"
+            incidents={resolvedIncidents}
+            emptyLabel="No resolved incidents"
+            onSelect={setSelectedIncident}
+          />
         </div>
       )}
 
-      {/* Create Modal */}
-      {showCreate && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setShowCreate(false)}>
-          <div className="bg-[#1e2124] rounded-lg border border-gray-700 w-full max-w-lg p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold text-white">Create Incident</h2>
-              <button onClick={() => setShowCreate(false)} className="text-gray-400 hover:text-white"><X className="h-5 w-5" /></button>
-            </div>
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Title *</label>
-                <input value={createForm.title} onChange={(e) => setCreateForm({ ...createForm, title: e.target.value })}
-                  className="w-full px-3 py-2 bg-[#2a2d2f] border border-gray-700 rounded-lg text-white text-sm" />
-              </div>
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Severity</label>
-                <select value={createForm.severity} onChange={(e) => setCreateForm({ ...createForm, severity: Number(e.target.value) })}
-                  className="w-full px-3 py-2 bg-[#2a2d2f] border border-gray-700 rounded-lg text-white text-sm">
-                  {[0, 1, 2, 3, 4].map((s) => <option key={s} value={s}>{SEVERITY_MAP[s].label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Description</label>
-                <textarea value={createForm.description} onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
-                  rows={3} className="w-full px-3 py-2 bg-[#2a2d2f] border border-gray-700 rounded-lg text-white text-sm" />
-              </div>
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Event ID (optional)</label>
-                <input value={createForm.event_id} onChange={(e) => setCreateForm({ ...createForm, event_id: e.target.value })}
-                  className="w-full px-3 py-2 bg-[#2a2d2f] border border-gray-700 rounded-lg text-white text-sm" />
-              </div>
-              <button onClick={handleCreate} className="w-full px-4 py-2 bg-primary-600 hover:bg-primary-700 text-white rounded-lg text-sm font-medium">Create</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {selectedIncident && <IncidentDetail incidentId={selectedIncident} onClose={() => setSelectedIncident(null)} />}
     </div>
   )
 }

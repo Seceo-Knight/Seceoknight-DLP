@@ -83,7 +83,7 @@ export default function ProtectedFolderSelector({
 
   if (!connectionId) {
     return (
-      <div className="p-8 text-center text-gray-400 border-2 border-dashed border-gray-700 rounded-lg bg-gray-900/30">
+      <div className="p-8 text-center text-muted-foreground/70 border-2 border-dashed border-gray-700 rounded-lg bg-gray-900/30">
         Please select a Google Drive connection first.
       </div>
     )
@@ -96,12 +96,12 @@ export default function ProtectedFolderSelector({
         <div className="flex items-center gap-2 text-sm overflow-x-auto no-scrollbar flex-1 mr-4">
           {currentPath.map((item, index) => (
             <React.Fragment key={item.id}>
-              {index > 0 && <ChevronRight className="h-4 w-4 text-gray-500 flex-shrink-0" />}
+              {index > 0 && <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />}
               <button
                 onClick={() => handleBreadcrumbClick(index)}
                 className={cn(
                   'hover:text-indigo-400 whitespace-nowrap transition-colors',
-                  index === currentPath.length - 1 ? 'font-semibold text-white' : 'text-gray-400'
+                  index === currentPath.length - 1 ? 'font-semibold text-white' : 'text-muted-foreground/70'
                 )}
               >
                 {item.name}
@@ -156,7 +156,7 @@ export default function ProtectedFolderSelector({
             </button>
           </div>
         ) : folders.length === 0 ? (
-          <div className="p-8 text-center text-gray-500 text-sm">
+          <div className="p-8 text-center text-muted-foreground text-sm">
             No subfolders found in this directory.
           </div>
         ) : (
@@ -195,11 +195,11 @@ export default function ProtectedFolderSelector({
                     >
                       <Folder className={cn(
                         "h-5 w-5 flex-shrink-0 transition-colors",
-                        isSelected ? "text-indigo-400" : "text-gray-500 group-hover:text-gray-400"
+                        isSelected ? "text-indigo-400" : "text-muted-foreground group-hover:text-muted-foreground/70"
                       )} />
                       <span className={cn(
                         "truncate text-sm font-medium transition-colors",
-                        isSelected ? "text-indigo-300" : "text-gray-300 group-hover:text-white"
+                        isSelected ? "text-indigo-300" : "text-muted-foreground/50 group-hover:text-white"
                       )}>
                         {folder.name}
                       </span>
@@ -209,7 +209,7 @@ export default function ProtectedFolderSelector({
                   {/* Navigate Button */}
                   <button
                     onClick={() => handleNavigate(folder.id, folder.name)}
-                    className="p-1 text-gray-500 hover:text-indigo-400 hover:bg-gray-700 rounded-full transition-colors ml-2"
+                    className="p-1 text-muted-foreground hover:text-indigo-400 hover:bg-gray-700 rounded-full transition-colors ml-2"
                     title="Open folder"
                   >
                     <ChevronRight className="h-5 w-5" />
@@ -223,7 +223,7 @@ export default function ProtectedFolderSelector({
 
       {/* Selection Summary */}
       <div className="p-3 border-t border-gray-700 bg-gray-800/30 text-xs flex justify-between items-center">
-        <span className="text-gray-400">
+        <span className="text-muted-foreground/70">
           {selectedFolders.length} folder{selectedFolders.length !== 1 ? 's' : ''} selected
         </span>
         {selectedFolders.length > 0 && (

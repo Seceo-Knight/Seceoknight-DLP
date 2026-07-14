@@ -2,12 +2,96 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Design tokens ─────────────────────────────────────────────────────
+ * Single source of truth for the theme. Values are the same "obsidian
+ * vault" dark palette the app already used, now expressed as native CSS
+ * custom properties (shadcn/ui convention) instead of a global
+ * !important override layer fighting Tailwind's gray scale. RGB triples
+ * (not hex, not hsl()) so Tailwind's opacity modifiers work, e.g.
+ * bg-primary/10.
+ *
+ * src/styles/obsidian-vault.css remains loaded (it only targets literal
+ * Tailwind gray-scale classes such as bg-gray-100 and text-gray-700,
+ * which never collide with these new semantic bg-background /
+ * text-foreground classes, so both systems coexist safely). Every
+ * routed page has been migrated onto the semantic tokens above; the
+ * policy-type config forms under src/components/policies/*PolicyForm.tsx
+ * and LoginForm.tsx are the one remaining pocket of the app that still
+ * render via this override file (bg-gray-800/900, border-gray-700/800,
+ * text-gray-200/300/400 — a bespoke dark modal styling, not the old
+ * light-mode-on-dark-background bug this file was originally written to
+ * paper over). Migrate those, then this file can be deleted.
+ * ────────────────────────────────────────────────────────────────────── */
+@layer base {
+  :root {
+    --background: 10 10 13;           /* #0A0A0D — the void */
+    --foreground: 232 232 240;        /* #E8E8F0 — platinum, 15.5:1 on bg */
+
+    --card: 17 17 24;                 /* #111118 */
+    --card-foreground: 232 232 240;
+
+    --popover: 17 17 24;
+    --popover-foreground: 232 232 240;
+
+    --primary: 91 126 255;            /* #5B7EFF — indigo accent */
+    --primary-foreground: 255 255 255;
+
+    --secondary: 30 30 46;            /* #1E1E2E */
+    --secondary-foreground: 232 232 240;
+
+    --muted: 30 30 46;
+    --muted-foreground: 160 160 184;  /* #A0A0B8, 8.2:1 on bg */
+
+    --accent: 22 22 31;               /* #16161F — hover surface */
+    --accent-foreground: 232 232 240;
+
+    --destructive: 248 113 113;       /* #F87171 */
+    --destructive-foreground: 255 255 255;
+
+    --border: 30 30 46;               /* #1E1E2E */
+    --input: 30 30 46;
+    --ring: 91 126 255;
+
+    /* DLP severity palette — soft tinted-bg + saturated-text badges */
+    --success: 45 212 191;            /* #2DD4BF teal */
+    --success-bg: 26 61 53;           /* #1A3D35 */
+    --warning: 251 146 60;            /* #FB923C */
+    --warning-bg: 61 42 24;           /* #3D2A18 */
+    --critical: 248 113 113;          /* #F87171 */
+    --critical-bg: 61 38 40;          /* #3D2628 */
+    --info: 91 126 255;               /* #5B7EFF */
+    --info-bg: 30 30 62;              /* #1E1E3E */
+
+    --radius: 0.625rem;
+
+    color-scheme: dark;
+
+    /* ── "cs-*" compatibility layer ─────────────────────────────────
+     * ThreatIntelligence.tsx and IpAllowlistSection.tsx (ported from the
+     * CyberSentinel reference implementation) style themselves entirely
+     * with a `cs-*`-prefixed token set (text-cs-ink, bg-cs-hair-2, etc.)
+     * that was never wired into this app's Tailwind config or CSS —
+     * every one of those classes generated no CSS rule, so both pages
+     * were being rendered with unstyled/invisible text. Rather than
+     * rewrite those two files, alias the tokens they already reference
+     * onto the same obsidian palette so they render correctly. These are
+     * real CSS color values (not bare RGB triples) because the source
+     * files also use them directly inside color-mix(). */
+    --cs-panel: rgb(17 17 24);
+    --cs-ink: rgb(232 232 240);
+    --cs-crit: rgb(248 113 113);
+    --cs-med: rgb(251 146 60);
+  }
+}
+
 @layer base {
   * {
-    @apply border-gray-200;
+    @apply border-border;
   }
   body {
-    @apply bg-gray-50 text-gray-900 antialiased;
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    text-rendering: optimizeLegibility;
   }
 }
 
@@ -19,30 +103,32 @@
   }
 
   .scrollbar-thin::-webkit-scrollbar-track {
-    @apply bg-gray-100;
+    @apply bg-secondary;
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    @apply bg-gray-300 rounded-full;
+    @apply bg-border rounded-full;
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    @apply bg-gray-400;
+    @apply bg-muted-foreground/40;
   }
 
-  /* Card component (legacy — used by older pages). */
+  /* Card component (legacy — used by older pages). Rebuilt on the
+     semantic design tokens so every page still referencing className="card"
+     inherits the native dark theme instead of relying on the
+     obsidian-vault.css !important override hack. */
   .card {
-    @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6;
+    @apply bg-card text-card-foreground rounded-lg shadow-sm border border-border p-6;
   }
 
   /* ── Modern dashboard cards (PART 2) ──────────────────────────────
-     Soft shadow, rounded-2xl, subtle gradient surface, hover lift.
-     The transition is intentionally short so the UI feels responsive
-     instead of bouncy. */
+     Soft shadow, rounded-2xl, subtle surface, hover lift. The transition
+     is intentionally short so the UI feels responsive instead of bouncy. */
   .card-modern {
-    @apply bg-gradient-to-br from-white to-gray-50/60
-           border border-gray-200/70 rounded-2xl
-           shadow-sm hover:shadow-xl
+    @apply bg-card text-card-foreground
+           border border-border rounded-2xl
+           shadow-sm hover:shadow-xl hover:border-primary/30
            transition-all duration-200 ease-out
            hover:-translate-y-0.5
            p-6;
@@ -51,8 +137,8 @@
   /* Same surface, no hover lift (use on chart cards where the chart
      itself is the interactive element). */
   .card-static {
-    @apply bg-gradient-to-br from-white to-gray-50/60
-           border border-gray-200/70 rounded-2xl
+    @apply bg-card text-card-foreground
+           border border-border rounded-2xl
            shadow-sm p-6;
   }
 
@@ -63,46 +149,47 @@
   }
 
   .metric-label {
-    @apply text-xs font-semibold text-gray-500 uppercase tracking-wider;
+    @apply text-xs font-semibold text-muted-foreground uppercase tracking-wider;
   }
 
   .section-title {
-    @apply text-base font-semibold text-gray-900;
+    @apply text-base font-semibold text-foreground;
   }
 
   /* Semantic gradient text utilities. Used on metric values to push
-     visual hierarchy without leaning on a giant accent color block. */
+     visual hierarchy without leaning on a giant accent color block.
+     Lightened/shifted for readability against a dark surface. */
   .text-gradient-indigo {
     @apply bg-clip-text text-transparent
-           bg-gradient-to-br from-indigo-600 to-blue-600;
+           bg-gradient-to-br from-primary to-info;
   }
   .text-gradient-red {
     @apply bg-clip-text text-transparent
-           bg-gradient-to-br from-red-600 to-rose-600;
+           bg-gradient-to-br from-critical to-destructive;
   }
   .text-gradient-orange {
     @apply bg-clip-text text-transparent
-           bg-gradient-to-br from-orange-600 to-amber-600;
+           bg-gradient-to-br from-warning to-critical;
   }
   .text-gradient-green {
     @apply bg-clip-text text-transparent
-           bg-gradient-to-br from-green-600 to-emerald-600;
+           bg-gradient-to-br from-success to-primary;
   }
 
   /* Decorative blob in the top-right corner of metric cards — adds depth
      without being noisy. Pair with relative + overflow-hidden parent. */
   .stats-blob {
     @apply absolute -top-8 -right-8 h-32 w-32 rounded-full
-           opacity-30 blur-2xl pointer-events-none;
+           opacity-20 blur-2xl pointer-events-none;
   }
 
   /* Live indicator (animated pulse) for "data refreshing" UI. */
   .live-dot {
-    @apply relative inline-flex h-2 w-2 rounded-full bg-emerald-500;
+    @apply relative inline-flex h-2 w-2 rounded-full bg-success;
   }
   .live-dot::after {
     content: "";
-    @apply absolute inset-0 rounded-full bg-emerald-500 animate-ping opacity-60;
+    @apply absolute inset-0 rounded-full bg-success animate-ping opacity-60;
   }
 
   /* Button variants */
@@ -111,15 +198,15 @@
   }
 
   .btn-primary {
-    @apply btn bg-primary-600 text-white hover:bg-primary-700 active:bg-primary-800;
+    @apply btn bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/80;
   }
 
   .btn-secondary {
-    @apply btn bg-gray-200 text-gray-700 hover:bg-gray-300 active:bg-gray-400;
+    @apply btn bg-secondary text-secondary-foreground hover:bg-secondary/70 active:bg-secondary/60 border border-border;
   }
 
   .btn-danger {
-    @apply btn bg-red-600 text-white hover:bg-red-700 active:bg-red-800;
+    @apply btn bg-destructive text-destructive-foreground hover:bg-destructive/90 active:bg-destructive/80;
   }
 
   /* Badge component */
@@ -128,24 +215,26 @@
   }
 
   .badge-success {
-    @apply badge bg-green-100 text-green-800;
+    @apply badge bg-success/15 text-success;
   }
 
   .badge-danger {
-    @apply badge bg-red-100 text-red-800;
+    @apply badge bg-critical/15 text-critical;
   }
 
   .badge-warning {
-    @apply badge bg-yellow-100 text-yellow-800;
+    @apply badge bg-warning/15 text-warning;
   }
 
   .badge-info {
-    @apply badge bg-blue-100 text-blue-800;
+    @apply badge bg-info/15 text-info;
   }
 
   /* Input styling */
   .input {
-    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+    @apply w-full px-3 py-2 bg-background text-foreground border border-input rounded-lg
+           placeholder:text-muted-foreground
+           focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent;
   }
 
   /* Table styling */
@@ -154,15 +243,27 @@
   }
 
   .table th {
-    @apply px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider bg-gray-50 border-b border-gray-200;
+    @apply px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider bg-muted/30 border-b border-border;
   }
 
   .table td {
-    @apply px-4 py-4 text-sm text-gray-900 border-b border-gray-200;
+    @apply px-4 py-4 text-sm text-foreground border-b border-border;
   }
 
   .table tr:hover {
-    @apply bg-gray-50;
+    @apply bg-accent;
+  }
+
+  /* Small caps-style label used above a page/section title (CyberSentinel
+     compatibility layer — see the --cs-* comment above). */
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-wider text-primary;
+  }
+
+  /* Tabular figures for numeric/monospace-ish values (hashes, counts,
+     IPs) so columns of numbers align. */
+  .num {
+    font-variant-numeric: tabular-nums;
   }
 }
 

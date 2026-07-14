@@ -112,7 +112,7 @@ function defaultEndDate() {
 function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
-      <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">{label}</p>
+      <p className="text-xs text-muted-foreground/70 uppercase tracking-wide mb-1">{label}</p>
       <p className={`text-3xl font-bold ${color}`}>{value}</p>
     </div>
   )
@@ -293,14 +293,14 @@ export default function Reports() {
           <BarChart2 className="w-6 h-6 text-indigo-400" />
           <div>
             <h1 className="text-xl font-bold text-white">Reports &amp; Compliance</h1>
-            <p className="text-sm text-gray-400">Generate and download compliance reports</p>
+            <p className="text-sm text-muted-foreground/70">Generate and download compliance reports</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => fetchAll(true)}
             disabled={refreshing}
-            className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg transition-colors"
+            className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-700 hover:bg-gray-600 text-muted-foreground/50 rounded-lg transition-colors"
           >
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
@@ -330,7 +330,7 @@ export default function Reports() {
         <select
           value={filterStatus}
           onChange={e => setFilterStatus(e.target.value)}
-          className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
+          className="bg-gray-800 border border-gray-700 text-muted-foreground/50 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
         >
           <option value="">All Statuses</option>
           <option value="completed">Completed</option>
@@ -341,35 +341,35 @@ export default function Reports() {
         <select
           value={filterType}
           onChange={e => setFilterType(e.target.value)}
-          className="bg-gray-800 border border-gray-700 text-gray-300 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
+          className="bg-gray-800 border border-gray-700 text-muted-foreground/50 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
         >
           <option value="">All Types</option>
           {REPORT_TYPES.map(t => (
             <option key={t.value} value={t.value}>{t.label}</option>
           ))}
         </select>
-        <span className="text-sm text-gray-400">{reports.length} report{reports.length !== 1 ? 's' : ''}</span>
+        <span className="text-sm text-muted-foreground/70">{reports.length} report{reports.length !== 1 ? 's' : ''}</span>
       </div>
 
       {/* Reports Table */}
       <div className="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden">
         {reports.length === 0 ? (
           <div className="text-center py-16">
-            <BarChart2 className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-            <p className="text-gray-400 font-medium">No reports yet</p>
-            <p className="text-gray-500 text-sm mt-1">Click "Generate Report" to create your first compliance report</p>
+            <BarChart2 className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+            <p className="text-muted-foreground/70 font-medium">No reports yet</p>
+            <p className="text-muted-foreground text-sm mt-1">Click "Generate Report" to create your first compliance report</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-700 bg-gray-900/40">
-                  <th className="text-left px-4 py-3 text-gray-400 font-medium">Report</th>
-                  <th className="text-left px-4 py-3 text-gray-400 font-medium">Type</th>
-                  <th className="text-left px-4 py-3 text-gray-400 font-medium">Period</th>
-                  <th className="text-left px-4 py-3 text-gray-400 font-medium">Status</th>
-                  <th className="text-left px-4 py-3 text-gray-400 font-medium">Email</th>
-                  <th className="text-right px-4 py-3 text-gray-400 font-medium">Actions</th>
+                  <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Report</th>
+                  <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Type</th>
+                  <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Period</th>
+                  <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Status</th>
+                  <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Email</th>
+                  <th className="text-right px-4 py-3 text-muted-foreground/70 font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-700/50">
@@ -377,7 +377,7 @@ export default function Reports() {
                   <tr key={report.id} className="hover:bg-gray-700/30 transition-colors">
                     <td className="px-4 py-3">
                       <div className="font-medium text-white">{report.name}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">
+                      <div className="text-xs text-muted-foreground mt-0.5">
                         {fmt(report.created_at)}
                         {report.file_size_bytes ? ` · ${fmtSize(report.file_size_bytes)}` : ''}
                       </div>
@@ -387,7 +387,7 @@ export default function Reports() {
                         {REPORT_TYPES.find(t => t.value === report.report_type)?.label || report.report_type}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-gray-400 text-xs">
+                    <td className="px-4 py-3 text-muted-foreground/70 text-xs">
                       <div className="flex items-center gap-1">
                         <Calendar className="w-3 h-3" />
                         {fmtDate(report.period_start)} – {fmtDate(report.period_end)}
@@ -409,7 +409,7 @@ export default function Reports() {
                       ) : report.email_sent === 'no' ? (
                         <span className="text-xs text-red-400">Failed</span>
                       ) : (
-                        <span className="text-xs text-gray-600">—</span>
+                        <span className="text-xs text-muted-foreground">—</span>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -444,7 +444,7 @@ export default function Reports() {
                           <button
                             onClick={() => handleDelete(report.id)}
                             title="Delete"
-                            className="p-1 text-gray-500 hover:text-red-400 transition-colors"
+                            className="p-1 text-muted-foreground hover:text-red-400 transition-colors"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -465,7 +465,7 @@ export default function Reports() {
           <Clock className="w-5 h-5 text-indigo-400 mt-0.5 flex-shrink-0" />
           <div>
             <p className="text-sm font-medium text-indigo-300">Scheduled Reports</p>
-            <p className="text-sm text-gray-400 mt-1">
+            <p className="text-sm text-muted-foreground/70 mt-1">
               Automated reports run on a fixed schedule: daily at 8:00 AM UTC, weekly every Monday at 9:00 AM UTC,
               and monthly on the 1st at 10:00 AM UTC. Configure recipients and SMTP settings in your <code className="text-indigo-300">.env</code> file.
             </p>
@@ -483,7 +483,7 @@ export default function Reports() {
                 <FileText className="w-5 h-5 text-indigo-400" />
                 <h2 className="text-lg font-semibold text-white">Generate Report</h2>
               </div>
-              <button onClick={() => setShowForm(false)} className="text-gray-400 hover:text-white">
+              <button onClick={() => setShowForm(false)} className="text-muted-foreground/70 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -491,7 +491,7 @@ export default function Reports() {
             <div className="px-6 py-5 space-y-5">
               {/* Name */}
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">Report Name</label>
+                <label className="block text-sm font-medium text-muted-foreground/50 mb-1">Report Name</label>
                 <input
                   type="text"
                   value={form.name}
@@ -503,7 +503,7 @@ export default function Reports() {
 
               {/* Report types */}
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Report Types</label>
+                <label className="block text-sm font-medium text-muted-foreground/50 mb-2">Report Types</label>
                 <div className="grid grid-cols-2 gap-2">
                   {REPORT_TYPES.map(t => (
                     <label key={t.value} className="flex items-center gap-2 cursor-pointer">
@@ -513,7 +513,7 @@ export default function Reports() {
                         onChange={() => toggleReportType(t.value)}
                         className="accent-indigo-500"
                       />
-                      <span className="text-sm text-gray-300">{t.label}</span>
+                      <span className="text-sm text-muted-foreground/50">{t.label}</span>
                     </label>
                   ))}
                 </div>
@@ -522,7 +522,7 @@ export default function Reports() {
               {/* Date range */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">From</label>
+                  <label className="block text-sm font-medium text-muted-foreground/50 mb-1">From</label>
                   <input
                     type="datetime-local"
                     value={form.start_date}
@@ -531,7 +531,7 @@ export default function Reports() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-1">To</label>
+                  <label className="block text-sm font-medium text-muted-foreground/50 mb-1">To</label>
                   <input
                     type="datetime-local"
                     value={form.end_date}
@@ -543,7 +543,7 @@ export default function Reports() {
 
               {/* Formats */}
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Output Formats</label>
+                <label className="block text-sm font-medium text-muted-foreground/50 mb-2">Output Formats</label>
                 <div className="flex gap-4">
                   {['pdf', 'csv'].map(f => (
                     <label key={f} className="flex items-center gap-2 cursor-pointer">
@@ -553,7 +553,7 @@ export default function Reports() {
                         onChange={() => toggleFormat(f)}
                         className="accent-indigo-500"
                       />
-                      <span className="text-sm text-gray-300 uppercase">{f}</span>
+                      <span className="text-sm text-muted-foreground/50 uppercase">{f}</span>
                     </label>
                   ))}
                 </div>
@@ -561,8 +561,8 @@ export default function Reports() {
 
               {/* Recipients */}
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Email Recipients <span className="text-gray-500 font-normal">(optional, comma-separated)</span>
+                <label className="block text-sm font-medium text-muted-foreground/50 mb-1">
+                  Email Recipients <span className="text-muted-foreground font-normal">(optional, comma-separated)</span>
                 </label>
                 <input
                   type="text"
@@ -578,7 +578,7 @@ export default function Reports() {
             <div className="flex gap-3 px-6 py-4 border-t border-gray-700">
               <button
                 onClick={() => setShowForm(false)}
-                className="flex-1 px-4 py-2 text-sm text-gray-300 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+                className="flex-1 px-4 py-2 text-sm text-muted-foreground/50 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
               >
                 Cancel
               </button>

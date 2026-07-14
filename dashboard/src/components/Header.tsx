@@ -1,25 +1,31 @@
-import { User, LogOut, Settings as SettingsIcon, ChevronDown } from 'lucide-react'
-import { useState, useRef, useEffect } from 'react'
+import { LogOut, Settings as SettingsIcon, ChevronDown, Menu, Bell } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { useAuthStore } from '../lib/store/auth'
+import { useAuthStore } from '@/lib/store/auth'
+import { Button } from '@/components/ui/button'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { CommandMenu } from '@/components/CommandMenu'
 
-export default function Header() {
-  const [showUserMenu, setShowUserMenu] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
+function initials(email?: string | null) {
+  if (!email) return 'A'
+  const name = email.split('@')[0]
+  return name.slice(0, 2).toUpperCase()
+}
+
+interface HeaderProps {
+  onOpenMobileNav: () => void
+}
+
+export default function Header({ onOpenMobileNav }: HeaderProps) {
   const navigate = useNavigate()
   const { user, logout } = useAuthStore()
-
-  // Close menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setShowUserMenu(false)
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
 
   const handleLogout = () => {
     logout()
@@ -27,51 +33,58 @@ export default function Header() {
   }
 
   return (
-    <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-end px-6 shadow-sm">
-      {/* Right Section */}
-      <div className="flex items-center gap-4">
-        {/* User Menu */}
-        <div className="relative" ref={menuRef}>
-          <button
-            onClick={() => setShowUserMenu(!showUserMenu)}
-            className="flex items-center gap-2 p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-all hover:scale-105"
-          >
-            <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center">
-              <User className="h-4 w-4 text-white" />
-            </div>
-            <span className="text-sm font-medium">{user?.email || 'Admin'}</span>
-            <ChevronDown className={`h-4 w-4 transition-transform ${showUserMenu ? 'rotate-180' : ''}`} />
-          </button>
+    <header className="flex h-16 shrink-0 items-center gap-3 border-b border-border bg-card px-4 sm:px-6">
+      <Button variant="ghost" size="icon" className="lg:hidden" onClick={onOpenMobileNav} aria-label="Open menu">
+        <Menu className="h-5 w-5" />
+      </Button>
 
-          {/* Dropdown Menu */}
-          {showUserMenu && (
-            <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-2 animate-slideIn z-50">
-              <div className="px-4 py-3 border-b border-gray-100">
-                <p className="text-sm font-medium text-gray-900">{user?.email || 'admin'}</p>
-                <p className="text-xs text-gray-500 capitalize">{user?.role || 'Administrator'}</p>
-              </div>
+      <div className="hidden flex-1 sm:flex">
+        <CommandMenu />
+      </div>
+      <div className="flex-1 sm:hidden" />
 
-              <button
-                onClick={() => {
-                  setShowUserMenu(false)
-                  navigate('/settings')
-                }}
-                className="w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-3 transition-colors"
-              >
-                <SettingsIcon className="h-4 w-4" />
-                Settings
-              </button>
+      <div className="flex items-center gap-2">
+        <span className="hidden items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2.5 py-1 text-[11px] font-medium text-success md:flex">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-success" />
+          </span>
+          Live
+        </span>
 
-              <button
-                onClick={handleLogout}
-                className="w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-3 transition-colors"
-              >
-                <LogOut className="h-4 w-4" />
-                Logout
-              </button>
-            </div>
-          )}
-        </div>
+        <Button variant="ghost" size="icon" aria-label="Notifications">
+          <Bell className="h-[18px] w-[18px]" />
+        </Button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" className="gap-2 px-2">
+              <Avatar className="h-7 w-7">
+                <AvatarFallback className="bg-primary/15 text-primary">{initials(user?.email)}</AvatarFallback>
+              </Avatar>
+              <span className="hidden max-w-[10rem] truncate text-sm font-medium sm:inline">
+                {user?.email || 'Admin'}
+              </span>
+              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>
+              <p className="truncate text-sm font-medium text-foreground">{user?.email || 'admin'}</p>
+              <p className="truncate text-xs capitalize text-muted-foreground">{user?.role || 'Administrator'}</p>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => navigate('/settings')}>
+              <SettingsIcon className="h-4 w-4" />
+              Settings
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={handleLogout} className="text-destructive focus:text-destructive">
+              <LogOut className="h-4 w-4" />
+              Logout
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   )

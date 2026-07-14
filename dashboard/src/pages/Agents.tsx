@@ -29,22 +29,22 @@ const resolveTier = (agent: Agent): LifecycleTier => {
 const TIER_BADGE: Record<LifecycleTier, { label: string; className: string; dot: string }> = {
   active: {
     label: 'Active',
-    className: 'bg-green-100 text-green-800',
+    className: 'bg-green-500/15 text-green-300',
     dot: 'bg-green-600',
   },
   disconnected: {
     label: 'Disconnected',
-    className: 'bg-yellow-100 text-yellow-800',
+    className: 'bg-yellow-500/15 text-yellow-300',
     dot: 'bg-yellow-500',
   },
   inactive: {
     label: 'Inactive',
-    className: 'bg-orange-100 text-orange-800',
+    className: 'bg-orange-500/15 text-orange-300',
     dot: 'bg-orange-500',
   },
   stale: {
     label: 'Stale',
-    className: 'bg-red-100 text-red-800',
+    className: 'bg-red-500/15 text-red-300',
     dot: 'bg-red-600',
   },
 }
@@ -209,8 +209,8 @@ export default function Agents() {
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Agents</h1>
-          <p className="mt-1 text-sm text-gray-600">
+          <h1 className="text-2xl font-bold text-foreground">Agents</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
             Manage and monitor DLP agents (includes agent history)
           </p>
         </div>
@@ -244,13 +244,13 @@ export default function Agents() {
           onClick={() => setFilter('all')}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 rounded-lg">
-              <Server className="h-5 w-5 text-blue-600" />
+            <div className="p-2 bg-blue-500/15 rounded-lg">
+              <Server className="h-5 w-5 text-blue-400" />
             </div>
             <div>
-              <p className="text-sm text-gray-600">Total</p>
-              <p className="text-2xl font-bold text-gray-900">{list.length}</p>
-              <p className="text-xs text-gray-500 mt-1">All agents</p>
+              <p className="text-sm text-muted-foreground">Total</p>
+              <p className="text-2xl font-bold text-foreground">{list.length}</p>
+              <p className="text-xs text-muted-foreground mt-1">All agents</p>
             </div>
           </div>
         </div>
@@ -267,9 +267,9 @@ export default function Agents() {
                   <Server className="h-5 w-5" />
                 </div>
                 <div>
-                  <p className="text-sm text-gray-600">{meta.label}</p>
-                  <p className="text-2xl font-bold text-gray-900">{counts[tier]}</p>
-                  <p className="text-xs text-gray-500 mt-1">{TIER_HINT[tier]}</p>
+                  <p className="text-sm text-muted-foreground">{meta.label}</p>
+                  <p className="text-2xl font-bold text-foreground">{counts[tier]}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{TIER_HINT[tier]}</p>
                 </div>
               </div>
             </div>
@@ -297,11 +297,11 @@ export default function Agents() {
               {filteredAgents.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="text-center py-12">
-                    <Server className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-                    <p className="text-gray-600 font-medium">
+                    <Server className="h-12 w-12 text-muted-foreground/70 mx-auto mb-3" />
+                    <p className="text-muted-foreground font-medium">
                       {filter === 'all' ? 'No agents registered' : `No ${TIER_BADGE[filter].label.toLowerCase()} agents`}
                     </p>
-                    <p className="text-sm text-gray-500 mt-1">
+                    <p className="text-sm text-muted-foreground mt-1">
                       {filter === 'all'
                         ? 'Agents will appear here once they register with the server'
                         : 'Click "Total" to see all agents'}
@@ -315,7 +315,7 @@ export default function Agents() {
                   return (
                     <tr
                       key={agent.agent_id}
-                      className="cursor-pointer hover:bg-gray-50 transition-colors"
+                      className="cursor-pointer hover:bg-accent transition-colors"
                     >
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
                         <div className="flex flex-col gap-1">
@@ -328,7 +328,7 @@ export default function Agents() {
                           </span>
                           {agent.decommissioned && (
                             <span
-                              className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-700 uppercase tracking-wide"
+                              className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-secondary text-foreground/90 uppercase tracking-wide"
                               title={
                                 agent.decommissioned_at
                                   ? `Decommissioned ${formatRelativeTime(agent.decommissioned_at)}`
@@ -342,7 +342,7 @@ export default function Agents() {
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
                         <code
-                          className="text-xs bg-gray-100 px-2 py-1 rounded font-mono tabular-nums"
+                          className="text-xs bg-secondary px-2 py-1 rounded font-mono tabular-nums"
                           title={agent.agent_id}
                         >
                           {typeof agent.agent_code === 'number'
@@ -352,9 +352,9 @@ export default function Agents() {
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
                         <div>
-                          <div className="font-medium text-gray-900">{agent.name}</div>
+                          <div className="font-medium text-foreground">{agent.name}</div>
                           {agent.hostname && (
-                            <div className="text-xs text-gray-500">{agent.hostname}</div>
+                            <div className="text-xs text-muted-foreground">{agent.hostname}</div>
                           )}
                         </div>
                       </td>
@@ -362,7 +362,7 @@ export default function Agents() {
                         <div className="flex items-center gap-2">
                           <span>{agent.os}</span>
                           {agent.os_version && (
-                            <span className="text-xs text-gray-500">{agent.os_version}</span>
+                            <span className="text-xs text-muted-foreground">{agent.os_version}</span>
                           )}
                         </div>
                       </td>
@@ -371,7 +371,7 @@ export default function Agents() {
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
                         <span
-                          className="text-sm text-gray-600"
+                          className="text-sm text-muted-foreground"
                           title={agent.last_seen}
                         >
                           {agent.last_seen
@@ -380,7 +380,7 @@ export default function Agents() {
                         </span>
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
-                        <span className="text-sm text-gray-600">
+                        <span className="text-sm text-muted-foreground">
                           {formatRelativeTime(agent.created_at)}
                         </span>
                       </td>
@@ -391,7 +391,7 @@ export default function Agents() {
                               e.stopPropagation()
                               setConfirm({ agent, action: 'decommission' })
                             }}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-amber-400 hover:bg-amber-500/10 disabled:opacity-50"
                             disabled={agent.decommissioned || isMutating}
                             title={
                               agent.decommissioned
@@ -407,7 +407,7 @@ export default function Agents() {
                               e.stopPropagation()
                               setConfirm({ agent, action: 'delete' })
                             }}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-red-400 hover:bg-red-500/10 disabled:opacity-50"
                             disabled={isMutating}
                             title="Soft-delete this agent (event history is preserved)"
                           >
@@ -436,28 +436,28 @@ export default function Agents() {
               setCleanupPreview(null)
             }}
           />
-          <div className="relative bg-white rounded-lg shadow-xl max-w-lg w-full mx-4">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">Cleanup Stale Agents</h2>
+          <div className="relative bg-card rounded-lg shadow-xl max-w-lg w-full mx-4">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+              <h2 className="text-lg font-semibold text-foreground">Cleanup Stale Agents</h2>
               <button
                 onClick={() => {
                   if (cleanupApplyMutation.isPending) return
                   setCleanupOpen(false)
                   setCleanupPreview(null)
                 }}
-                className="p-1 hover:bg-gray-100 rounded transition-colors"
+                className="p-1 hover:bg-accent rounded transition-colors"
                 disabled={cleanupApplyMutation.isPending}
               >
-                <X className="h-4 w-4 text-gray-500" />
+                <X className="h-4 w-4 text-muted-foreground" />
               </button>
             </div>
             <div className="px-6 py-4 space-y-4 text-sm">
-              <p className="text-gray-600">
+              <p className="text-muted-foreground">
                 Soft-deletes agents whose last heartbeat is older than the
                 threshold below. Event history is preserved.
               </p>
               <div className="flex items-center gap-3">
-                <label className="text-sm font-medium text-gray-700">
+                <label className="text-sm font-medium text-foreground/90">
                   Older than
                 </label>
                 <input
@@ -469,21 +469,21 @@ export default function Agents() {
                     setCleanupDays(Number.isFinite(next) && next > 0 ? next : 1)
                     setCleanupPreview(null)
                   }}
-                  className="w-24 px-2 py-1 border border-gray-300 rounded text-sm"
+                  className="w-24 px-2 py-1 border border-border rounded text-sm"
                   disabled={cleanupApplyMutation.isPending}
                 />
-                <span className="text-sm text-gray-700">days</span>
+                <span className="text-sm text-foreground/90">days</span>
                 <button
                   onClick={() => cleanupPreviewMutation.mutate(cleanupDays)}
-                  className="ml-auto px-3 py-1 rounded text-sm font-medium border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                  className="ml-auto px-3 py-1 rounded text-sm font-medium border border-border hover:bg-accent disabled:opacity-50"
                   disabled={cleanupPreviewMutation.isPending || cleanupApplyMutation.isPending}
                 >
                   {cleanupPreviewMutation.isPending ? 'Previewing…' : 'Preview'}
                 </button>
               </div>
               {cleanupPreview && (
-                <div className="border border-gray-200 rounded p-3 bg-gray-50 max-h-60 overflow-y-auto">
-                  <p className="font-medium text-gray-800 mb-2">
+                <div className="border border-border rounded p-3 bg-muted/30 max-h-60 overflow-y-auto">
+                  <p className="font-medium text-foreground mb-2">
                     {cleanupPreview.would_remove_count === 0
                       ? 'No agents match — nothing to remove.'
                       : `${cleanupPreview.would_remove_count} agent${cleanupPreview.would_remove_count === 1 ? '' : 's'} would be soft-deleted:`}
@@ -493,12 +493,12 @@ export default function Agents() {
                       {cleanupPreview.candidates.map((c) => (
                         <li key={c.agent_id} className="flex items-center gap-2">
                           {typeof c.agent_code === 'number' && (
-                            <span className="font-mono tabular-nums text-gray-500">
+                            <span className="font-mono tabular-nums text-muted-foreground">
                               {String(c.agent_code).padStart(3, '0')}
                             </span>
                           )}
                           <span className="font-medium">{c.name || c.agent_id}</span>
-                          <span className="text-gray-500 ml-auto">
+                          <span className="text-muted-foreground ml-auto">
                             {c.last_seen ? formatRelativeTime(c.last_seen) : 'Never'}
                           </span>
                         </li>
@@ -508,13 +508,13 @@ export default function Agents() {
                 </div>
               )}
             </div>
-            <div className="px-6 py-3 border-t border-gray-200 flex justify-end gap-2">
+            <div className="px-6 py-3 border-t border-border flex justify-end gap-2">
               <button
                 onClick={() => {
                   setCleanupOpen(false)
                   setCleanupPreview(null)
                 }}
-                className="px-3 py-1.5 rounded text-sm font-medium text-gray-700 hover:bg-gray-100"
+                className="px-3 py-1.5 rounded text-sm font-medium text-foreground/90 hover:bg-accent"
                 disabled={cleanupApplyMutation.isPending}
               >
                 Cancel
@@ -549,32 +549,32 @@ export default function Agents() {
             className="fixed inset-0 bg-black bg-opacity-50"
             onClick={() => !isMutating && setConfirm(null)}
           />
-          <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">{confirmTitle}</h2>
+          <div className="relative bg-card rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+              <h2 className="text-lg font-semibold text-foreground">{confirmTitle}</h2>
               <button
                 onClick={() => !isMutating && setConfirm(null)}
-                className="p-1 hover:bg-gray-100 rounded transition-colors"
+                className="p-1 hover:bg-accent rounded transition-colors"
                 disabled={isMutating}
               >
-                <X className="h-4 w-4 text-gray-500" />
+                <X className="h-4 w-4 text-muted-foreground" />
               </button>
             </div>
             <div className="px-6 py-4 space-y-3 text-sm">
-              <p className="text-gray-700">
+              <p className="text-foreground/90">
                 <span className="font-medium">{confirm.agent.name}</span>
                 {typeof confirm.agent.agent_code === 'number' && (
-                  <span className="ml-2 font-mono text-xs text-gray-500">
+                  <span className="ml-2 font-mono text-xs text-muted-foreground">
                     ({String(confirm.agent.agent_code).padStart(3, '0')})
                   </span>
                 )}
               </p>
-              <p className="text-gray-600">{confirmBody}</p>
+              <p className="text-muted-foreground">{confirmBody}</p>
             </div>
-            <div className="px-6 py-3 border-t border-gray-200 flex justify-end gap-2">
+            <div className="px-6 py-3 border-t border-border flex justify-end gap-2">
               <button
                 onClick={() => setConfirm(null)}
-                className="px-3 py-1.5 rounded text-sm font-medium text-gray-700 hover:bg-gray-100"
+                className="px-3 py-1.5 rounded text-sm font-medium text-foreground/90 hover:bg-accent"
                 disabled={isMutating}
               >
                 Cancel

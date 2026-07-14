@@ -158,7 +158,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                   <div className="flex-1 grid grid-cols-3 gap-3">
                     {/* Field */}
                     <div>
-                      <label className="block text-xs font-medium text-gray-400 mb-1.5">Field</label>
+                      <label className="block text-xs font-medium text-muted-foreground/70 mb-1.5">Field</label>
                       <select
                         value={condition.field}
                         onChange={(e) => updateCondition(index, 'field', e.target.value)}
@@ -172,7 +172,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
                     {/* Operator */}
                     <div>
-                      <label className="block text-xs font-medium text-gray-400 mb-1.5">Operator</label>
+                      <label className="block text-xs font-medium text-muted-foreground/70 mb-1.5">Operator</label>
                       <select
                         value={condition.operator}
                         onChange={(e) => updateCondition(index, 'operator', e.target.value)}
@@ -186,7 +186,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
                     {/* Value */}
                     <div>
-                      <label className="block text-xs font-medium text-gray-400 mb-1.5">Value</label>
+                      <label className="block text-xs font-medium text-muted-foreground/70 mb-1.5">Value</label>
                       {fieldConfig?.type === 'select' ? (
                         condition.operator === 'in' ? (
                           <input
@@ -247,7 +247,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
           <button
             onClick={addCondition}
-            className="w-full px-4 py-3 bg-gray-900/50 border-2 border-dashed border-gray-600 hover:border-indigo-500 rounded-lg text-gray-400 hover:text-indigo-400 transition-colors flex items-center justify-center gap-2"
+            className="w-full px-4 py-3 bg-gray-900/50 border-2 border-dashed border-gray-600 hover:border-indigo-500 rounded-lg text-muted-foreground/70 hover:text-indigo-400 transition-colors flex items-center justify-center gap-2"
           >
             <Plus className="w-4 h-4" />
             Add Condition
@@ -268,7 +268,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                 id="action-alert"
                 checked={!!policy.actions.alert}
                 onChange={(e) => updateAction('alert', e.target.checked, { severity: 'high', message: '' })}
-                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
+                className="h-4 w-4 text-indigo-400 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
               />
               <label htmlFor="action-alert" className="text-sm font-medium text-white flex-1">
                 Create Alert
@@ -278,7 +278,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
             {policy.actions.alert && (
               <div className="ml-7 space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">Severity</label>
+                  <label className="block text-xs font-medium text-muted-foreground/70 mb-1.5">Severity</label>
                   <select
                     value={policy.actions.alert.severity}
                     onChange={(e) => updateAction('alert', true, { ...policy.actions.alert, severity: e.target.value })}
@@ -291,7 +291,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1.5">Message</label>
+                  <label className="block text-xs font-medium text-muted-foreground/70 mb-1.5">Message</label>
                   <input
                     type="text"
                     value={policy.actions.alert.message || ''}
@@ -312,12 +312,12 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                 id="action-block"
                 checked={!!policy.actions.block}
                 onChange={(e) => updateAction('block', e.target.checked, {})}
-                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
+                className="h-4 w-4 text-indigo-400 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
               />
               <label htmlFor="action-block" className="text-sm font-medium text-white flex-1">
                 Block Action
               </label>
-              <span className="text-xs text-gray-400">Prevents file transfer/clipboard copy</span>
+              <span className="text-xs text-muted-foreground/70">Prevents file transfer/clipboard copy</span>
             </div>
           </div>
 
@@ -329,7 +329,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                 id="action-quarantine"
                 checked={!!policy.actions.quarantine}
                 onChange={(e) => updateAction('quarantine', e.target.checked, { location: '/var/quarantine/' })}
-                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
+                className="h-4 w-4 text-indigo-400 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
               />
               <label htmlFor="action-quarantine" className="text-sm font-medium text-white flex-1">
                 Quarantine File
@@ -338,7 +338,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
             {policy.actions.quarantine && (
               <div className="ml-7">
-                <label className="block text-xs font-medium text-gray-400 mb-1.5">Location</label>
+                <label className="block text-xs font-medium text-muted-foreground/70 mb-1.5">Location</label>
                 <input
                   type="text"
                   value={policy.actions.quarantine.location || ''}
@@ -358,7 +358,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                 id="action-log"
                 checked={!!policy.actions.log}
                 onChange={(e) => updateAction('log', e.target.checked, { level: 'info' })}
-                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
+                className="h-4 w-4 text-indigo-400 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
               />
               <label htmlFor="action-log" className="text-sm font-medium text-white flex-1">
                 Log Event
@@ -367,7 +367,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
             {policy.actions.log && (
               <div className="ml-7">
-                <label className="block text-xs font-medium text-gray-400 mb-1.5">Log Level</label>
+                <label className="block text-xs font-medium text-muted-foreground/70 mb-1.5">Log Level</label>
                 <select
                   value={policy.actions.log.level || 'info'}
                   onChange={(e) => updateAction('log', true, { level: e.target.value })}
@@ -385,8 +385,8 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
       {/* Example Scenarios */}
       <div className="bg-gray-900/30 border border-gray-700 rounded-xl p-4">
-        <h6 className="text-sm font-semibold text-gray-300 mb-2">💡 Example Scenarios</h6>
-        <div className="text-xs text-gray-400 space-y-1">
+        <h6 className="text-sm font-semibold text-muted-foreground/50 mb-2">💡 Example Scenarios</h6>
+        <div className="text-xs text-muted-foreground/70 space-y-1">
           <p>• <strong>Block USB with Restricted Data:</strong> classification_level = "Restricted" AND destination_type = "removable_drive"</p>
           <p>• <strong>Alert High Confidence:</strong> confidence_score ≥ 0.8</p>
           <p>• <strong>Block Credentials in Clipboard:</strong> classification_labels contains "CREDENTIAL" AND event_type = "clipboard"</p>

@@ -237,6 +237,10 @@ export type Agent = {
 
 export type Event = {
   id: string
+  /** Some backend responses (e.g. Mongo-backed search results) key events
+   *  by ``event_id`` instead of ``id`` — kept optional so callers can fall
+   *  back to it for the row key / detail lookups. */
+  event_id?: string
   title?: string
   agent_id: string
   /** Server-enriched from the agents table at read time; absent only when
@@ -275,6 +279,17 @@ export type Event = {
   matched_policies?: any[]
   metadata?: Record<string, any>
   details?: Record<string, any>
+  /** Present on legacy/USB and single-policy event shapes. */
+  usb?: { vendor?: string; product?: string; serial?: string; [key: string]: any }
+  policy?: { policy_name?: string; action?: string; [key: string]: any }
+  content_redacted?: string
+  action?: string
+  quarantined?: boolean
+  quarantine_path?: string
+  quarantine_timestamp?: string
+  file_hash?: string
+  file_size?: number
+  transfer_type?: string
 }
 
 export type GoogleDriveProtectedFolderStatus = {
