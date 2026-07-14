@@ -104,9 +104,7 @@ void ScreenCaptureMonitor::TerminateProcessByName(const std::string& processName
 
     if (Process32First(hSnap, &pe)) {
         do {
-            char _buf1[260] = {};
-            WideCharToMultiByte(CP_UTF8, 0, pe.szExeFile, -1, _buf1, sizeof(_buf1), nullptr, nullptr);
-            std::string procLower = _buf1;
+            std::string procLower = pe.szExeFile;
             std::transform(procLower.begin(), procLower.end(), procLower.begin(), ::tolower);
             if (procLower == targetLower) {
                 HANDLE hProc = OpenProcess(PROCESS_TERMINATE, FALSE, pe.th32ProcessID);
@@ -441,9 +439,7 @@ void ScreenCaptureMonitor::ProcessMonitorThread() {
 
             if (Process32First(hSnap, &pe)) {
                 do {
-                    char _buf2[260] = {};
-                    WideCharToMultiByte(CP_UTF8, 0, pe.szExeFile, -1, _buf2, sizeof(_buf2), nullptr, nullptr);
-                    std::string procName = _buf2;
+                    std::string procName = pe.szExeFile;
                     std::string procLower = procName;
                     std::transform(procLower.begin(), procLower.end(), procLower.begin(), ::tolower);
 
