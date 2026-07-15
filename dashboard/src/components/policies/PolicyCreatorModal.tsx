@@ -319,9 +319,22 @@ export default function PolicyCreatorModal({
         parameters: actionConfig || {}
       }))
 
+      // Condition-based policies don't have their own top-level severity
+      // control in this wizard — the only place severity is actually set
+      // is the Alert action's Severity dropdown (actions.alert.severity),
+      // which the enforcement engine already reads from at trigger time.
+      // But the Policies list/table renders the top-level Policy.severity
+      // field, which used to be omitted here entirely and silently fell
+      // back to "medium" (see transformApiPolicyToFrontend). Derive it
+      // from the alert action so what you configure is what the list
+      // shows. A block-only/quarantine-only policy (no alert action) has
+      // no explicit severity anywhere, so it still falls back to medium.
+      const derivedSeverity = classificationPolicy.actions.alert?.severity || 'medium'
+
       policy = {
         name: policyName.trim(),
         description: description.trim() || undefined,
+        severity: derivedSeverity,
         priority,
         enabled,
         match: classificationPolicy.conditions.match,
