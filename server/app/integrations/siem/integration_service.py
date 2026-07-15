@@ -237,7 +237,12 @@ class SIEMIntegrationService:
                 "name": name,
                 "siem_type": connector.siem_type.value,
                 "connected": connector.connected,
-                "active": name in self.active_connectors
+                "active": name in self.active_connectors,
+                "host": getattr(connector, "host", None),
+                "port": getattr(connector, "port", None),
+                "protocol": getattr(connector, "protocol", None),
+                "format": getattr(connector, "log_format", None),
+                "min_severity": getattr(connector, "min_severity", None),
             }
             for name, connector in self.connectors.items()
         ]

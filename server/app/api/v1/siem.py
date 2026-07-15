@@ -10,15 +10,30 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Body
 from pydantic import BaseModel
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.security import get_current_user, require_role
+from app.core.database import get_db
 from app.integrations.siem.integration_service import siem_service
 from app.integrations.siem.elk_connector import ELKConnector
 from app.integrations.siem.splunk_connector import SplunkConnector
+from app.integrations.siem.syslog_connector import SyslogConnector
 from app.integrations.siem.base import SIEMType
+from app.integrations.siem.registry import persist_connector, delete_persisted_connector
 from app.core.observability import StructuredLogger
 
 router = APIRouter()
 logger = StructuredLogger(__name__)
+
+
+def _uid(user):
+    """Extract the user id from either a User ORM object (what require_role
+    returns) or a legacy JWT-claims dict."""
+    if user is None:
+        return None
+    if isinstance(user, dict):
+        return user.get("sub") or user.get("id")
+    return getattr(user, "id", None)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -48,11 +63,30 @@ _BLOCKED_NETWORKS = [
 ]
 
 
-def _assert_safe_siem_host(host: str) -> None:
+# Metadata / link-local / bogon ranges that are NEVER a legitimate syslog
+# target — blocked even for fire-and-forget syslog connectors.
+_ALWAYS_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("169.254.0.0/16"),        # link-local + cloud metadata
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("224.0.0.0/4"),           # multicast
+    ipaddress.ip_network("fe80::/10"),             # IPv6 link-local
+]
+
+
+def _assert_safe_siem_host(host: str, allow_internal: bool = False) -> None:
     """Resolve `host` and reject any address that lives in a blocked
-    network range. Raises HTTPException(400) on rejection."""
+    network range. Raises HTTPException(400) on rejection.
+
+    ``allow_internal=True`` relaxes the RFC1918/loopback block for
+    write-only syslog connectors — on-prem SIEMs legitimately live on the
+    internal LAN, and syslog is fire-and-forget (no response body is ever
+    returned to the caller), so the SSRF exfiltration risk is minimal.
+    Metadata/link-local/bogon ranges stay blocked regardless.
+    """
     if not host or len(host) > 253:
         raise HTTPException(status_code=400, detail="Invalid host.")
+
+    blocked = _ALWAYS_BLOCKED_NETWORKS if allow_internal else _BLOCKED_NETWORKS
 
     # Resolve every A/AAAA record so DNS rebinding against a single
     # public-looking hostname that also resolves to 127.0.0.1 is caught.
@@ -71,7 +105,7 @@ def _assert_safe_siem_host(host: str) -> None:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid IP resolved: {ip_str}")
-        for net in _BLOCKED_NETWORKS:
+        for net in blocked:
             if ip in net:
                 logger.logger.warning(
                     "siem_connector_blocked_host",
@@ -104,6 +138,11 @@ class SIEMConnectorConfig(BaseModel):
     index: Optional[str] = None
     source: Optional[str] = None
     sourcetype: Optional[str] = None
+    # Syslog-specific
+    protocol: Optional[str] = None       # udp | tcp | tls
+    log_format: Optional[str] = None     # cef | leef
+    facility: Optional[str] = None       # local0..local7
+    min_severity: Optional[str] = None   # info|low|medium|high|critical
 
 
 @router.get("/connectors")
@@ -120,7 +159,7 @@ async def list_connectors(
         connectors = siem_service.list_connectors()
 
         logger.logger.info("siem_connectors_listed",
-                          user_id=current_user.get("sub"),
+                          user_id=_uid(current_user),
                           count=len(connectors))
 
         return {
@@ -137,26 +176,46 @@ async def list_connectors(
 @router.post("/connectors")
 async def register_connector(
     config: SIEMConnectorConfig,
-    current_user: dict = Depends(require_role("admin"))
+    current_user: dict = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Register a new SIEM connector.
 
     SECURITY:
       * Admin role required.
-      * `host` is DNS-resolved and rejected if it lands in any blocked
-        network (loopback, link-local, metadata, RFC1918, IPv6 ULA).
-        Prevents the connector from being used as an SSRF primitive
-        against the cloud metadata service or internal LAN.
+      * `host` is DNS-resolved and rejected if it lands in a blocked network.
+        For HTTP-push connectors (ELK/Splunk) the full block applies (loopback,
+        link-local, metadata, RFC1918, IPv6 ULA) to prevent SSRF against the
+        cloud metadata service or internal LAN. For write-only **syslog**
+        connectors, RFC1918/loopback is allowed (on-prem SIEMs live there) but
+        metadata/link-local/bogon ranges stay blocked.
+
+    Connector config is persisted (secrets encrypted) so it survives restart.
     """
+    siem_type = config.siem_type.lower()
+    is_syslog = siem_type == "syslog"
+
     # ── SSRF guard ──────────────────────────────────────────────
-    _assert_safe_siem_host(config.host)
+    _assert_safe_siem_host(config.host, allow_internal=is_syslog)
     if not (1 <= config.port <= 65535):
         raise HTTPException(status_code=400, detail="Port out of range.")
 
     try:
         # Create connector based on type
-        if config.siem_type.lower() == "elk":
+        if is_syslog:
+            connector = SyslogConnector(
+                name=config.name,
+                host=config.host,
+                port=config.port,
+                protocol=(config.protocol or "udp"),
+                log_format=(config.log_format or "cef"),
+                facility=(config.facility or "local0"),
+                verify_certs=config.verify_certs,
+                min_severity=(config.min_severity or "low"),
+            )
+
+        elif config.siem_type.lower() == "elk":
             connector = ELKConnector(
                 name=config.name,
                 host=config.host,
@@ -199,8 +258,20 @@ async def register_connector(
         # Attempt connection
         connected = await connector.connect()
 
+        # Mark active so the auto-forward hook (send_event_to_all / forward_event)
+        # will deliver to it. The manual register path bypasses connect_all,
+        # which is what normally populates active_connectors.
+        if connected and config.name not in siem_service.active_connectors:
+            siem_service.active_connectors.append(config.name)
+
+        # Persist so the connector is rebuilt on the next restart.
+        try:
+            await persist_connector(db, config.model_dump(), created_by=_uid(current_user))
+        except Exception as e:  # noqa: BLE001 — persistence failure shouldn't 500 a working connector
+            logger.log_error(e, {"endpoint": "register_connector", "op": "persist"})
+
         logger.logger.info("siem_connector_registered",
-                          user_id=current_user.get("sub"),
+                          user_id=_uid(current_user),
                           name=config.name,
                           siem_type=config.siem_type,
                           connected=connected)
@@ -225,7 +296,8 @@ async def register_connector(
 @router.delete("/connectors/{connector_name}")
 async def unregister_connector(
     connector_name: str,
-    current_user: dict = Depends(require_role("admin"))
+    current_user: dict = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Unregister a SIEM connector
@@ -241,14 +313,17 @@ async def unregister_connector(
         if connector:
             await connector.disconnect()
 
-        # Unregister
+        # Unregister from the in-memory registry
         success = siem_service.unregister_connector(connector_name)
+
+        # Always remove the persisted row too (idempotent even if not in memory)
+        await delete_persisted_connector(db, connector_name)
 
         if not success:
             raise HTTPException(status_code=404, detail="Connector not found")
 
         logger.logger.info("siem_connector_unregistered",
-                          user_id=current_user.get("sub"),
+                          user_id=_uid(current_user),
                           name=connector_name)
 
         return {
@@ -286,7 +361,7 @@ async def test_connector(
         result = await connector.test_connection()
 
         logger.logger.info("siem_connector_tested",
-                          user_id=current_user.get("sub"),
+                          user_id=_uid(current_user),
                           name=connector_name,
                           success=result.get("success"))
 
@@ -312,7 +387,7 @@ async def health_check_all(
         health_results = await siem_service.health_check_all()
 
         logger.logger.info("siem_health_check_all",
-                          user_id=current_user.get("sub"),
+                          user_id=_uid(current_user),
                           total=len(health_results))
 
         return {
@@ -372,7 +447,7 @@ async def forward_event_to_siems(
             results = await siem_service.send_event_to_all(event)
 
             logger.logger.info("event_forwarded_to_siems",
-                              user_id=current_user.get("sub"),
+                              user_id=_uid(current_user),
                               event_id=event.get("event_id"),
                               connectors=len(results))
 
@@ -428,7 +503,7 @@ async def forward_batch_to_siems(
             results = await siem_service.send_batch_to_all(events)
 
             logger.logger.info("batch_forwarded_to_siems",
-                              user_id=current_user.get("sub"),
+                              user_id=_uid(current_user),
                               events=len(events),
                               connectors=len(results))
 

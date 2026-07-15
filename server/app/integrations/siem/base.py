@@ -20,6 +20,7 @@ class SIEMType(str, Enum):
     QRADAR = "qradar"
     SENTINEL = "sentinel"
     WAZUH = "wazuh"
+    SYSLOG = "syslog"
     CUSTOM = "custom"
 
 

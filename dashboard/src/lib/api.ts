@@ -961,4 +961,48 @@ export const updateRetentionConfig = async (
   return data
 }
 
+// ── SIEM log forwarding (connectors) ────────────────────────────────────────
+export type SiemConnector = {
+  name: string
+  siem_type: string
+  connected: boolean
+  active: boolean
+  host?: string | null
+  port?: number | null
+  protocol?: string | null
+  format?: string | null
+  min_severity?: string | null
+}
+
+export const getSiemConnectors = async (): Promise<SiemConnector[]> => {
+  const { data } = await apiClient.get('/siem/connectors')
+  return data?.connectors || []
+}
+
+export const registerSyslogConnector = async (cfg: {
+  name: string
+  host: string
+  port: number
+  protocol: string
+  log_format: string
+  facility: string
+  min_severity: string
+}) => {
+  const { data } = await apiClient.post('/siem/connectors', {
+    ...cfg,
+    siem_type: 'syslog',
+  })
+  return data
+}
+
+export const testSiemConnector = async (name: string) => {
+  const { data } = await apiClient.post(`/siem/connectors/${encodeURIComponent(name)}/test`)
+  return data
+}
+
+export const deleteSiemConnector = async (name: string) => {
+  const { data } = await apiClient.delete(`/siem/connectors/${encodeURIComponent(name)}`)
+  return data
+}
+
 export default apiClient

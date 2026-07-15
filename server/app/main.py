@@ -382,6 +382,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         await init_opensearch()
         logger.info("OpenSearch initialized successfully")
 
+        # Rebuild the SIEM connector registry from persisted config
+        try:
+            from app.integrations.siem.registry import load_persisted_connectors
+            async with _db.postgres_session_factory() as session:
+                n = await load_persisted_connectors(session)
+            logger.info("SIEM connectors reloaded", count=n)
+        except Exception as e:
+            logger.warning("SIEM connector reload skipped", error=str(e))
+
         # Additional startup tasks
         logger.info("Server startup complete",
                    environment=settings.ENVIRONMENT,

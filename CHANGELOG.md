@@ -8,6 +8,35 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📡 SIEM Syslog Forwarding (Wazuh / QRadar / ArcSight) + Connector Persistence (July 15, 2026)
+
+### Summary
+
+SeceoKnight's SIEM integration previously only supported Splunk (HEC) and ELK (Elasticsearch bulk API) — both HTTP-push connectors. There was no way to forward DLP events to syslog-based SIEMs such as Wazuh, QRadar, ArcSight, LogRhythm, Graylog, or plain rsyslog/syslog-ng, which is how most on-prem SOC tooling actually ingests logs. Registered connectors also lived only in memory and were lost on every restart, so any SIEM integration had to be manually re-registered via the API after each deploy. Both gaps are closed.
+
+### Added
+
+- **`server/app/integrations/siem/syslog_connector.py`** (new) — `SyslogConnector`, a write-only RFC 5424 syslog forwarder supporting UDP (fire-and-forget), TCP (RFC 6587 LF-framed), and TCP+TLS transport, with event payloads in CEF (ArcSight Common Event Format) or LEEF 2.0 (QRadar Log Event Extended Format). Per-connector minimum-severity filtering and syslog facility selection (local0–local7). Socket I/O is blocking and always dispatched via `asyncio.to_thread` so it never stalls the event loop.
+- **`SIEMType.SYSLOG`** added to `server/app/integrations/siem/base.py`'s enum.
+- **`server/app/models/siem_connector.py`** (new) — `SIEMConnectorConfigModel`, persists registered connector configuration (host/port/protocol/format/facility/severity threshold for syslog; index/source/sourcetype for Splunk/ELK). Secret fields (`password`, `api_key`, `hec_token`) are stored Fernet-encrypted (`app/core/crypto.py`) in a `secrets_enc` column, never in plaintext.
+- **`server/app/integrations/siem/registry.py`** (new) — bridges the DB table and the in-memory `SIEMIntegrationService` registry: `build_connector()` (config → live connector), `persist_connector()` (encrypted upsert), `delete_persisted_connector()`, and `load_persisted_connectors()` which rebuilds and reconnects every enabled connector on server startup.
+- **`server/alembic/versions/031_siem_connectors.py`** (new) — idempotent `CREATE TABLE IF NOT EXISTS siem_connectors` migration.
+- **`server/app/main.py`** — wired `load_persisted_connectors()` into the startup lifespan, right after OpenSearch init, so previously-registered connectors reconnect automatically on every restart instead of silently vanishing.
+- **`server/app/api/v1/siem.py`** — `POST /siem/connectors` now accepts `siem_type: "syslog"` plus `protocol`/`log_format`/`facility`/`min_severity`, and persists every registration (`db: AsyncSession` dependency added to the register/unregister routes). The SSRF host guard now has two modes: the existing strict `_BLOCKED_NETWORKS` list (loopback/RFC1918/link-local/metadata/multicast/IPv6-ULA) still applies to HTTP-push connectors (Splunk/ELK), while write-only syslog connectors use a relaxed `_ALWAYS_BLOCKED_NETWORKS` list that only blocks metadata/link-local/multicast/bogon ranges — on-prem SIEMs legitimately live on RFC1918/loopback addresses, and syslog is fire-and-forget with no response channel, so the SSRF exfiltration risk that justified the strict block for HTTP connectors doesn't apply here.
+- **`server/app/integrations/siem/integration_service.py`** — `list_connectors()` now also returns `host`/`port`/`protocol`/`format`/`min_severity` per connector (previously only `name`/`siem_type`/`connected`/`active`), needed for the new dashboard connector table.
+- **`dashboard/src/lib/api.ts`** — `getSiemConnectors`, `registerSyslogConnector`, `testSiemConnector`, `deleteSiemConnector`, and the `SiemConnector` type.
+- **`dashboard/src/components/settings/SiemForwardingSection.tsx`** (new) — Settings → System panel (Super Admin only) listing registered connectors (destination, transport, format, min severity, live connected/down status) with test and delete actions, plus a form to register a new syslog connector.
+
+### Fixed in passing
+
+- `siem.py`'s structured-logging calls previously read `current_user.get("sub")`, but `require_role(...)` actually returns a `User` ORM object (not a dict) — every log call in this router would have raised `AttributeError` at runtime. Added a `_uid()` helper that handles both shapes and applied it throughout the file.
+
+### Verification
+
+All new/modified Python modules parse and import cleanly (`ast.parse` + live import smoke test with the FastAPI app's real dependency chain, isolating out unrelated sandbox-only missing packages). Confirmed `031_siem_connectors` chains correctly off the existing migration head (`030_retention_config`) with no competing branch. `npx tsc --noEmit` and `npm run build` show no new errors — the pre-existing ~27 TypeScript errors in the policy-form ecosystem are unchanged and untouched by this work.
+
+---
+
 ## 📋 Compliance Report Templates — GDPR Art. 30 / HIPAA Breach / PCI Scope (July 14, 2026)
 
 ### Summary

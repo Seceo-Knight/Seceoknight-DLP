@@ -12,6 +12,7 @@ import {
 import { useAuthStore } from '@/lib/store/auth'
 import { API_URL } from '@/lib/config'
 import IpAllowlistSection from '@/components/settings/IpAllowlistSection'
+import SiemForwardingSection from '@/components/settings/SiemForwardingSection'
 
 type MfaStep = 'idle' | 'setup_qr' | 'setup_verify'
 type Tab = 'security' | 'mfa' | 'system' | 'notifications' | 'integrations' | 'about'
@@ -624,6 +625,12 @@ export default function Settings() {
                   </form>
                 )}
               </div>
+
+              {isSuperAdmin && (
+                <div className="lg:col-span-2">
+                  <SiemForwardingSection />
+                </div>
+              )}
             </div>
           )}
 
