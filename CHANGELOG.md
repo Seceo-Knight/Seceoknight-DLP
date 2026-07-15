@@ -8,6 +8,29 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🚫 File System Monitoring — Two More "Detection-Only" Blockers Found (Frontend Validator + Linux Agent) (July 15, 2026)
+
+### Summary
+
+After the backend/dashboard-form fix below shipped, saving a File System Monitoring policy with action = Quarantine still failed with "File System Monitoring is Detection-only (alert/log)". The transformer fix wasn't the only place this restriction was enforced — it turned out to be duplicated in two more places that the previous pass missed.
+
+### Root cause
+
+1. `dashboard/src/utils/policyUtils.ts` — the client-side form validator for `file_system_monitoring` rejected any `action` other than `alert`/`log` before the request was even sent, with the exact error text the user saw.
+2. `agents/endpoint/linux/agent.py` — the Linux agent's file-event handler had its own explicit `# File system monitoring is detection-only: ignore block/quarantine` guard that silently downgraded any `block`/`quarantine` policy action to `log`, same as the Windows agent's old backend-level restriction, just enforced agent-side instead.
+
+### Fixed
+
+- `policyUtils.ts`: validator now allows `quarantine`/`block`, only requiring a `quarantinePath` when action is `quarantine` (matching the existing USB Transfer / File Transfer validators).
+- `agent.py` (Linux): the file-event handler now actually calls the existing `quarantine_file()` / `block_file_transfer()` helpers (already used by the file-transfer-destination handler) for `quarantine`/`block` actions, instead of forcing everything to `log`. Delete events still skip destructive actions (avoids quarantining/deleting a file that's already gone during a move/rename).
+- `FileSystemPolicyForm.tsx`: updated the quarantine-path hint text to reflect that the path is now a real, required destination rather than an optional override.
+
+### Verification
+
+`python3 -m ast` parse check on `agent.py` (Linux) — no syntax errors. `npm run build` (Vite) succeeds. Not tested against a live Linux agent (no Linux endpoint in this environment) — logic directly mirrors the already-working `handle_transfer_destination_event()` quarantine/block path in the same file.
+
+---
+
 ## 🚫 File System Monitoring — Add Quarantine/Block (was Alert-Only by Design) (July 15, 2026)
 
 ### Summary

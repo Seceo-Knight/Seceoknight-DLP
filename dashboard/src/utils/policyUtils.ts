@@ -235,8 +235,8 @@ export const validatePolicy = (policy: Partial<Policy>): { valid: boolean; error
         if (!Object.values(c.events).some(v => v)) {
           errors.push('At least one event type must be selected')
         }
-        if (c.action !== 'alert' && c.action !== 'log') {
-          errors.push('File system monitoring is detection-only (alert/log)')
+        if (c.action === 'quarantine' && !c.quarantinePath?.trim()) {
+          errors.push('Quarantine path is required when action is quarantine')
         }
         break
       }

@@ -726,13 +726,20 @@ class DLPAgent:
             quarantine_path: Optional[str] = None
             quarantine_timestamp: Optional[str] = None
 
-            # File system monitoring is detection-only: ignore block/quarantine
-            if policy_action not in {"alert", "log"}:
-                policy_action = "log"
-
-            # Do not apply destructive actions on delete events (avoids removing source during moves)
+            # Do not apply destructive actions on delete events (avoids removing
+            # a file — or trying to quarantine something that's already gone —
+            # during what may just be a move/rename)
             if event_type == "file_deleted":
                 event_action = "logged"
+            elif policy_action == "quarantine":
+                target_folder = policy_config.get("quarantinePath") or self.quarantine_folder
+                quarantine_path = self.quarantine_file(file_path, target_folder)
+                event_action = "quarantined" if quarantine_path else "logged"
+                if quarantine_path:
+                    quarantine_timestamp = datetime.utcnow().isoformat() + "Z"
+            elif policy_action == "block":
+                blocked = self.block_file_transfer(file_path)
+                event_action = "blocked" if blocked else "logged"
             elif policy_action == "alert":
                 event_action = "alert"
 

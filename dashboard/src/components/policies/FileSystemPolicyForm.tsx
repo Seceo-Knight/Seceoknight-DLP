@@ -292,7 +292,7 @@ export default function FileSystemPolicyForm({ config, onChange }: FileSystemPol
                 className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
               />
               <p className="text-xs text-muted-foreground/70 mt-1">
-                Leave blank to use the agent&apos;s default quarantine folder
+                Folder where flagged files will be moved on the agent
               </p>
             </div>
           )}
