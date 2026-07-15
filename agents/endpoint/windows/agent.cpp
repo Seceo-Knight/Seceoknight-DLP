@@ -23,6 +23,7 @@
  #include <shlobj.h>
  #include <comdef.h>
  
+ #include <cstdio>
  #include <iostream>
  #include <fstream>
  #include <sstream>
@@ -7683,10 +7684,32 @@ bool ShouldRunInBackground(int argc, char* argv[]) {
     return false;
 }
 
-void HideConsoleWindow() {
-    HWND consoleWindow = GetConsoleWindow();
-    if (consoleWindow != NULL) {
-        ShowWindow(consoleWindow, SW_HIDE);
+// The binary is built with the Windows GUI subsystem (see build.sh /
+// build-windows-agent.yml, -mwindows) specifically so that no console
+// window is ever created automatically when the OS starts the process.
+//
+// This used to be built as a console-subsystem app that relied on
+// GetConsoleWindow() + ShowWindow(SW_HIDE) to *hide* a window after the
+// fact — but Windows creates and shows a console-subsystem process's
+// console the instant the process starts, before main() ever runs. That
+// meant --bg mode always had a real, visible console window for at least
+// a moment (longer if startup was slowed by antivirus, or if the hide
+// call raced GetConsoleWindow() returning NULL before the console had
+// finished attaching under Task Scheduler). Because it was the process's
+// own console, a user who saw and closed that window fired
+// CTRL_CLOSE_EVENT, which tore down the whole agent — exactly the
+// "closing the log window disconnects the agent" symptom this fixes.
+//
+// With the GUI subsystem, no console exists at all unless we explicitly
+// ask for one — which we now only do in foreground/manual-run mode, for
+// debugging. Background mode (the scheduled-task launch path) never
+// allocates one, so there is no window for a user to ever see or close.
+void AttachForegroundConsole() {
+    if (AllocConsole()) {
+        freopen("CONOUT$", "w", stdout);
+        freopen("CONOUT$", "w", stderr);
+        freopen("CONIN$", "r", stdin);
+        std::ios::sync_with_stdio(true);
     }
 }
 
@@ -7714,11 +7737,13 @@ int main(int argc, char* argv[]) {
     
     // Check if should run in background
     bool backgroundMode = ShouldRunInBackground(argc, argv);
-    
-    if (backgroundMode) {
-        // Hide console window immediately
-        HideConsoleWindow();
-    } else {
+
+    if (!backgroundMode) {
+        // Foreground/manual run — attach a real console so std::cout is
+        // actually visible. In background mode we deliberately do nothing
+        // here: see AttachForegroundConsole() above for why.
+        AttachForegroundConsole();
+
         // Show startup banner only in foreground mode
         std::cout << "============================================================\n";
         std::cout << "SeceoKnight DLP - Windows Agent (C++)\n";

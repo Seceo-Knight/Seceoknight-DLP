@@ -8,6 +8,27 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🪟 Windows Agent — Fix Background Mode Actually Showing a Console (July 15, 2026)
+
+### Summary
+
+Reported after real-world testing: the Windows agent, installed via `install-agent.ps1` and launched through the "SeceoKnight DLP Agent" scheduled task with `--bg`, was still showing a visible cmd window streaming logs — and closing that window disconnected the agent entirely.
+
+### Root cause
+
+`agent.cpp` was compiled as a **console-subsystem** binary (`build.sh` / `build-windows-agent.yml` had no subsystem flag, which defaults to console). Windows creates and displays a console-subsystem process's console window the instant the process starts — before `main()` runs. The old `--bg` handling only *hid* that window after the fact (`GetConsoleWindow()` + `ShowWindow(SW_HIDE)`), which is inherently racy: there's always at least a brief window where it's visible, and longer if startup is slowed by antivirus or Task Scheduler's interactive-session launch. Because it genuinely was the process's own console, closing it fired `CTRL_CLOSE_EVENT`, which tore down the whole agent — exactly the reported symptom.
+
+### Fixed
+
+- **`build.sh`** / **`.github/workflows/build-windows-agent.yml`** — added `-mwindows` so the binary is built as a **GUI-subsystem** executable. The OS never auto-creates a console for it, in any launch mode.
+- **`agent.cpp`** — replaced `HideConsoleWindow()` (reactive hide) with `AttachForegroundConsole()`, called only when running in foreground/manual mode (i.e. *not* `--bg`). It explicitly `AllocConsole()`s and redirects `stdout`/`stderr`/`stdin` so `std::cout` output is still visible when you deliberately want to watch it run. In `--bg` mode nothing calls this — no console is ever created, so there is no window for a user to see, and none to accidentally close and kill the agent. The existing `Logger::Log()` already only echoed to console `if (consoleWindow != NULL && IsWindowVisible(...))` and always wrote to the log file regardless, so background-mode file logging is unaffected.
+
+### Verification
+
+`agent.cpp` cannot be compiled in this Linux sandbox (no MinGW cross-toolchain, no root to install one) — this is Windows-specific C++ (`winsock2.h`, `windows.h`, `wbemidl.h`, etc.). Verified structurally instead: confirmed the edited `if`/`else` block's braces close correctly by direct inspection, and ran a brace-balance check across the whole file before and after the edit — both give the identical (pre-existing, parser-artifact) offset, confirming the edit introduces no imbalance. Real compiler verification will happen via `build-windows-agent.yml` (`windows-latest` + real MinGW) once this is pushed, since `agent.cpp` is in that workflow's trigger paths — check the Actions tab for a green run before re-deploying the agent.
+
+---
+
 ## 📡 SIEM Syslog Forwarding (Wazuh / QRadar / ArcSight) + Connector Persistence (July 15, 2026)
 
 ### Summary

@@ -69,7 +69,10 @@ jobs:
           ls /mingw64/lib/libfltlib.a 2>/dev/null && echo "libfltlib.a found" || echo "libfltlib.a NOT found"
 
           echo "=== Compiling ==="
-          g++ -std=c++17 -O2 \
+          # -mwindows: GUI subsystem, so the OS never auto-creates a console
+          # window for this process (background mode then has none at all —
+          # see AttachForegroundConsole() in agent.cpp for the full reasoning).
+          g++ -std=c++17 -O2 -mwindows \
             agent.cpp \
             network_exfil_monitor.cpp \
             print_monitor.cpp \

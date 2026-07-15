@@ -27,7 +27,13 @@ echo "This may take 30-60 seconds..."
 echo ""
 
 # Compile the agent
-g++ -std=c++17 -O2 \
+# -mwindows: build as a GUI-subsystem binary so Windows never auto-creates
+# a console window for this process. Background mode (--bg, the scheduled-
+# task launch path) then has zero console, period — no window to flash,
+# race, or be closed by a user (which used to kill the whole agent via
+# CTRL_CLOSE_EVENT). Foreground/manual runs explicitly call AllocConsole()
+# in main() so std::cout still works when you want to see it.
+g++ -std=c++17 -O2 -mwindows \
     agent.cpp screen_capture_monitor.cpp print_monitor.cpp network_exfil_monitor.cpp \
     -o seceoknight_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
