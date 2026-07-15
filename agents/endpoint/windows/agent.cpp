@@ -1088,15 +1088,24 @@ void Log(const std::string& level, const std::string& message) {
                 ".csv", ".txt", ".json", ".xml", ".sql"
             };
             
-            // Quarantine config
+            // Quarantine config. C:\ProgramData\SeceoKnight\quarantine matches
+            // exactly what install-agent.ps1 pre-creates during install (Step
+            // 3) and is writable by the standard, non-elevated user account
+            // the agent's scheduled task runs as (RunLevel Limited — required
+            // for clipboard/hook monitoring to work at all). The old
+            // "C:\Quarantine" default sat at the system drive root, which
+            // standard Windows ACLs block non-admin users from creating or
+            // writing to — quarantine enforcement would silently fail there
+            // (caught and logged, not surfaced to the alert) while the event
+            // still correctly reported "blocked" as the *intended* action.
             quarantine.enabled = true;
-            quarantine.folder = "C:\\Quarantine";
-            
+            quarantine.folder = "C:\\ProgramData\\SeceoKnight\\quarantine";
+
             // Classification config
             classification.enabled = true;
             classification.maxFileSizeMB = 10;
         }
-        
+
         bool LoadFromFile(const std::string& path) {
             std::ifstream file(path);
             if (!file.is_open()) {
@@ -1177,13 +1186,26 @@ void Log(const std::string& level, const std::string& message) {
                     ".pdf", ".docx", ".doc", ".xlsx", ".xls",
                     ".csv", ".txt", ".json", ".xml", ".sql"
                 };
-                
+
+                // Extract quarantine_path — install-agent.ps1 writes this key
+                // (Step 7) pointing at C:\ProgramData\SeceoKnight\quarantine,
+                // which it pre-creates (Step 3) and which is writable by the
+                // standard, non-elevated user the agent runs as. This key was
+                // previously never read at all, so the agent always fell back
+                // to the "C:\Quarantine" default below — a system-drive-root
+                // path a non-admin user typically can't create/write to,
+                // meaning quarantine enforcement silently failed (caught and
+                // logged, never surfaced) while alerts still correctly
+                // reported "blocked" as the intended action.
+                std::string extractedQuarantine = ExtractJsonValue(content, "quarantine_path");
                 quarantine.enabled = true;
-                quarantine.folder = "C:\\Quarantine";
-                
+                quarantine.folder = !extractedQuarantine.empty()
+                    ? extractedQuarantine
+                    : "C:\\ProgramData\\SeceoKnight\\quarantine";
+
                 classification.enabled = true;
                 classification.maxFileSizeMB = 10;
-                
+
                 return true;
                 
             } catch (...) {

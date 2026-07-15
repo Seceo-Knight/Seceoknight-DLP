@@ -8,6 +8,27 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔒 Windows Agent — Quarantine Silently Failed for Non-Admin User (July 15, 2026)
+
+### Summary
+
+During file-write OCR testing, a screenshot containing restricted content generated an alert correctly labeled "blocked" — but the file was never actually removed from Downloads.
+
+### Root cause
+
+`Config::LoadFromFile()` — the function that parses the real `agent_config.json` written by `install-agent.ps1` — only ever read 5 keys (`server_url`, `agent_name`, `agent_id`, `heartbeat_interval`, `policy_sync_interval`). The `quarantine_path` key that `install-agent.ps1` Step 7 writes (pointing at `C:\ProgramData\SeceoKnight\quarantine`, which Step 3 pre-creates) was silently ignored. The agent always fell back to a hardcoded `C:\Quarantine` — a path at the system drive root that a standard, non-elevated Windows user (which is exactly what the agent's scheduled task runs as, by design, since clipboard/screen hooks require non-admin "Interactive" logon) typically cannot create or write to. When the agent tried to `fs::rename()` the offending file there, it hit a permissions exception, which the surrounding `catch` block logged and silently swallowed — the classification/alert pipeline (which runs independently and had already correctly determined the content was restricted) still reported "blocked" as the *intended* action, but enforcement never actually happened.
+
+### Fixed
+
+- `agent.cpp`'s `LoadFromFile()` now reads `quarantine_path` via the existing `ExtractJsonValue()` helper, falling back to `C:\ProgramData\SeceoKnight\quarantine` (not `C:\Quarantine`) if the key is missing.
+- Also corrected the constructor's own hardcoded default (used before any config file is loaded) to the same non-admin-writable path, for consistency.
+
+### Verification
+
+Not compiled locally (no Windows toolchain in this sandbox). Verified structurally (brace balance unchanged). Confirmed `C:\ProgramData\SeceoKnight\quarantine` is the exact path `install-agent.ps1` already creates and that a standard user can write to, so no install-script changes are needed — this is purely an agent-side fix to make it actually read the config it's already been given. Real verification is the next `build-windows-agent.yml` run.
+
+---
+
 ## 🪟 Windows Agent — Fix Background Mode Actually Showing a Console (July 15, 2026)
 
 ### Summary
