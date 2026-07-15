@@ -27,6 +27,16 @@ Reported after real-world testing: the Windows agent, installed via `install-age
 
 `agent.cpp` cannot be compiled in this Linux sandbox (no MinGW cross-toolchain, no root to install one) — this is Windows-specific C++ (`winsock2.h`, `windows.h`, `wbemidl.h`, etc.). Verified structurally instead: confirmed the edited `if`/`else` block's braces close correctly by direct inspection, and ran a brace-balance check across the whole file before and after the edit — both give the identical (pre-existing, parser-artifact) offset, confirming the edit introduces no imbalance. Real compiler verification will happen via `build-windows-agent.yml` (`windows-latest` + real MinGW) once this is pushed, since `agent.cpp` is in that workflow's trigger paths — check the Actions tab for a green run before re-deploying the agent.
 
+### Follow-up: OCR helpers still flashed a console after the above fix (same day)
+
+After the `-mwindows` change above shipped, real-world testing surfaced a second, related symptom: a cmd window would flash open and close briefly whenever a file was opened/saved or something was copied to the clipboard — i.e. whenever the OCR pipeline ran.
+
+**Root cause:** `RunTesseractOnFile()`, `ExtractPdfTextLayer()`, and `OcrScannedPdf()` all shelled out via `system()` to run `tesseract`/`pdftotext`/`pdftoppm`. Before the GUI-subsystem change, `system()`'s child `cmd.exe` silently inherited the agent's own (hidden) console — no visible window. Once the agent became a GUI-subsystem process with *no* console at all, `system()` had nothing to inherit, so Windows had to create a brand-new — visible — console for every single OCR invocation, which fires on every file write, USB transfer, and clipboard image paste that reaches the OCR helpers.
+
+**Fixed:** added `RunHiddenCommand()`, a `system()`-equivalent built on `CreateProcessA(..., CREATE_NO_WINDOW | DETACHED_PROCESS, ...)` — the same flag combination the existing auto-updater launch elsewhere in this file already used successfully. Replaced all three `system()` call sites with it. No other `system()` calls remain in `agent.cpp`.
+
+**Verification:** same constraint as above (no Windows toolchain in this sandbox) — verified structurally (brace balance unchanged, `CreateProcessA`/`STARTUPINFOA`/`PROCESS_INFORMATION` already used correctly elsewhere in this exact file, `WaitForSingleObject`/`GetExitCodeProcess` are standard `<windows.h>` APIs). Real verification is the next `build-windows-agent.yml` run.
+
 ---
 
 ## 📡 SIEM Syslog Forwarding (Wazuh / QRadar / ArcSight) + Connector Persistence (July 15, 2026)

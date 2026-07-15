@@ -335,6 +335,43 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
 // environment that wrote it. Build and test on a real endpoint before
 // shipping to production.
 
+// Runs a shell command synchronously and returns its exit code, exactly
+// like system() — except system() always risks Windows popping up a
+// visible (if brief) console window for the cmd.exe it spawns. That risk
+// went from "usually invisible" to "guaranteed, every call" once the
+// agent itself switched to the GUI subsystem (see AttachForegroundConsole
+// further down): system()'s child cmd.exe used to inherit the agent's own
+// (hidden) console, but a GUI-subsystem process has no console to inherit
+// at all, so Windows has to create a brand new — visible — one for it.
+// This is exactly the "cmd flashes open and closes" symptom seen on every
+// OCR run (tesseract / pdftotext / pdftoppm), since those fire on every
+// file write, USB transfer, and clipboard image paste that reaches the
+// OCR helpers below. CREATE_NO_WINDOW | DETACHED_PROCESS is the same
+// flag combination already used for the auto-updater launch further down
+// this file — proven to suppress the window entirely.
+int RunHiddenCommand(const std::string& command) {
+    std::string cmdLine = "cmd.exe /c " + command;
+    std::vector<char> cmdBuf(cmdLine.begin(), cmdLine.end());
+    cmdBuf.push_back('\0');
+
+    STARTUPINFOA si = {};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi = {};
+
+    if (!CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE,
+                         CREATE_NO_WINDOW | DETACHED_PROCESS,
+                         nullptr, nullptr, &si, &pi)) {
+        return -1;  // Mirrors system()'s convention: couldn't launch the shell at all.
+    }
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exitCode = 0;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return static_cast<int>(exitCode);
+}
+
 // Runs `tesseract <imagePath> <outputBase> --psm 6 -l eng` on an image
 // file already on disk and returns the recognized text, or "" if
 // tesseract.exe isn't on PATH, the file isn't readable, or OCR finds
@@ -354,7 +391,7 @@ std::string RunTesseractOnFile(const std::string& imagePath) {
 
         std::string tessCmd = "tesseract \"" + imagePath + "\" \"" + outBase +
                                "\" --psm 6 -l eng 2>nul";
-        int tessResult = system(tessCmd.c_str());
+        int tessResult = RunHiddenCommand(tessCmd);
 
         std::string ocrText;
         std::string ocrFile = outBase + ".txt";
@@ -417,7 +454,7 @@ std::string ExtractPdfTextLayer(const std::string& pdfPath) {
         std::string outTxt = tempDir + "\\cs_pdf_text_" + uniqueTag + ".txt";
 
         std::string cmd = "pdftotext \"" + pdfPath + "\" \"" + outTxt + "\" 2>nul";
-        int result = system(cmd.c_str());
+        int result = RunHiddenCommand(cmd);
 
         std::string text;
         if (result == 0) {
@@ -453,7 +490,7 @@ std::string OcrScannedPdf(const std::string& pdfPath) {
         // without producing unnecessarily huge page images.
         std::string cmd = "pdftoppm -png -r 150 -f 1 -l " + std::to_string(MAX_OCR_PAGES) +
                            " \"" + pdfPath + "\" \"" + pageBase + "\" 2>nul";
-        int result = system(cmd.c_str());
+        int result = RunHiddenCommand(cmd);
 
         std::string combinedText;
         if (result == 0) {
