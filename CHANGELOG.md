@@ -49,6 +49,14 @@ After both fixes above shipped and were confirmed built (verified against the CI
 
 **Verification:** same sandbox constraint as the prior two entries — verified structurally (brace balance unchanged, `GetClipboardSequenceNumber` is a standard `<windows.h>` API, `STARTF_USESHOWWINDOW`/`SW_HIDE` are documented `STARTUPINFO` fields). Real verification is the next `build-windows-agent.yml` run — check its timestamp against the current time before reinstalling, the same way the previous two fixes were confirmed.
 
+### Follow-up 3: flash confirmed on the verified-correct binary — CreateProcess flags weren't enough (same day)
+
+The user confirmed, via `Get-FileHash`, they were genuinely running the binary containing all three fixes above — and the flash still occurred, console titled `tesseract "C:\Users\...`. This ruled out "stale binary" and meant the `CREATE_NO_WINDOW | DETACHED_PROCESS` + `STARTF_USESHOWWINDOW/SW_HIDE` flag combination was not fully suppressing the window in this environment (plausibly an AV/EDR hook on `CreateProcess`, or a Windows-build-specific timing quirk — a console-subsystem child's C runtime requests a console during startup whenever its inherited standard handles aren't valid, and that request can itself cause a flash before any hide flag is applied).
+
+**Fixed — a fundamentally different, more robust approach:** `RunHiddenCommand()` no longer wraps commands in `cmd.exe /c` at all. It invokes `tesseract.exe` / `pdftotext.exe` / `pdftoppm.exe` directly (`CreateProcess` resolves the first token against `PATH` the same way `cmd.exe` would), and gives the child real, valid standard handles pointed at the `NUL` device via `STARTF_USESTDHANDLES` before it ever starts — so the child's C runtime has no reason to request a console in the first place, rather than requesting one and then trying to hide it after the fact. This removes cmd.exe as an intermediate process entirely and removes the two-step "create then hide" race that the previous three attempts were all still exposed to. The `2>nul` shell-redirection syntax was removed from all three call sites' command strings (no longer meaningful without a shell — stderr redirection is now handled via the real `hStdError` handle).
+
+**Verification:** same sandbox constraint as all prior entries in this section. Verified structurally (brace balance unchanged); confirmed `CreateFileA("NUL", ...)`, `STARTF_USESTDHANDLES`, and `bInheritHandle`/`bInheritHandles` are all standard, correctly-paired `<windows.h>` APIs for this exact "redirect a child's stdio to NUL" pattern. Real verification is the next `build-windows-agent.yml` run.
+
 ---
 
 ## 📡 SIEM Syslog Forwarding (Wazuh / QRadar / ArcSight) + Connector Persistence (July 15, 2026)

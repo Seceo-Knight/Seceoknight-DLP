@@ -335,7 +335,7 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
 // environment that wrote it. Build and test on a real endpoint before
 // shipping to production.
 
-// Runs a shell command synchronously and returns its exit code, exactly
+// Runs a command line synchronously and returns its exit code, exactly
 // like system() — except system() always risks Windows popping up a
 // visible (if brief) console window for the cmd.exe it spawns. That risk
 // went from "usually invisible" to "guaranteed, every call" once the
@@ -343,32 +343,53 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
 // further down): system()'s child cmd.exe used to inherit the agent's own
 // (hidden) console, but a GUI-subsystem process has no console to inherit
 // at all, so Windows has to create a brand new — visible — one for it.
-// This is exactly the "cmd flashes open and closes" symptom seen on every
-// OCR run (tesseract / pdftotext / pdftoppm), since those fire on every
-// file write, USB transfer, and clipboard image paste that reaches the
-// OCR helpers below. Belt-and-suspenders window suppression: CREATE_NO_
-// WINDOW | DETACHED_PROCESS (same flags the auto-updater launch further
-// down this file already uses successfully) PLUS an explicit
-// STARTF_USESHOWWINDOW / SW_HIDE in the STARTUPINFO — some environments
-// (older Windows builds, certain AV/EDR hooks intercepting CreateProcess)
-// have been reported to not fully honor CREATE_NO_WINDOW alone, and the
-// STARTUPINFO show-state is the second, independently-documented way to
-// force a spawned console window hidden.
+// This is exactly the "cmd flashes open and closes, titled 'tesseract
+// ...'" symptom seen on every OCR run (tesseract / pdftotext / pdftoppm).
+//
+// Two rounds of "just add more CreateProcess flags" (CREATE_NO_WINDOW,
+// then + DETACHED_PROCESS, then + STARTF_USESHOWWINDOW/SW_HIDE) were
+// confirmed NOT to fully suppress the flash in the field — likely because
+// a console-subsystem child's C runtime requests a console during startup
+// whenever its inherited standard handles aren't valid, and that request
+// itself can cause a console to flash into existence before any hide
+// flag takes effect, on some Windows builds / under some AV-EDR hooks.
+//
+// This version removes cmd.exe from the picture entirely (invokes
+// tesseract.exe/pdftotext.exe/pdftoppm.exe directly — CreateProcess
+// resolves the first token against PATH the same way cmd.exe would) and
+// gives the child real, valid standard handles pointed at NUL up front,
+// so its CRT never has a reason to ask for a console at all. This is the
+// standard, most-reliable pattern for "run a console tool with zero
+// visible window" — stronger than relying on show-window flags alone.
 int RunHiddenCommand(const std::string& command) {
-    std::string cmdLine = "cmd.exe /c " + command;
-    std::vector<char> cmdBuf(cmdLine.begin(), cmdLine.end());
+    std::vector<char> cmdBuf(command.begin(), command.end());
     cmdBuf.push_back('\0');
+
+    SECURITY_ATTRIBUTES sa = {};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+    HANDLE hNul = CreateFileA("NUL", GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              &sa, OPEN_EXISTING, 0, nullptr);
 
     STARTUPINFOA si = {};
     si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
     si.wShowWindow = SW_HIDE;
+    si.hStdInput  = hNul;
+    si.hStdOutput = hNul;
+    si.hStdError  = hNul;
     PROCESS_INFORMATION pi = {};
 
-    if (!CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE,
-                         CREATE_NO_WINDOW | DETACHED_PROCESS,
-                         nullptr, nullptr, &si, &pi)) {
-        return -1;  // Mirrors system()'s convention: couldn't launch the shell at all.
+    BOOL ok = CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr,
+                              /* bInheritHandles */ TRUE,
+                              CREATE_NO_WINDOW,
+                              nullptr, nullptr, &si, &pi);
+
+    if (hNul != INVALID_HANDLE_VALUE) CloseHandle(hNul);
+
+    if (!ok) {
+        return -1;  // Mirrors system()'s convention: couldn't launch the process at all.
     }
 
     WaitForSingleObject(pi.hProcess, INFINITE);
@@ -396,8 +417,11 @@ std::string RunTesseractOnFile(const std::string& imagePath) {
             std::to_string(GetCurrentThreadId());
         std::string outBase = tempDir + "\\cs_ocr_" + uniqueTag;
 
+        // No trailing "2>nul" — RunHiddenCommand() invokes tesseract.exe
+        // directly (no cmd.exe shell), so stderr is redirected via a real
+        // NUL handle in STARTUPINFO instead of shell redirection syntax.
         std::string tessCmd = "tesseract \"" + imagePath + "\" \"" + outBase +
-                               "\" --psm 6 -l eng 2>nul";
+                               "\" --psm 6 -l eng";
         int tessResult = RunHiddenCommand(tessCmd);
 
         std::string ocrText;
@@ -460,7 +484,7 @@ std::string ExtractPdfTextLayer(const std::string& pdfPath) {
             std::to_string(GetCurrentThreadId());
         std::string outTxt = tempDir + "\\cs_pdf_text_" + uniqueTag + ".txt";
 
-        std::string cmd = "pdftotext \"" + pdfPath + "\" \"" + outTxt + "\" 2>nul";
+        std::string cmd = "pdftotext \"" + pdfPath + "\" \"" + outTxt + "\"";
         int result = RunHiddenCommand(cmd);
 
         std::string text;
@@ -496,7 +520,7 @@ std::string OcrScannedPdf(const std::string& pdfPath) {
         // 150 DPI is enough for Tesseract to read normal document text
         // without producing unnecessarily huge page images.
         std::string cmd = "pdftoppm -png -r 150 -f 1 -l " + std::to_string(MAX_OCR_PAGES) +
-                           " \"" + pdfPath + "\" \"" + pageBase + "\" 2>nul";
+                           " \"" + pdfPath + "\" \"" + pageBase + "\"";
         int result = RunHiddenCommand(cmd);
 
         std::string combinedText;
