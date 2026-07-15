@@ -17,7 +17,7 @@ export type PolicyType =
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
 export type ClipboardAction = 'alert' | 'log'
-export type FileSystemAction = 'alert' | 'log'
+export type FileSystemAction = 'alert' | 'log' | 'quarantine' | 'block'
 export type FileTransferAction = 'block' | 'quarantine' | 'alert'
 export type USBDeviceAction = 'alert' | 'log' | 'block'
 export type USBTransferAction = 'block' | 'quarantine' | 'alert'
@@ -40,6 +40,7 @@ export interface FileSystemConfig {
     move: boolean
   }
   action: FileSystemAction
+  quarantinePath?: string
 }
 
 export interface FileTransferConfig {

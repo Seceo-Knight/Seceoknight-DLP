@@ -282,7 +282,8 @@ def _transform_file_system_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any
             "delete": false,
             "move": true
         },
-        "action": "alert" | "log"  # Detection-only
+        "action": "alert" | "log" | "quarantine" | "block",
+        "quarantinePath": "C:\\ProgramData\\SeceoKnight\\quarantine" (optional, for quarantine action)
     }
 
     Backend format:
@@ -302,6 +303,7 @@ def _transform_file_system_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any
     file_extensions = config.get("fileExtensions", [])
     events = config.get("events", {})
     action = config.get("action", "log")
+    quarantine_path = config.get("quarantinePath")
 
     rules = []
 
@@ -362,10 +364,21 @@ def _transform_file_system_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any
         "rules": rules,
     }
 
-    # Enforce detection-only semantics (no block/quarantine here)
-    if action not in {"alert", "log"}:
+    # File-write events (local saves to a monitored folder like Downloads)
+    # now support the same quarantine/block enforcement as USB transfer and
+    # file transfer policies, instead of being detection-only. The agent
+    # side (ContentClassifier::Classify / HandleFileEvent in agent.cpp) has
+    # always supported enforcing "quarantine"/"block" generically for any
+    # matched policy — this was the one policy type deliberately withheld
+    # from that capability. Falls back to "log" for any unrecognized value.
+    if action not in {"alert", "log", "quarantine", "block"}:
         action = "log"
-    actions = {action: {}}
+
+    actions: Dict[str, Any] = {}
+    if action == "quarantine" and quarantine_path:
+        actions["quarantine"] = {"path": quarantine_path}
+    else:
+        actions[action] = {}
 
     return conditions, actions
 

@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🚫 File System Monitoring — Add Quarantine/Block (was Alert-Only by Design) (July 15, 2026)
+
+### Summary
+
+After the OCR/tessdata fix below shipped, a Study Report screenshot saved to Downloads was correctly detected by File System Monitoring (confirmed via the fresh agent log — the policy fired, OCR read the file) but the file was never removed. Root cause turned out to be a deliberate, pre-existing restriction, not a bug in today's OCR work.
+
+### Root cause
+
+`_transform_file_system_config()` in `server/app/utils/policy_transformer.py` explicitly enforced "detection-only" semantics for the `file_system_monitoring` policy type: `if action not in {"alert", "log"}: action = "log"`, regardless of what was requested. The dashboard's `FileSystemPolicyForm.tsx` matched this — it only ever offered "Alert" and "Log Only" as options, with no way to select Quarantine or Block. Every other monitoring type (USB Transfer, File Transfer) already supported the full `alert | log | quarantine | block` set, and the agent's own enforcement code (`agent.cpp`, `ContentClassifier::Classify`) has always handled `quarantine`/`block` generically for any matched policy — this was the one policy type the backend deliberately withheld it from.
+
+### Fixed
+
+- `server/app/utils/policy_transformer.py`: `_transform_file_system_config()` now accepts `quarantine` and `block` (with an optional `quarantinePath`), mirroring the existing USB Transfer / File Transfer transformers. Falls back to `log` for anything unrecognized.
+- `dashboard/src/types/policy.ts`: `FileSystemAction` widened to `'alert' | 'log' | 'quarantine' | 'block'`; `FileSystemConfig` gained an optional `quarantinePath`.
+- `dashboard/src/components/policies/FileSystemPolicyForm.tsx`: added Block and Quarantine (with a quarantine-path input, defaulting to the agent's own quarantine folder if left blank) options alongside the existing Alert/Log Only choices.
+
+### Also noted (not changed yet, flagging for awareness)
+
+Screen Capture alerts use a **separate, hardcoded local classifier** (`screenClassifier` in `agent.cpp`) that only recognizes 7 fixed patterns — Aadhaar, PAN, Credit Card (Luhn-checked), SSN, private keys, AWS keys, IFSC codes. It does **not** know about custom rules created in the dashboard (like a "Study Report" keyword rule) or generic Email/phone patterns — so a screen-capture-only test with those data types will legitimately show "Public/low" even with working OCR. Only File System / Clipboard / USB Transfer monitoring consult the server-synced rule set (which does include custom rules, Email, etc.). Extending screen-capture to consult synced rules is a larger change and hasn't been done here.
+
+### Verification
+
+Backend change verified directly (`_transform_file_system_config` called in-sandbox with quarantine/block/invalid inputs, confirmed correct `actions` dict for each). Frontend verified with `npm run build` (Vite) — succeeds with no new errors; `tsc --noEmit` shows only pre-existing, unrelated errors in other files (confirmed absent from `FileSystemPolicyForm.tsx` specifically, both before and after this change).
+
+---
+
 ## 🪵 Windows Agent — Log File Silently Stopped Updating + OCR Failures Were Invisible (July 15, 2026)
 
 ### Summary

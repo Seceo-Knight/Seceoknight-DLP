@@ -256,6 +256,51 @@ export default function FileSystemPolicyForm({ config, onChange }: FileSystemPol
             <input
               type="radio"
               name="filesystem-action"
+              value="block"
+              checked={config.action === 'block'}
+              onChange={() => onChange({ ...config, action: 'block', quarantinePath: undefined })}
+              className="w-4 h-4 text-indigo-400"
+            />
+            <div>
+              <div className="text-white font-medium text-sm">Block</div>
+              <div className="text-muted-foreground/70 text-xs">Delete the file immediately when restricted content is detected</div>
+            </div>
+          </label>
+
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+            <input
+              type="radio"
+              name="filesystem-action"
+              value="quarantine"
+              checked={config.action === 'quarantine'}
+              onChange={() => onChange({ ...config, action: 'quarantine' })}
+              className="w-4 h-4 text-indigo-400"
+            />
+            <div className="flex-1">
+              <div className="text-white font-medium text-sm">Quarantine</div>
+              <div className="text-muted-foreground/70 text-xs">Move the file to a quarantine folder instead of deleting it</div>
+            </div>
+          </label>
+
+          {config.action === 'quarantine' && (
+            <div className="ml-7">
+              <input
+                type="text"
+                value={config.quarantinePath || ''}
+                onChange={(e) => onChange({ ...config, quarantinePath: e.target.value })}
+                placeholder="e.g., C:\\ProgramData\\SeceoKnight\\quarantine"
+                className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+              />
+              <p className="text-xs text-muted-foreground/70 mt-1">
+                Leave blank to use the agent&apos;s default quarantine folder
+              </p>
+            </div>
+          )}
+
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+            <input
+              type="radio"
+              name="filesystem-action"
               value="alert"
               checked={config.action === 'alert'}
               onChange={() => onChange({ ...config, action: 'alert', quarantinePath: undefined })}
@@ -263,7 +308,7 @@ export default function FileSystemPolicyForm({ config, onChange }: FileSystemPol
             />
             <div>
               <div className="text-white font-medium text-sm">Alert</div>
-              <div className="text-muted-foreground/70 text-xs">Send alert notification</div>
+              <div className="text-muted-foreground/70 text-xs">Send alert notification, don&apos;t touch the file</div>
             </div>
           </label>
 
