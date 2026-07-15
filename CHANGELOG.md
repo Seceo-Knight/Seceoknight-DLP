@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🖥️ Screen Capture — Only Checked 7 Hardcoded Patterns, Never Saw Custom Rules/Email/Phone (July 15, 2026)
+
+### Summary
+
+A screenshot containing a Study Report keyword match, an email address, and a mobile number only ever produced a plain "Screen capture" event with no detection, even with OCR working correctly (confirmed via `ocr_diagnostics.log` showing no failures). Root cause: screen-capture classification is architecturally isolated from every other detection path in this codebase.
+
+### Root cause
+
+`screenClassifier` in `agent.cpp` (used only for live screen-capture alerts) is a fully self-contained lambda with its own hardcoded, compiled-in regex list: AADHAAR, PAN, Credit Card, SSN, private keys, AWS keys, IFSC codes — 7 patterns total, no more, no less. Unlike file-write/clipboard/USB-transfer monitoring, it never calls `ContentClassifier::Classify()` against server-synced policies, and the OCR/window text it reads was never even sent to the server — the outgoing `screen_capture` event JSON had no `content`/text field at all. Two consequences: (1) common types like Email and Phone, which every other monitoring path already detects via `ExtractDataType()`, were silently absent from screen capture specifically; (2) anything relying on the server's full rule engine — custom rules like a user-defined "Study Report" keyword rule — had literally no way to ever see screen-capture content, since the text never left the agent.
+
+### Fixed
+
+- `screen_capture_monitor.h`/`.cpp`: `ClassifyCallback` now takes an `outExtractedText` out-parameter; added a mutex-guarded `m_lastScannedText` member so whichever thread last ran the classifier (the ~1Hz `ContentScanThread` poll loop, or `ProcessMonitorThread`'s capture-tool-launch check) can hand its text to `HandleCaptureAttempt()`. `ScreenCaptureEvent` gained a `detectedText` field.
+- `agent.cpp`: `screenClassifier` now populates that out-parameter with whatever it read (WM_GETTEXT window text, or OCR output when window text wasn't available), and the outgoing event JSON now includes it as `"content"` (capped at 5000 chars, same convention used for file/clipboard event content). The server's existing `classify_event()` pipeline (`event_processor.py`) already classifies *any* event with a `content` field using the full database rule engine — no server-side changes were needed for this to start working end-to-end.
+- Added `EMAIL` and `PHONE_IN` to `screenClassifier`'s own local pattern list (same regexes already used by `ExtractDataType` elsewhere), so those two common types are now detected immediately/locally, not just after a round trip to the server.
+
+### Important caveat
+
+Real-time *blocking* of the screenshot itself (the keyboard-hook swallow) is still decided purely by the agent's local classifier — now 9 patterns instead of 7, but still not custom server rules. The server-side rule match (which does include custom rules like Study Report) lands on the event shortly after it's emitted, populating `classification_metadata.classification_labels`/severity for alerting and dashboard/policy purposes — it does not retroactively stop a screenshot that already happened. Making custom rules block screen captures in real time would require syncing rule definitions to the agent for local evaluation, which hasn't been done here.
+
+### Verification
+
+Not compiled locally (no Windows toolchain in this sandbox). Verified structurally: brace-balance check unchanged for `agent.cpp` (still the known -5 baseline) and comes out to a clean 0 for both `screen_capture_monitor.h` and `.cpp`. Confirmed no other call sites still use the old 2-argument `ClassifyCallback` signature (`grep` across both files). Traced `event_processor.py`'s `classify_event()` to confirm it classifies any event with a `content` field regardless of `event_type`, so no server-side change was required. Real verification is the next `build-windows-agent.yml` run.
+
+---
+
 ## 🚫 File System Monitoring — Two More "Detection-Only" Blockers Found (Frontend Validator + Linux Agent) (July 15, 2026)
 
 ### Summary

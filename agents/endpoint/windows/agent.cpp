@@ -2980,7 +2980,17 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          //   1) Window title keywords (instant)
          //   2) Window text via WM_GETTEXT + EnumChildWindows (reads ALL visible text)
          //   3) File content from disk (if editor with filename in title)
-         auto screenClassifier = [this](const std::string& windowTitle, const std::string& processName) -> std::string {
+         // outText: populated with whatever text this function reads
+         // (window text via WM_GETTEXT and/or Tesseract OCR output),
+         // regardless of what classification level the LOCAL hardcoded
+         // pattern set below arrives at. The caller forwards this to the
+         // server as the event's "content" field, so the server's full
+         // rule engine (custom rules like a user-defined keyword rule,
+         // plus Email/Phone/etc.) gets a chance to classify content this
+         // function's own small fixed pattern list (Aadhaar/PAN/Credit
+         // Card/SSN/private keys/AWS keys/IFSC) doesn't know about.
+         auto screenClassifier = [this](const std::string& windowTitle, const std::string& processName,
+                                         std::string& outText) -> std::string {
 
              // Luhn checksum — eliminates random 16-digit sequences (IMEIs,
              // serial numbers, GSTIN suffixes) from being mis-classified as
@@ -3013,6 +3023,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      {"PRIVATE_KEY", std::regex(R"(-----BEGIN\s+(RSA\s+)?PRIVATE KEY-----)")},
                      {"AWS_KEY",     std::regex(R"(AKIA[0-9A-Z]{16})")},
                      {"IFSC",        std::regex(R"(\b[A-Z]{4}0[A-Z0-9]{6}\b)")},
+                     // Email/phone weren't previously checked at all for screen
+                     // capture (only file-write/clipboard/USB paths had them via
+                     // ExtractDataType) — same regexes as those paths for consistency.
+                     {"EMAIL",       std::regex(R"(\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b)")},
+                     {"PHONE_IN",    std::regex(R"((?:\+91[\s.-]?|0)[6-9]\d{4}[\s.-]?\d{5})")},
                  };
                  float score = 0.0f;
                  std::vector<std::string> matchedNames;
@@ -3042,6 +3057,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                              if (name == "CREDIT_CARD" || name == "SSN" || name == "AADHAAR" ||
                                  name == "PRIVATE_KEY" || name == "AWS_KEY") score += 0.9f;
                              else if (name == "PAN" || name == "IFSC") score += 0.7f;
+                             else if (name == "EMAIL" || name == "PHONE_IN") score += 0.65f;
                          }
                      } catch (...) {}
                  }
@@ -3122,6 +3138,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
 
                  if (allText.length() > 10) {
                      logger.Debug("Screen text extracted: " + std::to_string(allText.length()) + " chars from window");
+                     outText = allText;
                      std::string result = classifyText(allText, "stage2-wm_gettext:" + windowTitle);
                      if (result != "Public") return result;
                  }
@@ -3235,6 +3252,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                              if (ocrText.length() > 10) {
                                  logger.Debug("Tesseract OCR (foreground window) extracted " +
                                               std::to_string(ocrText.length()) + " chars");
+                                 // Only use OCR text as the reported content if Stage 2
+                                 // didn't already find real window text — WM_GETTEXT is
+                                 // cleaner/more precise than OCR when both are available.
+                                 if (outText.empty()) outText = ocrText;
                                  std::string result = classifyText(ocrText, "stage4-ocr:" + windowTitle);
                                  if (result != "Public") {
                                      logger.Info("OCR detected sensitive content in foreground window: " + result);
@@ -3268,6 +3289,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  json.AddString("action", event.actionTaken == "Block" ? "blocked" : "allowed");
                  json.AddString("classification_level", event.classification);
                  json.AddBool("blocked", event.actionTaken == "Block");
+                 // Forward whatever window/OCR text the local classifier read so
+                 // the server's ClassificationEngine (full rule set — custom
+                 // rules, Email, Phone, etc.) can classify it too. Without this,
+                 // screen_capture events were only ever evaluated against the
+                 // agent's own small hardcoded pattern list (Aadhaar/PAN/Credit
+                 // Card/SSN/private keys/AWS keys/IFSC) and nothing else.
+                 if (!event.detectedText.empty()) {
+                     json.AddString("content", event.detectedText);
+                 }
                  json.AddString("timestamp", GetCurrentTimestampISO());
                  SendEvent(json.Build());
              },

@@ -4,6 +4,7 @@
 #include <functional>
 #include <thread>
 #include <atomic>
+#include <mutex>
 #include <vector>
 
 struct ScreenCaptureEvent {
@@ -16,13 +17,26 @@ struct ScreenCaptureEvent {
     bool containsSensitiveData = false;
     std::string actionTaken;        // Allow, Block, Alert
     std::string timestamp;
+    // Text the local classifier actually read (window text and/or OCR
+    // output) at the time of the last scan. Sent to the server as
+    // "content" so the server's full rule engine (custom rules, Email,
+    // Phone, etc. — not just the agent's small hardcoded pattern set)
+    // gets a chance to classify it too. Empty when no readable text was
+    // found (e.g. a plain image with nothing OCR-able).
+    std::string detectedText;
 };
 
 class ScreenCaptureMonitor {
 public:
     using CaptureCallback = std::function<void(ScreenCaptureEvent& event)>;
     using LogCallback = std::function<void(const std::string& level, const std::string& message)>;
-    using ClassifyCallback = std::function<std::string(const std::string& windowTitle, const std::string& processName)>;
+    // outExtractedText is an out-parameter: the classifier should populate
+    // it with whatever text it read (window text / OCR output) so it can
+    // be forwarded to the server, regardless of what classification level
+    // it locally arrived at.
+    using ClassifyCallback = std::function<std::string(const std::string& windowTitle,
+                                                         const std::string& processName,
+                                                         std::string& outExtractedText)>;
 
     ScreenCaptureMonitor(CaptureCallback callback, LogCallback logger = nullptr,
                          ClassifyCallback classifier = nullptr);
@@ -54,6 +68,15 @@ private:
     std::thread m_processThread;
     std::thread m_scanThread;
     std::atomic<bool> m_running{false};
+
+    // Most recently read window/OCR text, updated by whichever thread last
+    // ran the classifier (ContentScanThread's poll loop, or
+    // ProcessMonitorThread's capture-tool-launch check). HandleCaptureAttempt
+    // reads this to attach to the event it emits. Guarded by a mutex rather
+    // than an atomic since std::string isn't lock-free-atomic-friendly and
+    // this is only touched at ~1Hz, not in a hot path.
+    std::string m_lastScannedText;
+    std::mutex m_scanTextMutex;
 
     // Continuously updated by ContentScanThread. The keyboard hook ONLY
     // swallows PrintScreen / Win+Shift+S when this flag is true; otherwise

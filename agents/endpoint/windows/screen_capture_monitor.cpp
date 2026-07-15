@@ -145,6 +145,14 @@ void ScreenCaptureMonitor::HandleCaptureAttempt(const std::string& method) {
     event.actionTaken           = action;
     event.timestamp             = GetTimestamp();
 
+    {
+        std::lock_guard<std::mutex> lock(m_scanTextMutex);
+        // Cap at 5000 chars — matches the content-snippet size used
+        // elsewhere in the agent for file/clipboard events, plenty for
+        // rule matching without bloating the event payload.
+        event.detectedText = m_lastScannedText.substr(0, 5000);
+    }
+
     if (m_callback) m_callback(event);
 }
 
@@ -324,6 +332,7 @@ void ScreenCaptureMonitor::ContentScanThread() {
     HWND        lastHwnd  = nullptr;
     std::string lastTitle;
     std::string lastClass = "Public";
+    std::string lastText;
 
     while (m_running) {
         HWND fg = GetForegroundWindow();
@@ -348,13 +357,20 @@ void ScreenCaptureMonitor::ContentScanThread() {
             classification = lastClass;
         } else {
             classification = "Public";
+            std::string extractedText;
             if (m_classifier) {
-                try { classification = m_classifier(title, ""); }
+                try { classification = m_classifier(title, "", extractedText); }
                 catch (...) { classification = "Public"; }
             }
             lastHwnd  = fg;
             lastTitle = title;
             lastClass = classification;
+            lastText  = extractedText;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(m_scanTextMutex);
+            m_lastScannedText = lastText;
         }
 
         bool nowSensitive = (classification == "Restricted" ||
@@ -455,7 +471,13 @@ void ScreenCaptureMonitor::ProcessMonitorThread() {
 
                                 std::string windowTitle = GetActiveWindowTitle();
                                 std::string classification = "Public";
-                                if (m_classifier) classification = m_classifier(windowTitle, procName);
+                                std::string extractedText;
+                                if (m_classifier) classification = m_classifier(windowTitle, procName, extractedText);
+
+                                {
+                                    std::lock_guard<std::mutex> lock(m_scanTextMutex);
+                                    m_lastScannedText = extractedText;
+                                }
 
                                 bool isSensitive = (classification == "Restricted" || classification == "Confidential");
 
