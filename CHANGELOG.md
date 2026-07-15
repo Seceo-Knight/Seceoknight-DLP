@@ -37,6 +37,18 @@ After the `-mwindows` change above shipped, real-world testing surfaced a second
 
 **Verification:** same constraint as above (no Windows toolchain in this sandbox) — verified structurally (brace balance unchanged, `CreateProcessA`/`STARTUPINFOA`/`PROCESS_INFORMATION` already used correctly elsewhere in this exact file, `WaitForSingleObject`/`GetExitCodeProcess` are standard `<windows.h>` APIs). Real verification is the next `build-windows-agent.yml` run.
 
+### Follow-up 2: continuous flashing on ordinary activity (select/copy) — real root cause found (same day)
+
+After both fixes above shipped and were confirmed built (verified against the CI bot's binary-update commit timestamp), the user still reported near-continuous console flashing tied to ordinary activity like selecting text or copying — bad enough to make the machine hard to use.
+
+**Root cause — a genuine pre-existing bug, not a console-suppression issue:** `ClipboardMonitor()` polls the clipboard every 2 seconds. Its text path already deduped correctly (`text != lastClipboard`), but its image path did not: whenever there was no *new* text that cycle, it unconditionally called `TryOcrClipboardImage()`, which reads whatever `CF_DIB` bitmap happens to be sitting on the clipboard and OCRs it — **every single 2-second cycle, for as long as that bitmap remains**, not just once when it first appears. Its own dedup check (`ocrText != lastClipboard`) only runs *after* Tesseract has already executed, so it prevented duplicate alerts but not duplicate OCR runs. Because many ordinary rich-text copies (Word, Outlook, browsers) leave a `CF_DIB` bitmap on the clipboard alongside the plain text as a paste-compatibility side effect, this meant Tesseract — and therefore a `RunHiddenCommand()` console launch — was firing every 2 seconds indefinitely, completely independent of any real user action. That's the "continuous" flashing: not activity-triggered at all, just a fixed timer, made to look activity-correlated because the user was actively working during those 2-second windows.
+
+**Fixed:**
+- `DLPAgent` gained a `lastClipboardSeq` member. `ClipboardMonitor()` now calls `GetClipboardSequenceNumber()` — the Windows-native "did the clipboard change at all, in any format" counter — at the top of each poll and skips the entire read-and-classify pass (both the text *and* image checks) unless it has advanced since the last pass. This closes the bug for good: OCR now only ever runs once per actual clipboard change, never on a repeat of the same still-there content.
+- Hardened `RunHiddenCommand()` as defense-in-depth: added `STARTF_USESHOWWINDOW` + `SW_HIDE` in the `STARTUPINFO` alongside the existing `CREATE_NO_WINDOW | DETACHED_PROCESS` flags, since some environments (older Windows builds, certain AV/EDR hooks) have been reported to not fully honor `CREATE_NO_WINDOW` alone.
+
+**Verification:** same sandbox constraint as the prior two entries — verified structurally (brace balance unchanged, `GetClipboardSequenceNumber` is a standard `<windows.h>` API, `STARTF_USESHOWWINDOW`/`SW_HIDE` are documented `STARTUPINFO` fields). Real verification is the next `build-windows-agent.yml` run — check its timestamp against the current time before reinstalling, the same way the previous two fixes were confirmed.
+
 ---
 
 ## 📡 SIEM Syslog Forwarding (Wazuh / QRadar / ArcSight) + Connector Persistence (July 15, 2026)

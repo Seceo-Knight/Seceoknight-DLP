@@ -346,9 +346,14 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
 // This is exactly the "cmd flashes open and closes" symptom seen on every
 // OCR run (tesseract / pdftotext / pdftoppm), since those fire on every
 // file write, USB transfer, and clipboard image paste that reaches the
-// OCR helpers below. CREATE_NO_WINDOW | DETACHED_PROCESS is the same
-// flag combination already used for the auto-updater launch further down
-// this file — proven to suppress the window entirely.
+// OCR helpers below. Belt-and-suspenders window suppression: CREATE_NO_
+// WINDOW | DETACHED_PROCESS (same flags the auto-updater launch further
+// down this file already uses successfully) PLUS an explicit
+// STARTF_USESHOWWINDOW / SW_HIDE in the STARTUPINFO — some environments
+// (older Windows builds, certain AV/EDR hooks intercepting CreateProcess)
+// have been reported to not fully honor CREATE_NO_WINDOW alone, and the
+// STARTUPINFO show-state is the second, independently-documented way to
+// force a spawned console window hidden.
 int RunHiddenCommand(const std::string& command) {
     std::string cmdLine = "cmd.exe /c " + command;
     std::vector<char> cmdBuf(cmdLine.begin(), cmdLine.end());
@@ -356,6 +361,8 @@ int RunHiddenCommand(const std::string& command) {
 
     STARTUPINFOA si = {};
     si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
     PROCESS_INFORMATION pi = {};
 
     if (!CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr, FALSE,
@@ -1802,6 +1809,11 @@ static ClassificationResult Classify(const std::string& content,
      
      std::string activePolicyVersion;
      std::string lastClipboard;
+     // Windows bumps this on every clipboard *change*, regardless of format
+     // (text, DIB, whatever) — see ClipboardMonitor(). Used to skip the
+     // whole read-and-classify pass entirely when the clipboard hasn't
+     // actually changed since the last poll.
+     DWORD lastClipboardSeq = 0;
      std::string lastActiveWindow;
      std::string lastActiveFile;
      std::set<std::string> removableDrives;
@@ -4266,7 +4278,26 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                  std::this_thread::sleep_for(std::chrono::seconds(2));
                  continue;
              }
-             
+
+             // Skip the entire read-and-classify pass if the clipboard
+             // hasn't actually changed since the last poll. Without this,
+             // TryOcrClipboardImage() re-runs Tesseract on the SAME
+             // still-sitting CF_DIB bitmap every single 2-second cycle
+             // forever (its own dedup check only compares the *recognized
+             // text* after OCR already ran, not before) -- a runaway loop
+             // that fires continuously and independent of any real user
+             // activity, since plenty of ordinary rich-text copies (Word,
+             // Outlook, browsers) leave a bitmap on the clipboard alongside
+             // the text. GetClipboardSequenceNumber() is the Windows-native
+             // way to detect "did anything change" without opening the
+             // clipboard or comparing content.
+             DWORD seq = GetClipboardSequenceNumber();
+             if (seq == lastClipboardSeq) {
+                 std::this_thread::sleep_for(std::chrono::seconds(2));
+                 continue;
+             }
+             lastClipboardSeq = seq;
+
              try {
                  // Get active window title to detect source file
                  HWND hwnd = GetForegroundWindow();
