@@ -400,6 +400,55 @@ int RunHiddenCommand(const std::string& command) {
     return static_cast<int>(exitCode);
 }
 
+// Appends a one-line, timestamped entry to a small dedicated OCR
+// diagnostics file under C:\ProgramData\SeceoKnight\logs. RunTesseractOnFile
+// / ExtractPdfTextLayer / OcrScannedPdf are free functions with no access to
+// DLPAgent's Logger member, and their failures were previously completely
+// silent (return "" and move on) — which made a real regression here
+// indistinguishable from "no restricted content in the image". This gives
+// OCR failures a visible trail independent of the main agent log.
+void LogOcrDiagnostic(const std::string& message) {
+    try {
+        std::string dir = "C:\\ProgramData\\SeceoKnight\\logs";
+        fs::create_directories(dir);
+        std::ofstream ofs(dir + "\\ocr_diagnostics.log", std::ios::app);
+        if (ofs.is_open()) {
+            auto now = std::chrono::system_clock::now();
+            auto t = std::chrono::system_clock::to_time_t(now);
+            std::tm tmv{};
+            localtime_s(&tmv, &t);
+            char buf[32];
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmv);
+            ofs << buf << " - " << message << "\n";
+        }
+    } catch (...) {
+        // Diagnostics must never be able to crash or block OCR itself.
+    }
+}
+
+// Resolves a Tesseract/Poppler tool name to a full, unambiguous .exe path
+// when a known install location exists, instead of handing CreateProcess a
+// bare command name to resolve against PATH on its own. In principle
+// CreateProcess's PATH search matches cmd.exe's, but this removes that
+// dependency entirely for the by-far-most-common install path (this
+// project's own install-agent.ps1, which installs both tools via
+// Chocolatey). Falls back to the bare name (old behavior, PATH lookup) if
+// no known location is found, so manual/non-choco installs still work.
+std::string ResolveOcrToolPath(const std::string& toolName) {
+    // Chocolatey shims land here regardless of the underlying package's
+    // version-specific folder layout, and this directory is what
+    // Chocolatey itself adds to the machine PATH.
+    std::string chocoShim = "C:\\ProgramData\\chocolatey\\bin\\" + toolName + ".exe";
+    if (fs::exists(chocoShim)) return chocoShim;
+
+    if (toolName == "tesseract") {
+        std::string tessPath = "C:\\Program Files\\Tesseract-OCR\\tesseract.exe";
+        if (fs::exists(tessPath)) return tessPath;
+    }
+
+    return toolName; // Fall back to PATH lookup via CreateProcess.
+}
+
 // Runs `tesseract <imagePath> <outputBase> --psm 6 -l eng` on an image
 // file already on disk and returns the recognized text, or "" if
 // tesseract.exe isn't on PATH, the file isn't readable, or OCR finds
@@ -420,9 +469,14 @@ std::string RunTesseractOnFile(const std::string& imagePath) {
         // No trailing "2>nul" — RunHiddenCommand() invokes tesseract.exe
         // directly (no cmd.exe shell), so stderr is redirected via a real
         // NUL handle in STARTUPINFO instead of shell redirection syntax.
-        std::string tessCmd = "tesseract \"" + imagePath + "\" \"" + outBase +
+        std::string tesseractExe = ResolveOcrToolPath("tesseract");
+        std::string tessCmd = "\"" + tesseractExe + "\" \"" + imagePath + "\" \"" + outBase +
                                "\" --psm 6 -l eng";
         int tessResult = RunHiddenCommand(tessCmd);
+        if (tessResult != 0) {
+            LogOcrDiagnostic("Tesseract failed for '" + imagePath + "': RunHiddenCommand returned " +
+                              std::to_string(tessResult) + " (resolved path: " + tesseractExe + ")");
+        }
 
         std::string ocrText;
         std::string ocrFile = outBase + ".txt";
@@ -435,9 +489,13 @@ std::string RunTesseractOnFile(const std::string& imagePath) {
                 ifs.close();
             }
         }
+        if (tessResult == 0 && ocrText.empty()) {
+            LogOcrDiagnostic("Tesseract ran successfully but produced no text for '" + imagePath + "'");
+        }
         DeleteFileA(ocrFile.c_str());
         return ocrText;
     } catch (...) {
+        LogOcrDiagnostic("RunTesseractOnFile threw an exception for '" + imagePath + "'");
         return "";
     }
 }
@@ -484,8 +542,13 @@ std::string ExtractPdfTextLayer(const std::string& pdfPath) {
             std::to_string(GetCurrentThreadId());
         std::string outTxt = tempDir + "\\cs_pdf_text_" + uniqueTag + ".txt";
 
-        std::string cmd = "pdftotext \"" + pdfPath + "\" \"" + outTxt + "\"";
+        std::string pdftotextExe = ResolveOcrToolPath("pdftotext");
+        std::string cmd = "\"" + pdftotextExe + "\" \"" + pdfPath + "\" \"" + outTxt + "\"";
         int result = RunHiddenCommand(cmd);
+        if (result != 0) {
+            LogOcrDiagnostic("pdftotext failed for '" + pdfPath + "': RunHiddenCommand returned " +
+                              std::to_string(result) + " (resolved path: " + pdftotextExe + ")");
+        }
 
         std::string text;
         if (result == 0) {
@@ -500,6 +563,7 @@ std::string ExtractPdfTextLayer(const std::string& pdfPath) {
         DeleteFileA(outTxt.c_str());
         return text;
     } catch (...) {
+        LogOcrDiagnostic("ExtractPdfTextLayer threw an exception for '" + pdfPath + "'");
         return "";
     }
 }
@@ -519,9 +583,14 @@ std::string OcrScannedPdf(const std::string& pdfPath) {
 
         // 150 DPI is enough for Tesseract to read normal document text
         // without producing unnecessarily huge page images.
-        std::string cmd = "pdftoppm -png -r 150 -f 1 -l " + std::to_string(MAX_OCR_PAGES) +
+        std::string pdftoppmExe = ResolveOcrToolPath("pdftoppm");
+        std::string cmd = "\"" + pdftoppmExe + "\" -png -r 150 -f 1 -l " + std::to_string(MAX_OCR_PAGES) +
                            " \"" + pdfPath + "\" \"" + pageBase + "\"";
         int result = RunHiddenCommand(cmd);
+        if (result != 0) {
+            LogOcrDiagnostic("pdftoppm failed for '" + pdfPath + "': RunHiddenCommand returned " +
+                              std::to_string(result) + " (resolved path: " + pdftoppmExe + ")");
+        }
 
         std::string combinedText;
         if (result == 0) {
@@ -546,6 +615,7 @@ std::string OcrScannedPdf(const std::string& pdfPath) {
         }
         return combinedText;
     } catch (...) {
+        LogOcrDiagnostic("OcrScannedPdf threw an exception for '" + pdfPath + "'");
         return "";
     }
 }
@@ -880,15 +950,34 @@ std::string TryOcrClipboardImage() {
             // Check if custom log directory is specified in environment
             const char* envLogDir = std::getenv("SECEOKNIGHT_LOG_DIR");
             std::string logDir = envLogDir ? envLogDir : "";
-            
-            if (!logDir.empty()) {
-                // Use custom log directory
-                logFilePath = logDir + "\\" + filename;
-            } else {
-                // Default to current directory
-                logFilePath = filename;
+
+            if (logDir.empty()) {
+                // Default to C:\ProgramData\SeceoKnight\logs, NOT the
+                // current directory. The agent runs as a normal, non-admin
+                // user (required for clipboard/screen hooks), and the
+                // current directory at launch is C:\Program Files\SeceoKnight
+                // (the scheduled task's -WorkingDirectory) — a UAC-protected
+                // folder a standard user can't write into. Opening the log
+                // there silently failed every time (OpenLogFile()'s warning
+                // goes to stderr, which no one sees in background mode), so
+                // the log file only ever reflected a one-off run that had
+                // write access (e.g. an elevated manual test), never the
+                // real long-running background agent. ProgramData is the
+                // same writable location already proven to work for the
+                // quarantine folder.
+                logDir = "C:\\ProgramData\\SeceoKnight\\logs";
             }
-            
+
+            try {
+                fs::create_directories(logDir);
+            } catch (...) {
+                // Fall through — OpenLogFile() below will surface the
+                // failure via its own warning if the directory truly
+                // can't be created/used.
+            }
+
+            logFilePath = logDir + "\\" + filename;
+
             OpenLogFile();
             lastRotationCheck = std::chrono::system_clock::now();
             

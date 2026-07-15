@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🪵 Windows Agent — Log File Silently Stopped Updating + OCR Failures Were Invisible (July 15, 2026)
+
+### Summary
+
+After the quarantine fix above shipped, real-world retesting of the Study Report screenshot showed a new symptom: only the generic "Screen capture" event fired — the restricted-content detection that used to fire on the exact same test no longer did. Investigation was blocked by a second issue found along the way: the agent's log file hadn't been written to in 9 days, despite the agent process visibly running.
+
+### Root cause (two separate bugs)
+
+1. **Log file silently stopped writing.** `Logger`'s constructor defaults to a *relative* filename (`seceoknight_agent.log`) when `SECEOKNIGHT_LOG_DIR` isn't set — which it never was, since `install-agent.ps1` writes a `log_path` key into `agent_config.json` that the agent never actually reads. The relative path resolves against the process's current directory, which for the scheduled task is `C:\Program Files\SeceoKnight` — a UAC-protected folder the agent's normal, non-admin user (required for clipboard/screen hooks) can't write into. `OpenLogFile()`'s failure warning goes to `stderr`, which nobody sees in background mode, so this failed completely silently on every run. The only log content that ever existed was from a one-off run that happened to have write access.
+2. **OCR failures were completely silent.** `RunTesseractOnFile()`, `ExtractPdfTextLayer()`, and `OcrScannedPdf()` (the free functions that shell out to `tesseract`/`pdftotext`/`pdftoppm` since the `RunHiddenCommand()` rewrite) return `""` on *any* failure — process launch failure, non-zero exit, or empty output — with zero logging anywhere. Combined with bug #1, there was no way to tell whether the screenshot regression was actually an OCR failure or a genuine "no restricted content found" result.
+
+### Fixed
+
+- `Logger`'s default (no `SECEOKNIGHT_LOG_DIR` set) now points at `C:\ProgramData\SeceoKnight\logs` — the same non-admin-writable location already proven to work for the quarantine folder — instead of a cwd-relative path, and creates the directory if missing.
+- Added `ResolveOcrToolPath()`: prefers the Chocolatey shim (`C:\ProgramData\chocolatey\bin\<tool>.exe`, stable across package versions) or Tesseract's known install path, over handing `CreateProcess` a bare command name to resolve against PATH on its own. Falls back to the old bare-name behavior if neither is found.
+- Added `LogOcrDiagnostic()`, writing timestamped one-liners to `C:\ProgramData\SeceoKnight\logs\ocr_diagnostics.log` whenever `RunHiddenCommand()` fails to launch/returns non-zero, or OCR produces no text, for all three OCR call sites. This is independent of the main `Logger` (a `DLPAgent` member the free OCR functions can't reach) and now gives real visibility into OCR failures in background mode, which previously had none.
+- `install-agent.ps1`'s post-install output now points at the correct log location and lists the new OCR diagnostics file.
+
+### Verification
+
+Not compiled locally (no Windows toolchain in this sandbox). Verified structurally — brace-balance check across the whole file gives the same pre-existing offset (-5) before and after these edits. Real compiler verification is the next `build-windows-agent.yml` run. Next real-world test: reinstall, repeat the Study Report screenshot, and check both `C:\ProgramData\SeceoKnight\logs\seceoknight_agent.log` (should now update in real time) and `ocr_diagnostics.log` (should be empty if OCR succeeds, or show exactly why it didn't if not).
+
+---
+
 ## 🔒 Windows Agent — Quarantine Silently Failed for Non-Admin User (July 15, 2026)
 
 ### Summary
