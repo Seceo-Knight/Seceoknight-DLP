@@ -449,6 +449,23 @@ std::string ResolveOcrToolPath(const std::string& toolName) {
     return toolName; // Fall back to PATH lookup via CreateProcess.
 }
 
+// Tesseract's own "find my tessdata directory" auto-detection (relative to
+// argv[0], or a compiled-in fallback, depending on how/where it was built)
+// is exactly the kind of thing that behaves differently depending on how a
+// process is launched — and real-world testing confirmed every single
+// tesseract invocation (clipboard AND file-write OCR) failing with exit
+// code 1, tesseract's classic "can't find eng.traineddata" error, with no
+// TESSDATA_PREFIX set anywhere in this project to fall back on. Passing
+// --tessdata-dir explicitly removes that ambiguity entirely. Returns ""
+// (omit the flag) if the known Chocolatey install location isn't present,
+// so a differently-configured install still falls back to Tesseract's own
+// detection rather than being pointed at a directory that doesn't exist.
+std::string ResolveTessdataDir() {
+    std::string dir = "C:\\Program Files\\Tesseract-OCR\\tessdata";
+    if (fs::exists(dir)) return dir;
+    return "";
+}
+
 // Runs `tesseract <imagePath> <outputBase> --psm 6 -l eng` on an image
 // file already on disk and returns the recognized text, or "" if
 // tesseract.exe isn't on PATH, the file isn't readable, or OCR finds
@@ -470,12 +487,17 @@ std::string RunTesseractOnFile(const std::string& imagePath) {
         // directly (no cmd.exe shell), so stderr is redirected via a real
         // NUL handle in STARTUPINFO instead of shell redirection syntax.
         std::string tesseractExe = ResolveOcrToolPath("tesseract");
+        std::string tessdataDir = ResolveTessdataDir();
         std::string tessCmd = "\"" + tesseractExe + "\" \"" + imagePath + "\" \"" + outBase +
                                "\" --psm 6 -l eng";
+        if (!tessdataDir.empty()) {
+            tessCmd += " --tessdata-dir \"" + tessdataDir + "\"";
+        }
         int tessResult = RunHiddenCommand(tessCmd);
         if (tessResult != 0) {
             LogOcrDiagnostic("Tesseract failed for '" + imagePath + "': RunHiddenCommand returned " +
-                              std::to_string(tessResult) + " (resolved path: " + tesseractExe + ")");
+                              std::to_string(tessResult) + " (resolved path: " + tesseractExe +
+                              ", tessdata-dir: " + (tessdataDir.empty() ? "(not found, omitted)" : tessdataDir) + ")");
         }
 
         std::string ocrText;
