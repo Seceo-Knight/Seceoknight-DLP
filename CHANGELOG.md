@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🖼️ Clipboard Image OCR — Malformed BMP for 16/32-bpp Captures (BI_BITFIELDS) (July 16, 2026)
+
+### Summary
+
+Real-world testing after the tessdata-dir fix showed foreground-window screen-capture OCR succeeding reliably (1000+ chars extracted, correct classification, blocking engaged), while clipboard-image OCR kept failing with the exact same "RunHiddenCommand returned 1" error, tessdata-dir included. Same Tesseract binary, same tessdata, same helper function (`RunTesseractOnFile`) — only the clipboard path failed, which ruled out tessdata as the cause for this specific failure.
+
+### Root cause
+
+`TryOcrClipboardImage()` reconstructs a standalone `.bmp` file from the clipboard's `CF_DIB` data by prepending a `BITMAPFILEHEADER`. It correctly accounted for a palette on ≤8bpp images, but never accounted for `BI_BITFIELDS` compression — the format Windows commonly uses for 16/32-bpp captures (very common for clipboard screenshots from Snipping Tool, browsers, etc.), which stores 3 DWORD color-channel masks immediately after the header instead of a palette. Without that adjustment, `bfOffBits` pointed into the mask table instead of the actual pixel data, producing a structurally invalid BMP that Tesseract/leptonica couldn't parse — exiting non-zero on every single clipboard-image OCR call. Foreground-window OCR was unaffected because it always builds its own plain 24-bit `BI_RGB` bitmap with no masks at all.
+
+### Fixed
+
+`TryOcrClipboardImage()` now adds `3 * sizeof(DWORD)` to `headerSize` when `biCompression == BI_BITFIELDS`, correctly positioning `bfOffBits` at the real start of pixel data regardless of bit depth.
+
+### Verification
+
+Not compiled locally (no Windows toolchain in this sandbox). Brace-balance check unchanged (still -5 baseline). Real verification is the next `build-windows-agent.yml` run, followed by a real clipboard-image-paste test checking `ocr_diagnostics.log` stays clean.
+
+---
+
 ## 🖥️ Screen Capture — Only Checked 7 Hardcoded Patterns, Never Saw Custom Rules/Email/Phone (July 15, 2026)
 
 ### Summary

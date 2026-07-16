@@ -705,6 +705,19 @@ std::string TryOcrClipboardImage() {
                 ? pbmi->bmiHeader.biClrUsed
                 : (1u << pbmi->bmiHeader.biBitCount);
             paletteSize = colors * sizeof(RGBQUAD);
+        } else if (pbmi->bmiHeader.biCompression == BI_BITFIELDS) {
+            // BI_BITFIELDS (very common for 16/32-bpp clipboard screen
+            // captures — Snipping Tool, browsers, etc.) stores 3 DWORD
+            // color-channel masks immediately after the BITMAPINFOHEADER
+            // instead of a palette. Without accounting for that here,
+            // bfOffBits pointed into the mask table instead of the actual
+            // pixel data, producing a structurally invalid BMP file that
+            // Tesseract/leptonica couldn't parse — it exited non-zero on
+            // every single clipboard-image OCR attempt (confirmed via
+            // ocr_diagnostics.log) while foreground-window OCR, which
+            // always builds a plain BI_RGB 24-bit bitmap with no masks,
+            // worked fine using the exact same RunTesseractOnFile() call.
+            paletteSize = 3 * sizeof(DWORD);
         }
         DWORD headerSize = pbmi->bmiHeader.biSize + paletteSize;
         DWORD imageSize  = pbmi->bmiHeader.biSizeImage;
