@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📋 Screen Capture Reported Wrong "content" — Stage 2 Chrome Text Locked Out Stage 4's Real OCR Match (July 16, 2026)
+
+### Summary
+
+Screen capture blocking itself now works correctly (severity "high", classification "Restricted", action "blocked" all confirmed correct in a real test against Snipping Tool). But the raw event's `content` field — what gets forwarded to the server for full Rule-based classification — showed only `"DesktopWindowXamlSource\nSnipping Tool\n"`, the Snipping Tool app's own window chrome text, not the actual sensitive data (Study Report/email/phone) that had been captured. Consequently `detected_content`, `classification_labels`, and `classification_score` all came back empty/zero even on a correctly-blocked event.
+
+### Root cause
+
+`screenClassifier`'s Stage 2 (WM_GETTEXT window-text read) sets `outText` unconditionally whenever it finds *any* text longer than 10 characters — regardless of whether that text actually matched a sensitive pattern. For an app like Snipping Tool, Stage 2 reads its own UI chrome (window class/title text), finds nothing sensitive, and falls through to Stage 4 (OCR of the window's actual pixels — which, for Snipping Tool, shows the captured screenshot itself and is what really matched "Restricted"). But Stage 4 only overwrote `outText` when it was still *empty*, so Stage 2's irrelevant chrome text — already set — silently blocked the real OCR match from ever reaching the reported event.
+
+### Fixed
+
+- `agent.cpp`: Stage 4 now always overwrites `outText` with its OCR text once reached (removed the `if (outText.empty())` guard), since reaching Stage 4 at all means Stage 2/3 didn't already find a match — OCR of the actual window pixels is the more meaningful content in that case.
+
+### Verification
+
+Brace-balance check on `agent.cpp` unchanged from baseline (-5). Not compiled locally (no Windows toolchain in this sandbox) — real verification is the next screenshot-of-sensitive-content test, checking that the raw event's `content` field now shows the actual matched text instead of window chrome.
+
+---
+
 ## 🔍 OCR Failures Were Indistinguishable — Added Real stderr Capture (July 16, 2026)
 
 ### Summary

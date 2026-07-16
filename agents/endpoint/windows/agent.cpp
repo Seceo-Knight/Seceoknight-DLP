@@ -3370,10 +3370,18 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                              if (ocrText.length() > 10) {
                                  logger.Debug("Tesseract OCR (foreground window) extracted " +
                                               std::to_string(ocrText.length()) + " chars");
-                                 // Only use OCR text as the reported content if Stage 2
-                                 // didn't already find real window text — WM_GETTEXT is
-                                 // cleaner/more precise than OCR when both are available.
-                                 if (outText.empty()) outText = ocrText;
+                                 // Reaching Stage 4 at all means Stage 2's WM_GETTEXT read
+                                 // (if any) did NOT classify as sensitive — for apps like
+                                 // the Snipping Tool, that text is just UI chrome
+                                 // ("DesktopWindowXamlSource", "Snipping Tool") while the
+                                 // actual captured/previewed content only shows up via OCR
+                                 // of the window's pixels. Previously this only overwrote
+                                 // outText when Stage 2 found NOTHING at all, so a
+                                 // non-matching Stage 2 text silently "locked in" and the
+                                 // real OCR-detected content that drove the Restricted
+                                 // verdict never made it into the reported event. OCR text
+                                 // now always wins once we get this far.
+                                 outText = ocrText;
                                  std::string result = classifyText(ocrText, "stage4-ocr:" + windowTitle);
                                  if (result != "Public") {
                                      logger.Info("OCR detected sensitive content in foreground window: " + result);
