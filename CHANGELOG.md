@@ -8,6 +8,34 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔌 USB Block Event Claimed Success Even When Windows Never Actually Blocked the Drive (July 16, 2026)
+
+### Summary
+
+Testing USB Device Monitoring: with the policy action set to "block," inserting a pendrive produced an event reporting the device as blocked, but the drive remained fully accessible in Windows Explorer. Also, connect and disconnect events were indistinguishable in the Events list without opening each one.
+
+### Root cause
+
+1. **Block event lied about outcome.** `HandleUsbDeviceArrival()` in agent.cpp attempts three block methods in sequence (HKLM registry write to disable the USBSTOR driver, `CM_Disable_DevNode`/SetupDi device disable, and eject IOCTL on removable drives), tracking a `blockSuccess` bool. But the JSON sent to the server unconditionally set `"action": "blocked"` and a "USB device blocked by policy" description regardless of whether `blockSuccess` was true or false — so even a total failure was reported as a successful block.
+2. **The failure is expected on this deployment's architecture, not incidental.** `install-agent.ps1` deliberately registers the main agent's scheduled task with `RunLevel Limited` (not elevated) — required because clipboard/keyboard hook-based monitoring breaks if the process runs elevated. But USB blocking (`RegOpenKeyExA(HKEY_LOCAL_MACHINE, ...)`, `CM_Disable_DevNode`) requires admin/SYSTEM rights. Since the real-time monitoring process is intentionally unelevated, both block methods fail with ACCESS_DENIED every time a block is attempted live; only a separate one-shot elevated scheduled task (`SeceoKnight DLP USB Block`, SYSTEM, runs once at boot) has the needed privilege, and it isn't invoked per-policy-match. The eject IOCTL (Method 3) also typically doesn't work on standard USB flash drives even when elevated, since `IOCTL_STORAGE_EJECT_MEDIA` targets media-eject-capable devices (optical drives, some card readers), not generic mass storage.
+3. **Events list showed "usb" for every USB event.** The row badge in Events.tsx rendered the raw `event.event_type` field, which is always the literal string `"usb"` for connect, disconnect, and blocked events alike — the distinguishing `event_subtype` (`usb_connect`/`usb_disconnect`/`usb_blocked`) was never surfaced in the list view, only inside the detail modal.
+
+### Fixed
+
+- `agent.cpp`: the blocked-event JSON now reports `action`/`description`/`blocked` based on the real `blockSuccess` result, with a description that explains *why* it may have failed (privilege limitation) instead of always claiming success.
+- `Events.tsx`: the list-row badge now shows "USB Connected" / "USB Disconnected" / "USB Blocked" based on `event_subtype` for USB events, instead of the generic `"usb"` string, so connect vs. disconnect is visible without opening the event.
+
+### Known limitation (not fixed, needs a design decision)
+
+Real-time USB block enforcement cannot reliably succeed under the current unelevated agent process model. Making USB block actually work end-to-end would require either: running the whole agent elevated (breaks clipboard/keyboard hooks per the existing install-script comment), or splitting USB blocking into a separate small elevated helper process/service that the main agent signals on a block decision. This needs to be discussed before implementing, since it changes the agent's process architecture.
+
+### Verification
+
+- Brace-balance check on agent.cpp: -5 (matches established baseline, no structural regression).
+- `npm run build` (Vite) succeeded with no new errors; `dashboard/dist/` reverted to tracked state after local build.
+
+---
+
 ## 🏷️ "Detected Sensitive Data" Widget Showed Stale Labels Despite Correct Detection (July 16, 2026)
 
 ### Summary

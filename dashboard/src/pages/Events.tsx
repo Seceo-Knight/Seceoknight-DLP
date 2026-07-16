@@ -956,7 +956,14 @@ export default function Events() {
                         </span>
                       )}
                       <Badge variant={severityToVariant(event.severity)}>{event.severity}</Badge>
-                      <Badge variant="info">{event.event_type}</Badge>
+                      <Badge variant="info">
+                        {event.event_type === 'usb' && event.event_subtype
+                          ? (event.event_subtype === 'usb_connect' ? 'USB Connected'
+                            : event.event_subtype === 'usb_disconnect' ? 'USB Disconnected'
+                            : event.event_subtype === 'usb_blocked' ? 'USB Blocked'
+                            : event.event_type)
+                          : event.event_type}
+                      </Badge>
                       {event.blocked && <Badge variant="critical">blocked</Badge>}
                       {!event.blocked && (event.quarantined || event.action_taken === 'quarantined' || event.action === 'quarantined') && (
                         <Badge variant="warning">quarantined</Badge>

@@ -2351,6 +2351,14 @@ if (shouldBlock && usbBlockingActive.load()) {
     logger.Warning("============================================================");
     
     // Send blocked event
+    // CRITICAL FIX: previously this unconditionally reported action="blocked"
+    // and a "USB device blocked by policy" description even when every block
+    // method above had failed (e.g. agent runs at RunLevel Limited by design,
+    // so the HKLM registry write and CM_Disable_DevNode both fail with
+    // ACCESS_DENIED unless the agent is elevated) — meaning the dashboard
+    // claimed success while the drive stayed fully accessible in Windows.
+    // Now the reported action/description/blocked fields reflect what
+    // actually happened (blockSuccess), not just what was attempted.
     JsonBuilder json;
     json.AddString("event_id", GenerateUUID());
     json.AddString("event_type", "usb");
@@ -2358,9 +2366,13 @@ if (shouldBlock && usbBlockingActive.load()) {
     json.AddString("agent_id", config.agentId);
     json.AddString("source_type", "agent");
     json.AddString("user_email", GetUsername() + "@" + GetHostname());
-    json.AddString("description", "USB device blocked by policy: " + betterDeviceName);
+    json.AddString("description", blockSuccess
+        ? ("USB device blocked by policy: " + betterDeviceName)
+        : ("USB block FAILED (device may still be accessible — agent likely lacks admin/SYSTEM "
+           "privileges required for USB storage block on this endpoint): " + betterDeviceName));
     json.AddString("severity", "critical");
-    json.AddString("action", "blocked");
+    json.AddString("action", blockSuccess ? "blocked" : "block_failed");
+    json.AddBool("blocked", blockSuccess);
     json.AddString("device_name", betterDeviceName);
     json.AddString("device_id", deviceId);
     json.AddString("policy_id", matchedPolicyId);
@@ -2370,7 +2382,7 @@ if (shouldBlock && usbBlockingActive.load()) {
     json.AddBool("devices_disabled", devicesDisabled);
     json.AddInt("drives_ejected", ejectedCount);
     json.AddString("timestamp", GetCurrentTimestampISO());
-    
+
     SendEvent(json.Build());
     return;
 } else if (shouldBlock && !usbBlockingActive.load()) {
