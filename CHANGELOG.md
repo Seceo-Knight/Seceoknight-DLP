@@ -8,6 +8,29 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📂 Browser Upload Reported Stale Filename From a Previous, Unrelated Test (July 16, 2026)
+
+### Summary
+
+Uploading `salary_sheet.txt` via Gmail's attach dialog in Chrome produced a browser-upload event, but it reported the file as `Screenshot 2026-07-16 130118.png` — a completely different file from an earlier, unrelated file-system-monitoring test. Confirmed via `seceoknight_agent.log`: the Win32 child-window scan found nothing (expected — Chrome renders its file picker content in a separate process, invisible to `EnumChildWindows`), so the code fell back to the Shell "recently opened files" registry key (`ComDlg32\OpenSavePidlMRU\*`). That key never showed a new entry within the 1-second wait window, so the code gave up and reused whatever was still sitting in that key from the earlier test — logged explicitly as `Shell MRU fallback (same file re-selected)`.
+
+### Root cause
+
+Two compounding issues in `GetLastOpenedFileFromMRU()` / its caller:
+1. Windows Explorer maintains the Open/Save MRU **per file extension** (`.txt`, `.png`, etc.) in addition to a generic `*` subkey — the code only ever read `*`, so a selection that Explorer recorded under an extension-specific subkey would never show up as "new" no matter how long it waited.
+2. The wait window for a new MRU entry to appear was capped at 1 second, which real-world testing (a web-app upload flow, not a plain desktop file dialog) showed can be too short.
+
+### Fixed
+
+- `network_exfil_monitor.cpp`: `GetLastOpenedFileFromMRU()` now enumerates **every** subkey under `OpenSavePidlMRU` (not just `*`) and returns the entry from whichever subkey has the most recent key-level last-write time, via a new `ReadMruSubkeyLatest()` helper.
+- The post-dialog-close wait for a new MRU entry increased from 1 second (10×100ms) to 3 seconds (30×100ms).
+
+### Verification
+
+Brace-balance check on `network_exfil_monitor.cpp` unchanged from its pre-existing baseline (4). Not compiled locally (no Windows toolchain in this sandbox) — real verification is the next Gmail-attach test, confirming the event reports the actual uploaded filename instead of a stale one.
+
+---
+
 ## 🌐 Browser Upload Events Never Forwarded Content — Custom Rules Could Never Match (July 16, 2026)
 
 ### Summary

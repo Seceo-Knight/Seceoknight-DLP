@@ -1361,21 +1361,20 @@ void CALLBACK BrowserWinEventProc(
     }).detach();
 }
 
-// Reads the most recently opened file from the Windows Shell Open/Save dialog
-// MRU registry key.  Windows writes this entry for BOTH classic (GetOpenFileName)
-// and modern (IFileOpenDialog) pickers, so it works even when Chrome's dialog
-// renders its content in a separate shell process whose Edit controls are invisible
-// to EnumChildWindows.
-//
-// Returns the file path as a UTF-8 string, or empty if unavailable.
-static std::string GetLastOpenedFileFromMRU() {
+// Reads entry 0 (the most recent) from a single OpenSavePidlMRU subkey's
+// MRUListEx, and returns it alongside the subkey's own last-write time so
+// callers can compare freshness across multiple subkeys. Returns false if
+// the subkey doesn't exist or has no usable entry.
+static bool ReadMruSubkeyLatest(HKEY parent, const std::wstring& subkeyName,
+                                 std::string& outPath, FILETIME& outWriteTime) {
     HKEY hKey = nullptr;
-    LONG rc = RegOpenKeyExW(
-        HKEY_CURRENT_USER,
-        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer"
-        L"\\ComDlg32\\OpenSavePidlMRU\\*",
-        0, KEY_READ, &hKey);
-    if (rc != ERROR_SUCCESS) return {};
+    LONG rc = RegOpenKeyExW(parent, subkeyName.c_str(), 0, KEY_READ, &hKey);
+    if (rc != ERROR_SUCCESS) return false;
+
+    FILETIME ft{};
+    rc = RegQueryInfoKeyW(hKey, nullptr, nullptr, nullptr, nullptr, nullptr,
+                          nullptr, nullptr, nullptr, nullptr, nullptr, &ft);
+    if (rc != ERROR_SUCCESS) { RegCloseKey(hKey); return false; }
 
     // MRUListEx is REG_BINARY: array of DWORD indices, terminated by 0xFFFFFFFF.
     DWORD mruBuf[64] = {};
@@ -1385,7 +1384,7 @@ static std::string GetLastOpenedFileFromMRU() {
     if (rc != ERROR_SUCCESS || mruSize < sizeof(DWORD) ||
         mruBuf[0] == 0xFFFFFFFFu) {
         RegCloseKey(hKey);
-        return {};
+        return false;
     }
 
     // mruBuf[0] is the index (0-based name) of the most recent entry.
@@ -1398,14 +1397,78 @@ static std::string GetLastOpenedFileFromMRU() {
     DWORD type = 0;
     rc = RegQueryValueExW(hKey, valName, nullptr, &type, pidlBuf, &pidlSize);
     RegCloseKey(hKey);
-    if (rc != ERROR_SUCCESS || type != REG_BINARY || pidlSize < 4) return {};
+    if (rc != ERROR_SUCCESS || type != REG_BINARY || pidlSize < 4) return false;
 
     // Convert PIDL → absolute path.
     auto* pidl = reinterpret_cast<ITEMIDLIST*>(pidlBuf);
     wchar_t path[MAX_PATH] = {};
-    if (!SHGetPathFromIDListW(pidl, path) || path[0] == L'\0') return {};
+    if (!SHGetPathFromIDListW(pidl, path) || path[0] == L'\0') return false;
 
-    return WideToUtf8(path);
+    outPath = WideToUtf8(path);
+    outWriteTime = ft;
+    return true;
+}
+
+// Reads the most recently opened file from the Windows Shell Open/Save
+// dialog MRU registry keys. Windows writes this for BOTH classic
+// (GetOpenFileName) and modern (IFileOpenDialog) pickers, so it works even
+// when Chrome's dialog renders its content in a separate shell process
+// whose Edit controls are invisible to EnumChildWindows.
+//
+// IMPORTANT: Explorer does NOT only write to the generic "*" subkey — it
+// also maintains a PER-EXTENSION subkey (".txt", ".png", etc.) and, in
+// real-world testing, a file selection did not show up under "*" within
+// the previous fixed polling window at all, causing a stale filename from
+// an earlier, unrelated test to be reused. Rather than guess which single
+// subkey Explorer will pick for a given picker/filter combination, this
+// enumerates every subkey under OpenSavePidlMRU and returns the entry
+// from whichever subkey was written to MOST RECENTLY.
+//
+// Returns the file path as a UTF-8 string, or empty if unavailable.
+static std::string GetLastOpenedFileFromMRU() {
+    const wchar_t* kBasePath =
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU";
+
+    HKEY hBase = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kBasePath, 0, KEY_READ, &hBase) != ERROR_SUCCESS) {
+        return {};
+    }
+
+    std::string bestPath;
+    FILETIME bestTime{};
+    bool haveBest = false;
+
+    // "*" always exists and is the baseline candidate.
+    {
+        std::string path; FILETIME ft{};
+        if (ReadMruSubkeyLatest(hBase, L"*", path, ft)) {
+            bestPath = path; bestTime = ft; haveBest = true;
+        }
+    }
+
+    // Enumerate every per-extension subkey (".txt", ".png", ".pdf", ...)
+    // and keep whichever one has the newest key-level last-write time.
+    wchar_t subkeyName[256];
+    DWORD index = 0;
+    for (;;) {
+        DWORD nameLen = 256;
+        LONG rc = RegEnumKeyExW(hBase, index, subkeyName, &nameLen,
+                                 nullptr, nullptr, nullptr, nullptr);
+        if (rc == ERROR_NO_MORE_ITEMS) break;
+        ++index;
+        if (rc != ERROR_SUCCESS) continue;
+        if (wcscmp(subkeyName, L"*") == 0) continue; // already checked above
+
+        std::string path; FILETIME ft{};
+        if (!ReadMruSubkeyLatest(hBase, subkeyName, path, ft)) continue;
+
+        if (!haveBest || CompareFileTime(&ft, &bestTime) > 0) {
+            bestPath = path; bestTime = ft; haveBest = true;
+        }
+    }
+
+    RegCloseKey(hBase);
+    return bestPath;
 }
 
 // Polls the file dialog until the user picks a file (or closes it),
@@ -1489,8 +1552,12 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
                 // Wait for the MRU to show a DIFFERENT entry from the one that
                 // existed before the dialog opened (mruBefore).  Windows Shell
                 // writes the new entry slightly after IFileOpenDialog returns,
-                // so we must not stop on the old value.  Poll up to 1 second.
-                for (int j = 0; j < 10; ++j) {
+                // so we must not stop on the old value.  Poll up to 3 seconds —
+                // real-world testing (browser upload via a web app, e.g. Gmail
+                // attach) showed the previous 1-second window was sometimes too
+                // short, causing a stale MRU entry from an earlier, unrelated
+                // test to be reused instead of waiting for the real one.
+                for (int j = 0; j < 30; ++j) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     std::string mruNow = GetLastOpenedFileFromMRU();
                     if (!mruNow.empty() && mruNow != mruBefore) {
