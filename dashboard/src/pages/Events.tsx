@@ -936,7 +936,7 @@ export default function Events() {
                 <div className="flex items-start gap-4">
                   <div className={cn(
                     'p-2 rounded-lg border',
-                    event.blocked ? tone('red') : event.severity === 'critical' ? tone('red') : event.severity === 'high' ? tone('orange') : tone('blue'),
+                    event.blocked ? tone('red') : event.quarantined ? tone('blue') : event.severity === 'critical' ? tone('red') : event.severity === 'high' ? tone('orange') : tone('blue'),
                   )}>
                     {event.event_type === 'file' ? <FileText className="h-5 w-5" /> :
                       event.event_type === 'usb' ? <Shield className="h-5 w-5" /> :
@@ -958,6 +958,9 @@ export default function Events() {
                       <Badge variant={severityToVariant(event.severity)}>{event.severity}</Badge>
                       <Badge variant="info">{event.event_type}</Badge>
                       {event.blocked && <Badge variant="critical">blocked</Badge>}
+                      {!event.blocked && (event.quarantined || event.action_taken === 'quarantined' || event.action === 'quarantined') && (
+                        <Badge variant="warning">quarantined</Badge>
+                      )}
                       {event.classification_labels && event.classification_labels.length > 0 && (
                         <span className={cn('inline-flex items-center px-2 py-1 text-xs font-medium rounded-full border', tone('purple'))}>
                           {event.classification_labels[0]}

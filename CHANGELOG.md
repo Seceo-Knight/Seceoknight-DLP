@@ -8,6 +8,22 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🏷️ Events List Never Showed a "Quarantined" Tag (July 16, 2026)
+
+### Summary
+
+File System Monitoring is now correctly detecting content (confirmed working — a real quarantined screenshot's event showed "email: 4 found" with the actual matched values) and quarantining the file. But the Events *list* row only ever showed a "blocked" tag when `event.blocked` was true — there was no equivalent tag for `event.quarantined`, so a correctly-quarantined file system event looked identical in the list to a plain unactioned alert; you had to click into the event to see it was actually quarantined.
+
+### Fixed
+
+- `dashboard/src/pages/Events.tsx`: the event list row now also renders a "quarantined" badge when `event.quarantined` (or `action_taken`/`action` equals `"quarantined"`) is true and the event wasn't already blocked, and the row's icon tint now recognizes quarantined events too (previously only checked `blocked`).
+
+### Verification
+
+`npm run build` (Vite) succeeds; `tsc --noEmit` shows no new errors.
+
+---
+
 ## 📋 Screen Capture Reported Wrong "content" — Stage 2 Chrome Text Locked Out Stage 4's Real OCR Match (July 16, 2026)
 
 ### Summary
