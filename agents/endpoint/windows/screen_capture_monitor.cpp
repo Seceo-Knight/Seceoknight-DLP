@@ -335,17 +335,28 @@ void ScreenCaptureMonitor::ContentScanThread() {
     std::string lastText;
     auto        lastScanTime = std::chrono::steady_clock::now() - std::chrono::hours(1);
 
-    // Re-classify the same window at most every 3 seconds even if its
+    // Re-classify the same window at most every 1 second even if its
     // handle/title never changed. Caching purely on (hwnd, title) with no
     // expiry meant that typing or pasting NEW sensitive content into an
     // already-focused, already-scanned window (e.g. Notepad opened once,
     // classified "Public", then the user types a Study Report/email/phone
     // number into that same still-"Untitled - Notepad" window) reused the
     // stale verdict forever — a screenshot of that window would never be
-    // re-evaluated until the user alt-tabbed away and back. 3s keeps the
-    // "don't hammer Tesseract on a truly idle desktop" goal intact while
-    // still catching content changes within a few seconds.
-    const auto kRescanInterval = std::chrono::seconds(3);
+    // re-evaluated until the user alt-tabbed away and back.
+    //
+    // This was originally 3s, but real-world testing showed that's long
+    // enough for a "type sensitive text, immediately PrintScreen" sequence
+    // (a completely normal, fast user action) to still land inside the
+    // stale window and get allowed. 1s is safe to use aggressively because
+    // the classifier's cheap stages (window title keywords, then
+    // WM_GETTEXT read of the window's actual text — Stage 1/2 in
+    // agent.cpp's screenClassifier) cover ordinary text apps like Notepad/
+    // Word/browsers with NO Tesseract invocation at all; only windows with
+    // no readable text at all (pure images, remote desktop, etc.) fall
+    // through to the OCR stage, so tightening this doesn't meaningfully
+    // increase Tesseract load for the common case — it only affects how
+    // often we re-OCR windows that were already OCR-only.
+    const auto kRescanInterval = std::chrono::seconds(1);
 
     while (m_running) {
         HWND fg = GetForegroundWindow();
@@ -413,10 +424,11 @@ void ScreenCaptureMonitor::ContentScanThread() {
             }
         }
 
-        // ~1s cadence. Short enough that newly-opened sensitive windows
-        // are caught before most users can alt-tab + PrintScreen, long
-        // enough that Tesseract isn't thrashing CPU on idle screens.
-        for (int i = 0; i < 10 && m_running; ++i) {
+        // ~300ms cadence (was ~1s). Paired with the 1s kRescanInterval
+        // above, this means a content change on the foreground window is
+        // picked up within ~1-1.3s worst case instead of up to ~4s, while
+        // still not polling so fast it wastes CPU on an idle desktop.
+        for (int i = 0; i < 3 && m_running; ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }

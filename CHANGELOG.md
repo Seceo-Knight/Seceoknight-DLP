@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ⏱️ Screen Capture Rescan Interval Too Slow For Type-Then-Screenshot (July 16, 2026)
+
+### Summary
+
+Even after the previous stale-cache fix (below), screenshots taken immediately after typing/pasting new sensitive content into an already-open window (the exact way this feature gets tested) could still slip through as "no sensitive data" — a residual, narrower race left over from that fix.
+
+### Root cause
+
+`ContentScanThread` only re-classifies the same window once every 3 seconds, and only polls once per second. Typing sensitive text into an open window and immediately hitting PrintScreen (a completely normal, fast user action) can easily land inside that combined ~1-4 second stale window, so the screenshot gets allowed and reported as a plain "screen capture detected — no sensitive data" event with no policy match, even though the on-screen content absolutely matched.
+
+### Fixed
+
+- `screen_capture_monitor.cpp`: `kRescanInterval` reduced from 3s to 1s, and the poll loop's cadence reduced from ~1s to ~300ms. Worst-case staleness drops from ~4s to ~1.3s. Safe to tighten because the classifier's cheap stages (window title keywords, then a `WM_GETTEXT` read of the window's actual text) cover ordinary text apps — Notepad, Word, browsers — with no Tesseract OCR invocation at all; only windows with no readable text at all (pure images, remote desktop) fall through to the OCR stage, so this mostly affects how often those OCR-only windows get re-scanned, not typical text-app usage.
+
+### Verification
+
+Brace-balance check on `screen_capture_monitor.cpp`/`.h` still balances to 0. Not compiled locally (no Windows toolchain in this sandbox) — real verification is the next agent build plus a fresh type-then-immediately-screenshot test.
+
+---
+
 ## 🕵️ Screen Capture Stale-Classification Cache + File System Monitoring Had No Content Patterns At All (July 16, 2026)
 
 ### Summary
