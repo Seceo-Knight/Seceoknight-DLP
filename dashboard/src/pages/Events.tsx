@@ -678,6 +678,16 @@ export default function Events() {
   const { sorted, sortKey, direction, onSort } = useTableSort<Event>(events, 'timestamp')
   const { page, pageSize, pageRows, setPage, setPageSize } = usePagination<Event>(sorted, 20)
 
+  // USB file transfer events (event_subtype "usb_file_transfer") never set a
+  // top-level `blocked`/`quarantined` boolean — the agent only reports the
+  // outcome as an `action` string like "blocked_copy" / "quarantined_move" /
+  // "allowed". Without this, a genuinely blocked/quarantined USB transfer
+  // rendered as a plain, unmarked event in the list.
+  const usbTransferOutcome = (event: Event, prefix: 'blocked' | 'quarantined') =>
+    event.event_subtype === 'usb_file_transfer' &&
+    typeof event.action === 'string' &&
+    event.action.startsWith(prefix)
+
   const handleSearch = () => setActiveQuery(kqlQuery)
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSearch()
@@ -936,7 +946,9 @@ export default function Events() {
                 <div className="flex items-start gap-4">
                   <div className={cn(
                     'p-2 rounded-lg border',
-                    event.blocked ? tone('red') : event.quarantined ? tone('blue') : event.severity === 'critical' ? tone('red') : event.severity === 'high' ? tone('orange') : tone('blue'),
+                    (event.blocked || usbTransferOutcome(event, 'blocked')) ? tone('red')
+                      : (event.quarantined || usbTransferOutcome(event, 'quarantined')) ? tone('blue')
+                      : event.severity === 'critical' ? tone('red') : event.severity === 'high' ? tone('orange') : tone('blue'),
                   )}>
                     {event.event_type === 'file' ? <FileText className="h-5 w-5" /> :
                       event.event_type === 'usb' ? <Shield className="h-5 w-5" /> :
@@ -961,11 +973,16 @@ export default function Events() {
                           ? (event.event_subtype === 'usb_connect' ? 'USB Connected'
                             : event.event_subtype === 'usb_disconnect' ? 'USB Disconnected'
                             : event.event_subtype === 'usb_blocked' ? 'USB Blocked'
+                            : event.event_subtype === 'usb_file_transfer'
+                              ? (usbTransferOutcome(event, 'blocked') ? 'USB Transfer Blocked'
+                                : usbTransferOutcome(event, 'quarantined') ? 'USB Transfer Quarantined'
+                                : 'USB Transfer')
                             : event.event_type)
                           : event.event_type}
                       </Badge>
-                      {event.blocked && <Badge variant="critical">blocked</Badge>}
-                      {!event.blocked && (event.quarantined || event.action_taken === 'quarantined' || event.action === 'quarantined') && (
+                      {(event.blocked || usbTransferOutcome(event, 'blocked')) && <Badge variant="critical">blocked</Badge>}
+                      {!event.blocked && !usbTransferOutcome(event, 'blocked') &&
+                        (event.quarantined || event.action_taken === 'quarantined' || event.action === 'quarantined' || usbTransferOutcome(event, 'quarantined')) && (
                         <Badge variant="warning">quarantined</Badge>
                       )}
                       {event.classification_labels && event.classification_labels.length > 0 && (

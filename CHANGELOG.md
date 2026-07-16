@@ -8,6 +8,22 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📦 USB File Transfer Events Never Marked Blocked/Quarantined in the List (July 16, 2026 — pre-emptive fix ahead of testing)
+
+### Summary
+
+Found while preparing to test USB File Transfer Monitoring: `SendUSBTransferEvent()` in agent.cpp (used by `HandleUSBFileTransferBlockNoTimestamp`/`...QuarantineNoTimestamp`) only sets an `action` string (e.g. `"blocked_copy"`, `"quarantined_move"`, `"allowed"`) — it never sets the top-level `blocked`/`quarantined` booleans the way other event types do. Events.tsx's list row only checked those booleans, so a genuinely blocked or quarantined USB file transfer would render as a plain, unmarked event — the same class of display bug already found and fixed for File System Monitoring and USB Device blocking earlier this week.
+
+### Fixed
+
+`Events.tsx` now also treats a `usb_file_transfer` event as blocked/quarantined when its `action` field starts with `"blocked"`/`"quarantined"` (via a new `usbTransferOutcome()` helper), applied to the row's icon tint, the blocked/quarantined badges, and a new descriptive event-type label ("USB Transfer Blocked" / "USB Transfer Quarantined" / "USB Transfer").
+
+### Verification
+
+`npm run build` (Vite) and `npx tsc --noEmit -p .` succeeded with no new errors (pre-existing unrelated errors in other files only); `dashboard/dist/` reverted after local build.
+
+---
+
 ## 🔌 USB Block Event Claimed Success Even When Windows Never Actually Blocked the Drive (July 16, 2026)
 
 ### Summary
