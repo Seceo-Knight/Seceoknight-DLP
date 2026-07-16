@@ -333,6 +333,19 @@ void ScreenCaptureMonitor::ContentScanThread() {
     std::string lastTitle;
     std::string lastClass = "Public";
     std::string lastText;
+    auto        lastScanTime = std::chrono::steady_clock::now() - std::chrono::hours(1);
+
+    // Re-classify the same window at most every 3 seconds even if its
+    // handle/title never changed. Caching purely on (hwnd, title) with no
+    // expiry meant that typing or pasting NEW sensitive content into an
+    // already-focused, already-scanned window (e.g. Notepad opened once,
+    // classified "Public", then the user types a Study Report/email/phone
+    // number into that same still-"Untitled - Notepad" window) reused the
+    // stale verdict forever — a screenshot of that window would never be
+    // re-evaluated until the user alt-tabbed away and back. 3s keeps the
+    // "don't hammer Tesseract on a truly idle desktop" goal intact while
+    // still catching content changes within a few seconds.
+    const auto kRescanInterval = std::chrono::seconds(3);
 
     while (m_running) {
         HWND fg = GetForegroundWindow();
@@ -349,11 +362,14 @@ void ScreenCaptureMonitor::ContentScanThread() {
         }
 
         std::string title = GetActiveWindowTitle();
+        auto now = std::chrono::steady_clock::now();
 
         std::string classification;
-        if (fg == lastHwnd && title == lastTitle) {
-            // Foreground unchanged — reuse the last classification to
-            // avoid hammering Tesseract on an idle desktop.
+        bool sameWindow = (fg == lastHwnd && title == lastTitle);
+        bool cacheStillFresh = sameWindow && (now - lastScanTime) < kRescanInterval;
+        if (cacheStillFresh) {
+            // Foreground unchanged AND recently scanned — reuse the last
+            // classification to avoid hammering Tesseract on an idle desktop.
             classification = lastClass;
         } else {
             classification = "Public";
@@ -362,10 +378,11 @@ void ScreenCaptureMonitor::ContentScanThread() {
                 try { classification = m_classifier(title, "", extractedText); }
                 catch (...) { classification = "Public"; }
             }
-            lastHwnd  = fg;
-            lastTitle = title;
-            lastClass = classification;
-            lastText  = extractedText;
+            lastHwnd     = fg;
+            lastTitle    = title;
+            lastClass    = classification;
+            lastText     = extractedText;
+            lastScanTime = now;
         }
 
         {

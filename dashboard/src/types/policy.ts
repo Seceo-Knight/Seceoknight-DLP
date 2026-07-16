@@ -39,6 +39,14 @@ export interface FileSystemConfig {
     delete: boolean
     move: boolean
   }
+  // Content patterns to check file contents against (including OCR'd
+  // text from images/screenshots). Optional — leaving both empty falls
+  // back to "pure monitoring" (alert/quarantine on any matching file,
+  // regardless of content), which the agent already supports.
+  patterns?: {
+    predefined: string[]
+    custom: Array<{ regex: string, description?: string }>
+  }
   action: FileSystemAction
   quarantinePath?: string
 }

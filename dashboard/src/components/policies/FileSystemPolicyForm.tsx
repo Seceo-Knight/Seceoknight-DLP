@@ -2,7 +2,8 @@
 
 import { useState } from 'react'
 import { FileSystemConfig } from '@/types/policy'
-import { Plus, Trash2, X } from 'lucide-react'
+import { predefinedPatterns, validateRegex, testRegex } from '@/utils/policyUtils'
+import { Plus, Trash2, X, Check } from 'lucide-react'
 
 interface FileSystemPolicyFormProps {
   config: FileSystemConfig
@@ -11,9 +12,76 @@ interface FileSystemPolicyFormProps {
 
 const commonExtensions = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.pptx', '.ppt', '.txt', '.json', '.xml', '.sql', '.zip', '.rar', '.7z', '.db']
 
-export default function FileSystemPolicyForm({ config, onChange }: FileSystemPolicyFormProps) {
+export default function FileSystemPolicyForm({ config: rawConfig, onChange }: FileSystemPolicyFormProps) {
+  // Defensive: policies saved before content-pattern support existed have
+  // no "patterns" key at all — normalize so the form never crashes.
+  const config: FileSystemConfig = {
+    ...rawConfig,
+    patterns: {
+      predefined: rawConfig?.patterns?.predefined ?? [],
+      custom: rawConfig?.patterns?.custom ?? [],
+    },
+  }
+
   const [newPath, setNewPath] = useState('')
   const [newExtension, setNewExtension] = useState('')
+  const [customRegex, setCustomRegex] = useState('')
+  const [customDescription, setCustomDescription] = useState('')
+  const [testText, setTestText] = useState('')
+  const [testResult, setTestResult] = useState<boolean | null>(null)
+
+  const handlePredefinedToggle = (patternId: string) => {
+    const predefined = config.patterns!.predefined
+    const newPredefined = predefined.includes(patternId)
+      ? predefined.filter(p => p !== patternId)
+      : [...predefined, patternId]
+
+    onChange({
+      ...config,
+      patterns: { ...config.patterns!, predefined: newPredefined }
+    })
+  }
+
+  const handleAddCustomPattern = () => {
+    const validation = validateRegex(customRegex)
+    if (!validation.valid) {
+      alert(validation.error)
+      return
+    }
+
+    onChange({
+      ...config,
+      patterns: {
+        ...config.patterns!,
+        custom: [...config.patterns!.custom, { regex: customRegex, description: customDescription || undefined }]
+      }
+    })
+
+    setCustomRegex('')
+    setCustomDescription('')
+  }
+
+  const handleRemoveCustomPattern = (index: number) => {
+    onChange({
+      ...config,
+      patterns: { ...config.patterns!, custom: config.patterns!.custom.filter((_, i) => i !== index) }
+    })
+  }
+
+  const handleTestRegex = () => {
+    if (!customRegex.trim()) {
+      alert('Please enter a regex pattern to test')
+      return
+    }
+    const validation = validateRegex(customRegex)
+    if (!validation.valid) {
+      alert(validation.error)
+      return
+    }
+    setTestResult(testRegex(customRegex, testText))
+  }
+
+  const regexValidation = customRegex ? validateRegex(customRegex) : null
 
   const handleAddPath = () => {
     if (!newPath.trim()) {
@@ -214,6 +282,141 @@ export default function FileSystemPolicyForm({ config, onChange }: FileSystemPol
           >
             <Plus className="w-4 h-4" />
             Add
+          </button>
+        </div>
+      </div>
+
+      {/* Content Detection Patterns */}
+      <div>
+        <label className="block text-sm font-medium text-gray-200 mb-3">
+          Detection Patterns (Optional)
+        </label>
+        <p className="text-xs text-muted-foreground/70 mb-3">
+          Checks file contents (including OCR&apos;d text from images/screenshots) against these patterns.
+          Leave empty to alert/quarantine on any matching file regardless of content.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          {predefinedPatterns.map((pattern) => {
+            const isSelected = config.patterns!.predefined.includes(pattern.id)
+            return (
+              <button
+                key={pattern.id}
+                onClick={() => handlePredefinedToggle(pattern.id)}
+                className={`p-3 rounded-lg border-2 text-left transition-all ${
+                  isSelected
+                    ? 'border-indigo-500 bg-indigo-900/30 text-white'
+                    : 'border-gray-600 bg-gray-900/30 text-muted-foreground/70 hover:border-gray-500'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-medium text-sm">{pattern.name}</div>
+                    <div className="text-xs mt-1 opacity-70 font-mono">{pattern.example}</div>
+                  </div>
+                  {isSelected && <Check className="w-5 h-5 text-indigo-400" />}
+                </div>
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Custom Patterns */}
+        {config.patterns!.custom.length > 0 && (
+          <div className="space-y-2 mb-4">
+            {config.patterns!.custom.map((custom, index) => (
+              <div
+                key={index}
+                className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg border border-gray-700"
+              >
+                <div className="flex-1">
+                  <code className="text-sm text-indigo-300">{custom.regex}</code>
+                  {custom.description && (
+                    <p className="text-xs text-muted-foreground/70 mt-1">{custom.description}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleRemoveCustomPattern(index)}
+                  className="ml-3 p-1 text-muted-foreground/70 hover:text-red-400 transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="space-y-3 p-4 bg-gray-900/30 rounded-lg border border-gray-700">
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground/50 mb-2">
+              Custom Regex Pattern
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={customRegex}
+                onChange={(e) => setCustomRegex(e.target.value)}
+                placeholder="e.g., \\d{4}-\\d{4}-\\d{4}"
+                className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+              />
+              {regexValidation && (
+                <div className={`flex items-center px-2 ${regexValidation.valid ? 'text-green-400' : 'text-red-400'}`}>
+                  {regexValidation.valid ? <Check className="w-5 h-5" /> : <X className="w-5 h-5" />}
+                </div>
+              )}
+            </div>
+            {regexValidation && !regexValidation.valid && (
+              <p className="text-xs text-red-400 mt-1">{regexValidation.error}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground/50 mb-2">
+              Description (Optional)
+            </label>
+            <input
+              type="text"
+              value={customDescription}
+              onChange={(e) => setCustomDescription(e.target.value)}
+              placeholder="e.g., Study Report Detection"
+              className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground/50 mb-2">
+              Test Pattern
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={testText}
+                onChange={(e) => setTestText(e.target.value)}
+                placeholder="Enter sample text to test"
+                className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm"
+              />
+              <button
+                onClick={handleTestRegex}
+                disabled={!customRegex.trim() || !testText.trim()}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
+              >
+                Test
+              </button>
+            </div>
+            {testResult !== null && (
+              <p className={`text-xs mt-2 ${testResult ? 'text-green-400' : 'text-red-400'}`}>
+                {testResult ? '✓ Pattern matches!' : '✗ Pattern does not match'}
+              </p>
+            )}
+          </div>
+
+          <button
+            onClick={handleAddCustomPattern}
+            disabled={!customRegex.trim() || (regexValidation !== null && !regexValidation.valid)}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
+          >
+            <Plus className="w-4 h-4" />
+            Add Custom Pattern
           </button>
         </div>
       </div>

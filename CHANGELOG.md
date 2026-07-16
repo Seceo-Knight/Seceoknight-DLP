@@ -8,6 +8,35 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🕵️ Screen Capture Stale-Classification Cache + File System Monitoring Had No Content Patterns At All (July 16, 2026)
+
+### Summary
+
+After clipboard OCR started working correctly, screenshots and Downloads file-saves of the same Study Report/email/mobile-number content still only produced generic "normal" events with no detection. Two separate, previously-hidden bugs, one per pipeline.
+
+### Root cause 1 — screen capture cached classification with no expiry
+
+`ContentScanThread`'s background scanner (the ~1Hz loop that decides whether the current foreground window is sensitive) cached its verdict keyed on `(window handle, window title)` with **no time-based expiry**. If a window (e.g. an already-open Notepad, title unchanged) was scanned once and classified "Public" *before* the user typed or pasted new sensitive content into it, every subsequent screenshot of that same window kept reusing the stale "Public" verdict indefinitely — the classifier was never invoked again until the user switched windows (changing the cache key). This fully explained "OCR works (confirmed via logs) but the actual test screenshot still doesn't detect."
+
+### Root cause 2 — File System Monitoring policies have no content-pattern selector
+
+Unlike Clipboard Monitoring (which has a "Detection Patterns" section — predefined pattern toggles + custom regex builder), the File System Monitoring policy form only ever exposed monitored paths, file extensions, and action. There was no way to tell it *what content* to look for. With `dataTypes` always empty, `ContentClassifier::Classify()` on the agent falls through to a generic "pure monitoring" path that alerts/quarantines on any matching file regardless of content — so a Downloads screenshot always produced a bare "file accessed" event, never a specific content match, no matter how good OCR was.
+
+Separately, even a *correctly configured* custom pattern would have failed silently: `patterns.custom` is an array of **objects** (`{"regex": "...", "description": "..."}`), but the agent's `ExtractJsonArray()` only understands arrays of plain quoted strings — object arrays were silently skipped. And even a correctly-parsed custom regex had nowhere to go: `ExtractDataType()`'s dispatch only recognized ~17 built-in names (email, phone, ssn, etc.) with no fallback for an arbitrary custom pattern string.
+
+### Fixed
+
+- `screen_capture_monitor.cpp`: `ContentScanThread` now re-classifies the same window at most every 3 seconds instead of caching by identity forever, catching content typed/pasted into an already-focused window while still avoiding hammering Tesseract on a truly idle desktop.
+- `dashboard/src/types/policy.ts` + `FileSystemPolicyForm.tsx`: added the same "Detection Patterns" section Clipboard Monitoring already has (predefined pattern toggles + custom regex builder with regex validation/testing) to File System Monitoring policies.
+- `agent.cpp`: added `ExtractJsonObjectArrayField()` — a string-literal-aware parser for arrays of JSON objects — and switched `patterns.custom` parsing (both clipboard and file-system policies) to use it instead of the string-only `ExtractJsonArray()`, so custom regex patterns actually reach `rule.dataTypes` now.
+- `agent.cpp`: `ExtractDataType()` gained a fallback case for any dataType name it doesn't recognize as a built-in type — tries it as a regex directly, falling back to a plain case-insensitive substring search if it isn't valid regex syntax (so simple keyword rules like "Study Report" work even without proper regex escaping).
+
+### Verification
+
+Not compiled locally (no Windows toolchain in this sandbox). Brace-balance check on `agent.cpp` unchanged (-5 baseline); `screen_capture_monitor.cpp` still balances to 0. Dashboard: `npm run build` (Vite) succeeds; `tsc --noEmit` shows no new errors in any changed file. Real verification is the next `build-windows-agent.yml` run plus a fresh dashboard deploy — after which the File System Monitoring policy needs its new Detection Patterns actually selected/added (existing policies won't have any until edited).
+
+---
+
 ## 🖼️ Clipboard Image OCR — Malformed BMP for 16/32-bpp Captures (BI_BITFIELDS) (July 16, 2026)
 
 ### Summary

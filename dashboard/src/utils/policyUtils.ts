@@ -498,7 +498,7 @@ const getDefaultConfig = (type: PolicyType): any => {
     case 'clipboard_monitoring':
       return { patterns: { predefined: [], custom: [] }, action: 'alert' }
     case 'file_system_monitoring':
-      return { monitoredPaths: [], events: { create: false, modify: false, delete: false, move: false }, action: 'alert' }
+      return { monitoredPaths: [], events: { create: false, modify: false, delete: false, move: false }, patterns: { predefined: [], custom: [] }, action: 'alert' }
     case 'usb_device_monitoring':
       return { events: { connect: false, disconnect: false, fileTransfer: false }, action: 'alert' }
     case 'usb_file_transfer_monitoring':

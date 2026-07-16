@@ -1898,7 +1898,29 @@ static ClassificationResult Classify(const std::string& content,
             }
         }
     }
-    
+    else if (!dataType.empty()) {
+        // Unrecognized name — this is a custom pattern from a policy's
+        // patterns.custom list (e.g. a "Study Report" keyword rule),
+        // not one of the built-in named types handled above. Try it
+        // directly as a regex first; if it isn't valid regex syntax,
+        // fall back to a plain case-insensitive substring search so
+        // simple keyword/phrase rules still work.
+        try {
+            std::regex pattern(dataType, std::regex::icase);
+            std::sregex_iterator iter(content.begin(), content.end(), pattern);
+            std::sregex_iterator end;
+            for (; iter != end && results.size() < 10; ++iter) {
+                results.push_back(iter->str());
+            }
+        } catch (const std::regex_error&) {
+            std::string lowerContent = ToLower(content);
+            std::string lowerNeedle = ToLower(dataType);
+            if (!lowerNeedle.empty() && lowerContent.find(lowerNeedle) != std::string::npos) {
+                results.push_back(dataType);
+            }
+        }
+    }
+
     std::cout << "[DEBUG] ExtractDataType: Found " << results.size() << " matches for '" << mappedType << "'" << std::endl;
     
     return results;
@@ -4024,8 +4046,12 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                             
                             std::vector<std::string> predefined = ExtractJsonArray(patternsObj, "predefined");
                             rule.dataTypes.insert(rule.dataTypes.end(), predefined.begin(), predefined.end());
-                            
-                            std::vector<std::string> custom = ExtractJsonArray(patternsObj, "custom");
+
+                            // patterns.custom is an array of OBJECTS
+                            // ({"regex": "...", "description": "..."}),
+                            // not plain strings — needs the object-aware
+                            // parser, not ExtractJsonArray().
+                            std::vector<std::string> custom = ExtractJsonObjectArrayField(patternsObj, "custom", "regex");
                             rule.dataTypes.insert(rule.dataTypes.end(), custom.begin(), custom.end());
                         }
                     }
@@ -4070,7 +4096,85 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
          
          return json.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
      }
-     
+
+     // Parses an array of JSON objects — e.g. patterns.custom =
+     // [{"regex":"...","description":"..."}] — and returns the string
+     // value of fieldName from each object. ExtractJsonArray() below only
+     // understands arrays of plain quoted strings; an array of objects
+     // (each element starting with '{') was silently skipped by it, which
+     // meant custom regex patterns configured via the Clipboard/File
+     // System policy forms never actually reached rule.dataTypes at all.
+     //
+     // Uses its own string-literal-aware brace counter rather than the
+     // shared FindMatchingBracket helper, because custom regex text
+     // commonly contains literal '{'/'}' characters (e.g. \d{4}
+     // quantifiers) which would otherwise miscount object boundaries.
+     std::vector<std::string> ExtractJsonObjectArrayField(const std::string& json,
+                                                           const std::string& arrayKey,
+                                                           const std::string& fieldName) {
+         std::vector<std::string> result;
+         size_t keyPos = json.find("\"" + arrayKey + "\"");
+         if (keyPos == std::string::npos) return result;
+
+         size_t colonPos = json.find(":", keyPos);
+         if (colonPos == std::string::npos) return result;
+
+         size_t pos = colonPos + 1;
+         while (pos < json.length() && std::isspace(json[pos])) pos++;
+         if (pos >= json.length() || json[pos] != '[') return result;
+
+         size_t arrayStart = pos;
+         int depth = 0;
+         bool inStr = false;
+         bool esc = false;
+         size_t arrayEnd = std::string::npos;
+         for (size_t i = arrayStart; i < json.length(); i++) {
+             char c = json[i];
+             if (inStr) {
+                 if (esc) { esc = false; }
+                 else if (c == '\\') { esc = true; }
+                 else if (c == '"') { inStr = false; }
+                 continue;
+             }
+             if (c == '"') { inStr = true; continue; }
+             if (c == '[') depth++;
+             else if (c == ']') { depth--; if (depth == 0) { arrayEnd = i; break; } }
+         }
+         if (arrayEnd == std::string::npos) return result;
+
+         size_t i = arrayStart + 1;
+         while (i < arrayEnd) {
+             while (i < arrayEnd && (std::isspace(json[i]) || json[i] == ',')) i++;
+             if (i >= arrayEnd || json[i] != '{') break;
+
+             int objDepth = 0;
+             bool objInStr = false;
+             bool objEsc = false;
+             size_t objStart = i;
+             size_t objEnd = std::string::npos;
+             for (size_t j = objStart; j < arrayEnd; j++) {
+                 char c = json[j];
+                 if (objInStr) {
+                     if (objEsc) { objEsc = false; }
+                     else if (c == '\\') { objEsc = true; }
+                     else if (c == '"') { objInStr = false; }
+                     continue;
+                 }
+                 if (c == '"') { objInStr = true; continue; }
+                 if (c == '{') objDepth++;
+                 else if (c == '}') { objDepth--; if (objDepth == 0) { objEnd = j; break; } }
+             }
+             if (objEnd == std::string::npos) break;
+
+             std::string obj = json.substr(objStart, objEnd - objStart + 1);
+             std::string value = ExtractJsonString(obj, fieldName);
+             if (!value.empty()) result.push_back(value);
+
+             i = objEnd + 1;
+         }
+         return result;
+     }
+
      std::vector<std::string> ExtractJsonArray(const std::string& json, const std::string& key) {
         std::vector<std::string> result;
         
