@@ -119,7 +119,26 @@ jobs:
           git add agents/endpoint/windows/seceoknight_agent.exe.sha256
           if git diff --staged --quiet; then
             echo "No changes to commit"
-          else
-            git commit -m "build: update Windows agent binary [skip ci]"
-            git push
+            exit 0
           fi
+
+          git commit -m "build: update Windows agent binary [skip ci]"
+
+          # Two source-touching pushes close together each trigger their own
+          # run of this workflow. Both build in parallel; whichever commits
+          # its binary first wins, and the other's plain `git push` gets
+          # rejected (remote has moved) — a false-alarm failed run even
+          # though the "losing" run's output was redundant, not wrong.
+          # Retry with fetch + rebase so a late run integrates cleanly
+          # instead of failing outright.
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt) — fetching and rebasing before retry..."
+            git fetch origin main
+            git rebase origin/main || { echo "Rebase failed — manual intervention needed"; exit 1; }
+          done
+
+          echo "Push still failing after retries"
+          exit 1
