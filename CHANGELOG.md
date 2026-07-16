@@ -8,6 +8,22 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🌐 Browser Upload Events Never Forwarded Content — Custom Rules Could Never Match (July 16, 2026)
+
+### Summary
+
+While preparing to test Browser Upload Monitoring, found the same content-forwarding gap already fixed for screen_capture and clipboard: browser file-upload events only ever get classified against `NetworkExfilMonitor::ClassifyNetworkContent()`'s fixed local pattern list (credit card, SSN, Aadhaar, PAN, IFSC, phone, email, AWS/private keys, JWT, Indian passport). A custom database Rule like "Study Report" can never match a browser upload, no matter how the policy condition is configured, because the raw file content was never sent to the server at all — only the derived `classification_level`/`classification_labels` from the agent's own fixed pattern set.
+
+### Fixed
+
+- `network_exfil_monitor.cpp`: added a `content` field to `EventFields` and `EmitEvent()`, and wired it up in `HandleBrowserDialogFromHwnd()` so browser-upload events now forward the actual file content (capped at 5000 chars, consistent with other event types). This lets the server's `classify_event()` → `ClassificationEngine` run the full database Rule set against browser uploads too. Confirmed via `database_policy_evaluator.py` that `classification_metadata.classification_labels` (set by `classify_event()`) is read *before* `evaluate_policies()` runs in the same request, so a matching custom Rule will be visible to the policy condition in the same pass — no extra round trip needed.
+
+### Verification
+
+Brace-balance check on `network_exfil_monitor.cpp` unchanged from its pre-existing baseline (4 — not compiler-relevant, just this file's regex/literal quirks tripping up the simple bracket counter). Not compiled locally (no Windows toolchain in this sandbox).
+
+---
+
 ## 🏷️ Events List Never Showed a "Quarantined" Tag (July 16, 2026)
 
 ### Summary

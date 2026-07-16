@@ -438,6 +438,17 @@ struct EventFields {
     std::vector<std::string> labels;
     std::string reason;                   // human-readable explanation
     std::string evasion;                  // set if evasion detected
+    // Raw content read from the file, forwarded so the server's full
+    // ClassificationEngine (database Rules — including custom keyword
+    // rules like "Study Report" that this monitor's own hardcoded
+    // NxDetectAll pattern set has no idea about) gets a chance to
+    // classify it too. Without this, browser-upload events could only
+    // ever match the fixed local pattern list (credit card, SSN,
+    // Aadhaar, phone, email, key formats) — the exact same gap that was
+    // already fixed for screen_capture and clipboard events. Truncated
+    // by the call site; empty means "don't forward" (e.g. unreadable
+    // file, or the CLI-upload path which doesn't have file content).
+    std::string content;
 };
 
 std::string EscapeJson(const std::string& s) {
@@ -509,6 +520,11 @@ void EmitEvent(const EventFields& f) {
     }
     if (!f.reason.empty()) {
         j << "\"description\":\"" << EscapeJson(f.reason)               << "\",";
+    }
+    if (!f.content.empty()) {
+        // Cap at 5000 chars — matches the content-snippet size used for
+        // clipboard/screen-capture events elsewhere in the agent.
+        j << "\"content\":\"" << EscapeJson(f.content.substr(0, 5000))  << "\",";
     }
     j << "\"timestamp\":\""      << NowIso8601()                        << "\"";
     j << "}";
@@ -1564,6 +1580,11 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
     f.classificationScore = cls.score;
     f.matchedRule         = cls.matchedRule;
     f.labels              = cls.labels;
+    // Forward the actual file content so the server's full ClassificationEngine
+    // (database Rules, e.g. a custom "Study Report" keyword rule) can classify
+    // it too -- this monitor's own NxDetectAll only knows about a fixed set of
+    // PII patterns (credit card, SSN, Aadhaar, phone, email, key formats).
+    f.content             = content;
 
     // Always emit — server-side policy decides whether to alert.
     // Keeping browser events purely local (only for confidential files) means
