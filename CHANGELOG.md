@@ -8,6 +8,27 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔍 OCR Failures Were Indistinguishable — Added Real stderr Capture (July 16, 2026)
+
+### Summary
+
+`ocr_diagnostics.log` showed nearly every clipboard-image OCR call and every real screenshot `.png` file OCR call failing with "RunHiddenCommand returned 1", *despite* `--tessdata-dir` resolving correctly to an existing directory — while a self-constructed 24bpp BMP (the foreground-window screen-capture path) OCR'd successfully. That pattern (custom-built simple BMP works, clipboard-reconstructed BMP and real screenshot PNGs both fail) points at an image-format-specific decode failure, not a tessdata problem — but `RunHiddenCommand()` redirects Tesseract's stderr to `NUL`, so every possible cause (missing tessdata, corrupt image, unsupported format, wrong arguments) produced the exact same generic "returned 1" with no way to tell them apart.
+
+### Fixed
+
+- `agent.cpp`: added `RunHiddenCommandCaptureStderr()` — identical to `RunHiddenCommand()` except stderr is redirected to a real temp file and read back instead of discarded to `NUL`.
+- `RunTesseractOnFile()` now uses this variant and logs Tesseract's actual stderr text into `ocr_diagnostics.log` on any non-zero exit, instead of just the exit code.
+
+### Next step
+
+This is a diagnostics-only change — it does not fix the underlying OCR failure by itself. Once this build is deployed, the next failed OCR attempt will log Tesseract's real error message, which will show the actual cause (e.g. an unsupported image format, a missing decode library in the Tesseract install, a bad file path) instead of a generic exit code.
+
+### Verification
+
+Brace-balance check on `agent.cpp` unchanged from baseline (-5). Not compiled locally (no Windows toolchain in this sandbox).
+
+---
+
 ## ⏱️ Screen Capture Rescan Interval Too Slow For Type-Then-Screenshot (July 16, 2026)
 
 ### Summary

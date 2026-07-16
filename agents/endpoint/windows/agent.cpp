@@ -400,6 +400,74 @@ int RunHiddenCommand(const std::string& command) {
     return static_cast<int>(exitCode);
 }
 
+// Same as RunHiddenCommand(), except stderr is redirected to a real temp
+// file instead of NUL and read back into capturedStderr afterwards.
+// RunHiddenCommand() alone gives every OCR failure the exact same
+// "returned 1" with no way to tell "tessdata missing" apart from "this
+// image format isn't supported" apart from "file not found" — this
+// exists purely to break that ambiguity for diagnostics. Never throws;
+// capturedStderr is left empty on any internal failure.
+int RunHiddenCommandCaptureStderr(const std::string& command, std::string& capturedStderr) {
+    capturedStderr.clear();
+
+    std::string tempDir = std::string(getenv("TEMP") ? getenv("TEMP") : "C:\\Windows\\Temp");
+    std::string errPath = tempDir + "\\cs_stderr_" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".txt";
+
+    std::vector<char> cmdBuf(command.begin(), command.end());
+    cmdBuf.push_back('\0');
+
+    SECURITY_ATTRIBUTES sa = {};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE hNul = CreateFileA("NUL", GENERIC_READ | GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              &sa, OPEN_EXISTING, 0, nullptr);
+    HANDLE hErr = CreateFileA(errPath.c_str(), GENERIC_WRITE,
+                              FILE_SHARE_READ, &sa, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_TEMPORARY, nullptr);
+
+    STARTUPINFOA si = {};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    si.wShowWindow = SW_HIDE;
+    si.hStdInput  = hNul;
+    si.hStdOutput = hNul;
+    si.hStdError  = (hErr != INVALID_HANDLE_VALUE) ? hErr : hNul;
+    PROCESS_INFORMATION pi = {};
+
+    BOOL ok = CreateProcessA(nullptr, cmdBuf.data(), nullptr, nullptr,
+                              TRUE, CREATE_NO_WINDOW,
+                              nullptr, nullptr, &si, &pi);
+
+    if (hNul != INVALID_HANDLE_VALUE) CloseHandle(hNul);
+    if (hErr != INVALID_HANDLE_VALUE) CloseHandle(hErr);
+
+    if (!ok) {
+        DeleteFileA(errPath.c_str());
+        return -1;
+    }
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD exitCode = 0;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    try {
+        std::ifstream ifs(errPath, std::ios::binary);
+        if (ifs.is_open()) {
+            std::stringstream ss;
+            ss << ifs.rdbuf();
+            capturedStderr = ss.str();
+        }
+    } catch (...) {}
+    DeleteFileA(errPath.c_str());
+
+    return static_cast<int>(exitCode);
+}
+
 // Appends a one-line, timestamped entry to a small dedicated OCR
 // diagnostics file under C:\ProgramData\SeceoKnight\logs. RunTesseractOnFile
 // / ExtractPdfTextLayer / OcrScannedPdf are free functions with no access to
@@ -483,9 +551,18 @@ std::string RunTesseractOnFile(const std::string& imagePath) {
             std::to_string(GetCurrentThreadId());
         std::string outBase = tempDir + "\\cs_ocr_" + uniqueTag;
 
-        // No trailing "2>nul" — RunHiddenCommand() invokes tesseract.exe
-        // directly (no cmd.exe shell), so stderr is redirected via a real
-        // NUL handle in STARTUPINFO instead of shell redirection syntax.
+        // Captures stderr instead of silently discarding it to NUL — every
+        // OCR failure previously looked identical ("returned 1") whether
+        // the cause was missing tessdata, an unreadable/corrupt image, an
+        // image format leptonica can't decode (e.g. a Tesseract install
+        // missing PNG support), or something else entirely. Real-world
+        // testing showed both clipboard-image OCR and plain screenshot
+        // .png files failing consistently even with --tessdata-dir
+        // correctly resolved, while a self-constructed 24bpp BMP
+        // succeeded — pointing at an image-format-specific decode failure
+        // rather than a tessdata problem, but the exit code alone can't
+        // distinguish that from a dozen other causes. Logging the actual
+        // stderr text removes the guesswork.
         std::string tesseractExe = ResolveOcrToolPath("tesseract");
         std::string tessdataDir = ResolveTessdataDir();
         std::string tessCmd = "\"" + tesseractExe + "\" \"" + imagePath + "\" \"" + outBase +
@@ -493,11 +570,17 @@ std::string RunTesseractOnFile(const std::string& imagePath) {
         if (!tessdataDir.empty()) {
             tessCmd += " --tessdata-dir \"" + tessdataDir + "\"";
         }
-        int tessResult = RunHiddenCommand(tessCmd);
+        std::string tessStderr;
+        int tessResult = RunHiddenCommandCaptureStderr(tessCmd, tessStderr);
         if (tessResult != 0) {
+            std::string trimmedErr = tessStderr;
+            while (!trimmedErr.empty() && std::isspace(static_cast<unsigned char>(trimmedErr.back()))) {
+                trimmedErr.pop_back();
+            }
             LogOcrDiagnostic("Tesseract failed for '" + imagePath + "': RunHiddenCommand returned " +
                               std::to_string(tessResult) + " (resolved path: " + tesseractExe +
-                              ", tessdata-dir: " + (tessdataDir.empty() ? "(not found, omitted)" : tessdataDir) + ")");
+                              ", tessdata-dir: " + (tessdataDir.empty() ? "(not found, omitted)" : tessdataDir) +
+                              ", stderr: " + (trimmedErr.empty() ? "(empty)" : trimmedErr) + ")");
         }
 
         std::string ocrText;
