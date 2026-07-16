@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🗄️ USB File Transfer Quarantine Silently Failed for Cross-Volume Moves (July 16, 2026)
+
+### Summary
+
+Testing USB File Transfer Monitoring with action set to "quarantine": the resulting event correctly showed a quarantine outcome, but the file never actually appeared in the configured quarantine directory (`C:\ProgramData\SeceoKnight\quarantine`) on the endpoint.
+
+### Root cause
+
+`HandleUSBFileTransferQuarantineNoTimestamp()` used `fs::rename()` to move the file from the USB drive straight into the quarantine folder. `fs::rename()` on this MinGW build maps to `MoveFileExW()` without the `MOVEFILE_COPY_ALLOWED` flag, which **fails whenever source and destination are on different volumes** (e.g. USB drive `E:\` → local `C:\` quarantine folder) — exactly the case for every USB quarantine action, and especially for classification-only policies (no `monitoredPaths` configured), where the "source" and "USB" paths are literally the same file on the same drive. The 2-minute auto-restore thread had the identical bug in reverse (`C:\` quarantine → back to the USB drive).
+
+### Fixed
+
+Replaced `fs::rename()` with `fs::copy_file()` + `fs::remove()` in both the quarantine action and its 2-minute restore thread — this works reliably across volumes, and matches the pattern the BLOCK handler's MOVE case already used for the same reason. Also added an explicit log line printing the full resolved quarantine destination path, so a future mismatch between configured and actual path is immediately visible in the agent log instead of requiring code inspection.
+
+### Verification
+
+Brace-balance check on agent.cpp: -5 (matches established baseline). Same fix applied to the corresponding (but currently unreachable/dead-code) duplicate handler for consistency, at zero behavior risk.
+
+---
+
 ## 📦 USB File Transfer Events Never Marked Blocked/Quarantined in the List (July 16, 2026 — pre-emptive fix ahead of testing)
 
 ### Summary

@@ -2835,9 +2835,15 @@ void HandleUSBFileTransferQuarantine(const std::string& fileName, const std::str
                 }
                 
                 if (fs::exists(quarantineFile)) {
-                    fs::rename(quarantineFile, monitoredFile);
+                    // copy+remove, not rename — rename() maps to MoveFileExW()
+                    // without MOVEFILE_COPY_ALLOWED on this build, which fails
+                    // across volumes (quarantine on C:\ back to a USB drive).
+                    // If the USB drive was removed, copy_file throws and is
+                    // caught below, leaving the file safely in quarantine.
+                    fs::copy_file(quarantineFile, monitoredFile, fs::copy_options::overwrite_existing);
+                    fs::remove(quarantineFile);
                     logger.Info("✅ USB Quarantine [" + policyName + "]: Restored to monitored directory: " + relativePath);
-                    
+
                     std::lock_guard<std::mutex> lock(usbTransferMutex);
                     quarantinedUSBFiles.erase(fileName);
                 }
@@ -8054,33 +8060,47 @@ void HandleUSBFileTransferQuarantineNoTimestamp(const std::string& fileName, con
     logger.Warning("  File: " + relativePath);
     logger.Warning("  Policy: " + policy.name);
     logger.Warning("  Severity: " + policy.severity);
-    
+    logger.Warning("  Quarantine destination: " + quarantineFile);
+
     // DO NOT SET TIMESTAMP HERE - already set in CheckUSBDriveForMonitoredFiles
-    
+
     try {
         // Ensure quarantine directory exists
         fs::create_directories(quarantinePath);
-        
+
         std::string transferType;
         if (existsInMonitored) {
             // File was COPIED
             transferType = "copy";
             logger.Warning("  Transfer Type: COPY");
-            
-            // Move from monitored to quarantine
-            fs::rename(monitoredFile, quarantineFile);
+
+            // CRITICAL FIX: fs::rename() maps to MoveFileExW() on this MinGW
+            // build without MOVEFILE_COPY_ALLOWED, which FAILS across volumes
+            // (e.g. USB drive E:\ -> local C:\ quarantine folder) with
+            // ERROR_NOT_SAME_DEVICE, throwing here silently for the common
+            // case of a classification-only policy (no monitoredPaths), where
+            // monitoredFile and usbFile are literally the same USB-drive path.
+            // copy_file + remove works reliably regardless of volume, and
+            // matches the pattern already used by the BLOCK handler's MOVE
+            // case for the same reason.
+            fs::copy_file(monitoredFile, quarantineFile, fs::copy_options::overwrite_existing);
+            fs::remove(monitoredFile);
             logger.Warning("  ✅ Moved to quarantine from monitored dir");
-            
-            // Delete from USB
-            fs::remove(usbFile);
+
+            // Delete from USB (no-op if monitoredFile == usbFile, already removed above)
+            if (fs::exists(usbFile)) {
+                fs::remove(usbFile);
+            }
             logger.Warning("  ✅ Deleted from USB");
         } else {
             // File was MOVED
             transferType = "move";
             logger.Warning("  Transfer Type: MOVE");
-            
-            // Move from USB to quarantine
-            fs::rename(usbFile, quarantineFile);
+
+            // Move from USB to quarantine (see comment above — copy+remove,
+            // not rename, for cross-volume safety)
+            fs::copy_file(usbFile, quarantineFile, fs::copy_options::overwrite_existing);
+            fs::remove(usbFile);
             logger.Warning("  ✅ Moved to quarantine from USB");
         }
         
@@ -8104,9 +8124,15 @@ void HandleUSBFileTransferQuarantineNoTimestamp(const std::string& fileName, con
                 }
                 
                 if (fs::exists(quarantineFile)) {
-                    fs::rename(quarantineFile, monitoredFile);
+                    // copy+remove, not rename — rename() maps to MoveFileExW()
+                    // without MOVEFILE_COPY_ALLOWED on this build, which fails
+                    // across volumes (quarantine on C:\ back to a USB drive).
+                    // If the USB drive was removed, copy_file throws and is
+                    // caught below, leaving the file safely in quarantine.
+                    fs::copy_file(quarantineFile, monitoredFile, fs::copy_options::overwrite_existing);
+                    fs::remove(quarantineFile);
                     logger.Info("✅ USB Quarantine [" + policyName + "]: Restored to monitored directory: " + relativePath);
-                    
+
                     std::lock_guard<std::mutex> lock(usbTransferMutex);
                     quarantinedUSBFiles.erase(fileName);
                 }
