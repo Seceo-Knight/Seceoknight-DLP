@@ -1416,16 +1416,17 @@ static bool ReadMruSubkeyLatest(HKEY parent, const std::wstring& subkeyName,
 // whose Edit controls are invisible to EnumChildWindows.
 //
 // IMPORTANT: Explorer does NOT only write to the generic "*" subkey — it
-// also maintains a PER-EXTENSION subkey (".txt", ".png", etc.) and, in
-// real-world testing, a file selection did not show up under "*" within
-// the previous fixed polling window at all, causing a stale filename from
-// an earlier, unrelated test to be reused. Rather than guess which single
-// subkey Explorer will pick for a given picker/filter combination, this
-// enumerates every subkey under OpenSavePidlMRU and returns the entry
-// from whichever subkey was written to MOST RECENTLY.
+// also maintains a PER-EXTENSION subkey (".txt", ".png", etc.). Rather than
+// guess which single subkey Explorer will pick for a given picker/filter
+// combination, this enumerates every subkey under OpenSavePidlMRU and
+// returns the entry from whichever subkey was written to MOST RECENTLY,
+// along with that subkey's own last-write time in outWriteTime (nullptr if
+// the caller doesn't need it) — callers use this timestamp to confirm an
+// entry is actually fresh rather than just "different from before" (see
+// HandleBrowserDialogFromHwnd for why that distinction matters).
 //
 // Returns the file path as a UTF-8 string, or empty if unavailable.
-static std::string GetLastOpenedFileFromMRU() {
+static std::string GetLastOpenedFileFromMRU(FILETIME* outWriteTime = nullptr) {
     const wchar_t* kBasePath =
         L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU";
 
@@ -1468,6 +1469,7 @@ static std::string GetLastOpenedFileFromMRU() {
     }
 
     RegCloseKey(hBase);
+    if (outWriteTime) *outWriteTime = bestTime;
     return bestPath;
 }
 
@@ -1549,32 +1551,50 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
             // for every selection regardless of which picker implementation is
             // used, including the modern IFileOpenDialog.
             if (captured.empty()) {
-                // Wait for the MRU to show a DIFFERENT entry from the one that
-                // existed before the dialog opened (mruBefore).  Windows Shell
-                // writes the new entry slightly after IFileOpenDialog returns,
-                // so we must not stop on the old value.  Poll up to 3 seconds —
-                // real-world testing (browser upload via a web app, e.g. Gmail
-                // attach) showed the previous 1-second window was sometimes too
-                // short, causing a stale MRU entry from an earlier, unrelated
-                // test to be reused instead of waiting for the real one.
-                for (int j = 0; j < 30; ++j) {
+                // Wait for the MRU to show an entry that was written AFTER
+                // this dialog closed — NOT just "different from mruBefore".
+                //
+                // The previous version compared against mruBefore and, on
+                // timeout, fell back to "whatever's in the MRU now". That is
+                // unsafe: a web-app-driven upload (e.g. Gmail's JS-based
+                // attach flow, confirmed via real-world testing) can take
+                // longer than any fixed poll window to actually write the
+                // MRU entry. When that happens, an EARLIER test's delayed
+                // write can land during THIS test's wait and get accepted
+                // as "different from before" — or, on timeout, "whatever's
+                // there" is still whatever the previous test eventually
+                // wrote. Either way the result is a filename that's one
+                // test behind the real one, which is exactly what was
+                // observed: every alert reported the PREVIOUS upload's
+                // file, never the current one.
+                //
+                // Fix: only accept an MRU entry whose OWN registry
+                // last-write time is strictly after dialogCloseTime. This
+                // correctly handles re-selecting the same file too (its
+                // write-time still gets refreshed), so the old "same file
+                // re-selected" fallback is no longer needed — and is
+                // removed, because it was the unconditional-trust path
+                // that produced wrong attributions.
+                FILETIME dialogCloseTime{};
+                GetSystemTimeAsFileTime(&dialogCloseTime);
+
+                for (int j = 0; j < 100; ++j) {  // up to 10 seconds
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    std::string mruNow = GetLastOpenedFileFromMRU();
-                    if (!mruNow.empty() && mruNow != mruBefore) {
-                        LogDbg("Shell MRU new entry [" + std::to_string(j * 100) +
+                    FILETIME entryTime{};
+                    std::string mruNow = GetLastOpenedFileFromMRU(&entryTime);
+                    if (!mruNow.empty() &&
+                        CompareFileTime(&entryTime, &dialogCloseTime) > 0) {
+                        LogDbg("Shell MRU fresh entry [" + std::to_string(j * 100) +
                                "ms]: " + mruNow);
                         captured = mruNow;
                         break;
                     }
                 }
-                // Edge-case: user picked the same file again (MRU won't change).
-                // After the full timeout, accept whatever is in the MRU now.
                 if (captured.empty()) {
-                    std::string mruNow = GetLastOpenedFileFromMRU();
-                    if (!mruNow.empty()) {
-                        LogDbg("Shell MRU fallback (same file re-selected): " + mruNow);
-                        captured = mruNow;
-                    }
+                    LogWarn("Shell MRU never showed an entry newer than dialog "
+                            "close within 10s — not guessing a filename "
+                            "(mruBefore was: " +
+                            (mruBefore.empty() ? "(empty)" : mruBefore) + ")");
                 }
             }
             break;

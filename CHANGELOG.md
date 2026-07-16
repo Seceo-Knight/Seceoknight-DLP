@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔁 Browser Upload Alerts Always Reported the PREVIOUS Upload, Never the Current One (July 16, 2026)
+
+### Summary
+
+After the previous MRU-subkey fix, the very next test showed a new symptom: alerts consistently reported the *previous* test's uploaded file, never the one just uploaded (upload `salary_sheet.txt` → alert shows the earlier screenshot; upload the screenshot again next → alert shows `salary_sheet.txt`). Confirmed as a genuine one-test lag, not a one-off.
+
+### Root cause
+
+The MRU-fallback logic accepted an entry as soon as it differed from the value captured *before* the dialog opened (`mruBefore`), and — critically — if nothing new showed up within the poll window, it fell back to blindly trusting "whatever's in the MRU right now". A web-app-driven upload (Gmail's JS-based attach flow, as opposed to a plain desktop file save) can take longer than any fixed poll window for Windows to actually persist the new MRU entry. When that happens, an *earlier* test's delayed write can land during the *current* test's wait — or, on timeout, "whatever's there" is still whatever the previous test eventually wrote once its own delayed write landed. Either path produces a result that's exactly one test behind, matching what was observed.
+
+### Fixed
+
+- `network_exfil_monitor.cpp`: `GetLastOpenedFileFromMRU()` now optionally returns the winning subkey's own last-write `FILETIME`. The caller captures a `dialogCloseTime` timestamp right when the dialog closes and only accepts an MRU entry whose *own* write time is strictly after that point — not merely "different from before". This also correctly handles re-selecting the same file (its write-time still gets refreshed), so the old "same file re-selected, trust whatever's there" fallback — the actual source of the wrong attributions — was removed entirely. Poll window extended to 10 seconds to give a slow web-upload flow room to actually write the entry; if nothing qualifies within that window, the event is now sent without guessing a filename rather than silently attributing the wrong one.
+
+### Verification
+
+Every changed code block was checked in isolation (fresh parser state) and balances to exactly zero; no duplicated or truncated functions (confirmed via symbol-count grep). The whole-file naive brace counter reads differently than the previous commit's baseline, but this file has 25 raw-string regex literals (e.g. `R"(\d{4})"`) that a naive quote-toggling counter cannot parse correctly regardless of any real edit — already noted as a pre-existing quirk of this specific file in an earlier entry. Not compiled locally (no Windows toolchain in this sandbox) — real verification is two back-to-back upload tests confirming each alert matches its own upload.
+
+---
+
 ## 📂 Browser Upload Reported Stale Filename From a Previous, Unrelated Test (July 16, 2026)
 
 ### Summary
