@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🏷️ "Detected Sensitive Data" Widget Showed Stale Labels Despite Correct Detection (July 16, 2026)
+
+### Summary
+
+A browser upload of a file containing an email address, a phone number/bank account reference, and "Study Report" text was tested end-to-end. The raw event confirmed everything actually worked: `classification_metadata.classification_labels` correctly listed `CONTACT, EMAIL, NETWORK, IP_ADDRESS, STUDY_REPORT`, and both the "Browser Upload" and "Sensitive Detection" policies correctly matched on `classification_labels contains STUDY_REPORT`, driving the event to critical/blocked/quarantined. But the dashboard's "Detected Sensitive Data" widget on that same event only showed "EMAIL" — this was a display bug, not a detection failure.
+
+### Root cause
+
+Two different `classification_labels` fields exist on an event: a top-level one (set once from whatever the *agent's own local* classifier detected, e.g. `["EMAIL"]`) and a nested `classification_metadata.classification_labels` one (set later by the *server's* full rule engine, e.g. `["CONTACT","EMAIL","NETWORK","IP_ADDRESS","STUDY_REPORT"]`). `_process_event_background()` in `events.py` already promoted `classification_metadata.classification_level` and `.confidence_score` to their top-level fields after the rule engine ran, but never did the same for `.classification_labels` — so the top-level field stayed frozen at the agent's narrower, original snapshot. The dashboard's "Detected Sensitive Data" widget reads the top-level field, so it never saw the full, correct result even though policy matching (which reads the nested field directly) worked correctly.
+
+### Fixed
+
+- `server/app/api/v1/events.py`: `_process_event_background()` now also promotes `classification_metadata.classification_labels` to the top-level `classification_labels` field when present, matching the existing treatment of `classification_level`/`confidence_score`.
+
+### Verification
+
+`python3 -c "import ast; ast.parse(...)"` confirms valid syntax. Dashboard's `Events.tsx` already reads `event.classification_labels` (confirmed at line 219) — no dashboard change needed, this was purely a server-side gap.
+
+---
+
 ## 🔁 Browser Upload Alerts Always Reported the PREVIOUS Upload, Never the Current One (July 16, 2026)
 
 ### Summary

@@ -358,6 +358,17 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
                     update_fields["classification_level"] = cm["classification_level"]
                 if cm.get("confidence_score") is not None:
                     update_fields["classification_score"] = cm["confidence_score"]
+                # The top-level classification_labels field is what the
+                # dashboard's "Detected Sensitive Data" widget reads. Without
+                # this, it stays frozen at whatever the agent sent at insert
+                # time (its own local, narrower pattern set) even after the
+                # server's full rule engine finds more — e.g. an event
+                # correctly matched a "STUDY_REPORT" policy condition (visible
+                # in classification_metadata.classification_labels and in
+                # matched_policies) while the widget still showed only
+                # ["EMAIL"], because this field alone was never refreshed.
+                if cm.get("classification_labels"):
+                    update_fields["classification_labels"] = cm["classification_labels"]
             if processed.get("matched_policies"):
                 update_fields["matched_policies"] = processed["matched_policies"]
             if processed.get("metadata"):
