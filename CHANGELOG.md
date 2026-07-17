@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔍 Clipboard Classification Debug Output Was Invisible in Production (July 17, 2026)
+
+### Summary
+
+After reinstalling the agent (post Snipping Tool cache-contamination fix), a copy/paste test of a Word document with "Study Report" content produced no visible reasoning in `seceoknight_agent.log` for why it was or wasn't blocked — even though the same session's log showed clipboard blocking working correctly twice (a "Study Report" match and an email match), the exact content and matched-policy detail for later paste attempts couldn't be confirmed from the log file at all.
+
+### Root cause
+
+`HandleClipboardEvent()` printed its diagnostic trail (captured content preview, loaded clipboard policies, classifier match counts) via `std::cout` only. `std::cout` has no destination when the agent runs as a background scheduled task with no attached console — the log FILE only receives whatever is explicitly sent through `logger.Debug()`/`Info()`/`Warning()`. This meant every clipboard classification decision was effectively a black box in production: we could see that an event was "allowed" or "blocked", but not what content was actually read from the clipboard or which policies/data types were loaded at that moment, making it impossible to diagnose reports like "it didn't block this specific document."
+
+### Fixed
+
+Routed all of `HandleClipboardEvent()`'s diagnostic output through `logger.Debug()` instead of `std::cout`, so it lands in `seceoknight_agent.log`: content preview + length, loaded clipboard policy names/data types, and classifier match counts. No behavior change — purely a visibility fix so the next clipboard test can be diagnosed precisely from the log instead of guessing.
+
+### Verification
+
+Brace-balance check on `agent.cpp` unchanged at -5 (matches established baseline, no structural regression).
+
+---
+
 ## 🖼️ Snipping Tool Fix Was Ineffective — the Cache Itself Was Getting Contaminated (July 17, 2026 — follow-up)
 
 ### Summary

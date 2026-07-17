@@ -4851,46 +4851,48 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
      
      void HandleClipboardEvent(const std::string& content, const std::string& windowTitle) {
         try {
-            std::cout << "\n[DEBUG] ========================================" << std::endl;
-            std::cout << "[DEBUG] HandleClipboardEvent called" << std::endl;
-            std::cout << "[DEBUG] Content length: " << content.length() << std::endl;
-            std::cout << "[DEBUG] Content: " << content.substr(0, std::min<size_t>(200, content.length())) << std::endl;
-            std::cout << "[DEBUG] ========================================\n" << std::endl;
-            
+            // NOTE: this diagnostic block used to be std::cout-only, which is
+            // invisible once the agent runs as a background service (no
+            // console attached — cout goes nowhere and nothing lands in the
+            // log file). That made it impossible to see WHAT content was
+            // actually captured or WHICH policies/data types were loaded
+            // when a paste was unexpectedly allowed. Routed through
+            // logger.Debug() so it's captured in seceoknight_agent.log too.
+            logger.Debug("HandleClipboardEvent called — content length: " +
+                         std::to_string(content.length()) + " | preview: " +
+                         content.substr(0, std::min<size_t>(200, content.length())));
+
             // Get clipboard policies
             std::vector<PolicyRule> policies;
             {
                 std::lock_guard<std::mutex> lock(policiesMutex);
                 policies = clipboardPolicies;
             }
-            
-            std::cout << "[DEBUG] Number of clipboard policies: " << policies.size() << std::endl;
-            
+
+            logger.Debug("Number of clipboard policies loaded: " + std::to_string(policies.size()));
+
             // Exit early if no clipboard policies configured
             if (policies.empty()) {
                 logger.Info("No clipboard policies configured - skipping");
                 return;
             }
-            
+
             // Log policy details
             for (const auto& policy : policies) {
-                std::cout << "[DEBUG] Policy: " << policy.name << std::endl;
-                std::cout << "[DEBUG]   Enabled: " << (policy.enabled ? "YES" : "NO") << std::endl;
-                std::cout << "[DEBUG]   Data types: ";
-                for (const auto& dt : policy.dataTypes) {
-                    std::cout << dt << " ";
-                }
-                std::cout << std::endl;
+                std::string dataTypesStr;
+                for (const auto& dt : policy.dataTypes) dataTypesStr += dt + " ";
+                logger.Debug("  Policy: " + policy.name +
+                             " | Enabled: " + (policy.enabled ? "YES" : "NO") +
+                             " | Data types: " + dataTypesStr);
             }
-            
+
             // Classify content against clipboard policies
-            std::cout << "[DEBUG] Calling ContentClassifier::Classify..." << std::endl;
             auto classification = ContentClassifier::Classify(content, policies, "clipboard");
-            
-            std::cout << "[DEBUG] Classification results:" << std::endl;
-            std::cout << "[DEBUG]   Matched policies: " << classification.matchedPolicies.size() << std::endl;
-            std::cout << "[DEBUG]   Labels: " << classification.labels.size() << std::endl;
-            std::cout << "[DEBUG]   Detected content types: " << classification.detectedContent.size() << std::endl;
+
+            logger.Debug("Classification results — matched policies: " +
+                         std::to_string(classification.matchedPolicies.size()) +
+                         " | labels: " + std::to_string(classification.labels.size()) +
+                         " | detected content types: " + std::to_string(classification.detectedContent.size()));
             
             // Check results
             if (classification.matchedPolicies.empty()) {
@@ -4987,7 +4989,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 return;
             }
             
-            std::cout << "[DEBUG] Total matches found: " << totalMatches << std::endl;
+            logger.Debug("Total matches found: " + std::to_string(totalMatches));
             
             // Extract file name from window title if possible
             std::string sourceFile = ExtractFileFromWindowTitle(windowTitle);
