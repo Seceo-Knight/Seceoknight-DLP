@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Browser Extension's `native-host/install.ps1` Was Documented But Never Actually Created (July 17, 2026)
+
+### Summary
+
+Both `README.md` (Step 5) and `agents/browser-extension/INSTALL_WINDOWS.md` instruct the reader to run `native-host\install.ps1` to register the native-messaging host — but the file was never ported from CyberSentinel in the first place, only described in the docs. A user following the guide hit `The term '.\install.ps1' is not recognized...` after building the host `.exe` successfully.
+
+### Root cause
+
+CyberSentinel's copy of this script lives one directory higher, at `agents/browser-extension/install.ps1` (not inside `native-host/`). When the browser-extension port was done earlier this session, every other file in that tree was copied and rebranded — this one was missed entirely (not moved to the wrong place; simply never copied).
+
+### Fixed
+
+- Added `agents/browser-extension/native-host/install.ps1`, ported from CyberSentinel's `agents/browser-extension/install.ps1` and rebranded (`CyberSentinel` → `SeceoKnight`, `com.cybersentineldlp.dlp` → `com.seceoknightdlp.dlp`, `csdlp_host.exe` → `skdlp_host.exe`, `C:\ProgramData\CyberSentinel` → `C:\ProgramData\SeceoKnight`). Placed inside `native-host/` (not one level up, matching CyberSentinel's own layout) since that's the path already documented in both `README.md` and `INSTALL_WINDOWS.md`.
+- Confirmed via `git check-ignore` the new `.ps1` file isn't silently excluded (learned this lesson the hard way with `.gitignore`'s blanket `*.json` rule earlier this session).
+
+### Verification
+
+No PowerShell interpreter available in this environment to execute the script directly; verified structurally by diffing against the CyberSentinel original it was copied from (same logic, only identifier strings changed) and confirming it isn't git-ignored.
+
+### Result
+
+`.\install.ps1 -ExtensionId ... -ServerUrl ... -AgentId ... -AgentKey ... -HostCommand ...` now exists and runs from `native-host\`, exactly as both docs already instructed.
+
+---
+
 ## 🔑 README Didn't Explain Where RELAY_AGENT_ID/KEY or the Extension's AgentId/Key Actually Come From (July 17, 2026)
 
 ### Summary
