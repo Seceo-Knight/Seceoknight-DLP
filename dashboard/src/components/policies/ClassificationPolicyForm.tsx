@@ -55,6 +55,17 @@ const OPERATOR_OPTIONS = [
 ]
 
 export default function ClassificationPolicyForm({ policy, onChange }: ClassificationPolicyFormProps) {
+  // Raw text the user is actively typing into an "in"-operator value box, keyed
+  // by condition index. Needed because condition.value is the FILTERED array
+  // (empty tokens stripped) — deriving the input's displayed value straight
+  // from that array on every keystroke silently ate any trailing "," or " "
+  // the user just typed (a trailing comma produces an empty last token, which
+  // filter(Boolean) removes, so the comma visually disappears and the field
+  // looks "stuck" after the first value). Keeping the literal typed text here
+  // lets the box show exactly what was typed, while condition.value still
+  // gets the clean parsed array for actual policy evaluation.
+  const [inDrafts, setInDrafts] = useState<Record<number, string>>({})
+
   const addCondition = () => {
     const newCondition: PolicyCondition = {
       field: 'classification_level',
@@ -75,6 +86,17 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
     const newRules = [...policy.conditions.rules]
     newRules[index] = { ...newRules[index], [field]: value }
 
+    // Changing the field or operator away from "in" invalidates any in-flight
+    // draft text for this row (it belonged to a different value shape).
+    if (field === 'field' || (field === 'operator' && value !== 'in')) {
+      setInDrafts(prev => {
+        if (!(index in prev)) return prev
+        const next = { ...prev }
+        delete next[index]
+        return next
+      })
+    }
+
     onChange({
       ...policy,
       conditions: {
@@ -86,6 +108,9 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
   const removeCondition = (index: number) => {
     const newRules = policy.conditions.rules.filter((_, i) => i !== index)
+    // Row indices shift after a removal, so any cached draft text would now
+    // point at the wrong row. Simplest safe fix: drop all drafts.
+    setInDrafts({})
     onChange({
       ...policy,
       conditions: {
@@ -191,10 +216,30 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                         condition.operator === 'in' ? (
                           <input
                             type="text"
-                            value={Array.isArray(condition.value) ? condition.value.join(', ') : condition.value}
+                            value={
+                              inDrafts[index] !== undefined
+                                ? inDrafts[index]
+                                : (Array.isArray(condition.value) ? condition.value.join(', ') : condition.value)
+                            }
                             onChange={(e) => {
-                              const values = e.target.value.split(',').map(v => v.trim()).filter(Boolean)
+                              const raw = e.target.value
+                              // Show exactly what was typed, including a
+                              // trailing "," or " " mid-entry — don't let the
+                              // parsed/filtered array re-render and eat it.
+                              setInDrafts(prev => ({ ...prev, [index]: raw }))
+                              const values = raw.split(',').map(v => v.trim()).filter(Boolean)
                               updateCondition(index, 'value', values)
+                            }}
+                            onBlur={() => {
+                              // Once the user leaves the field, drop the draft
+                              // so the box re-syncs to the clean saved value
+                              // (e.g. "Confidential, Restricted" not "Confidential, Restricted,").
+                              setInDrafts(prev => {
+                                if (!(index in prev)) return prev
+                                const next = { ...prev }
+                                delete next[index]
+                                return next
+                              })
                             }}
                             placeholder="value1, value2, ..."
                             className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"

@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ⌨️ "in"-Operator Value Box Ate Commas/Spaces After the First Entry (July 17, 2026)
+
+### Summary
+
+Immediately hit while actually using the previous fix: building a policy with `Classification Level in Confidential, Restricted` was impossible — typing a comma or space after the first value did nothing visible, making it look like the field only accepted one value.
+
+### Root cause
+
+`ClassificationPolicyForm.tsx`'s "in"-operator value box derived its displayed text straight from the **parsed** array on every keystroke: `onChange` split the typed text on `,`, trimmed, and `filter(Boolean)`'d out empty tokens, then the input's `value` was that array re-joined with `', '`. The instant a user typed a trailing comma (`"Confidential,"`), the split produced `["Confidential", ""]`; `filter(Boolean)` dropped the empty second element; the re-joined display snapped back to `"Confidential"` — silently erasing the comma (and, for the same reason, a trailing space) the user just typed. It wasn't broken after the *first* value specifically — it was broken after *every* separator, which made the field look stuck right after value #1.
+
+### Fixed
+
+- Added a small `inDrafts` state (per condition-row raw text) so the box now displays exactly what was typed, while `condition.value` still receives the clean parsed/filtered array underneath — the fix from the previous entry (typing `event_type`/`cloud_upload` conditions) now actually works.
+- Draft is cleared on blur (re-syncing to the clean value) and whenever a row's field/operator changes or a row is removed (stale index safety).
+
+### Verification
+
+`npx tsc --noEmit` shows no new errors (two pre-existing unused-import warnings in this same file, `useEffect`/`X`, predate this change). `npm run build` succeeds; `dist/` reverted after building.
+
+### Result
+
+Multi-value `in` conditions (e.g. `Classification Level in Confidential, Restricted`) can now actually be typed and saved, which is required to build a working block policy for the browser extension / SMTP relay.
+
+---
+
 ## 🚫 No Way to Actually Build a Blocking Policy for Cloud Uploads or Email — Dropdown Missing the Event Types (July 17, 2026)
 
 ### Summary
