@@ -8,6 +8,33 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📧 New Feature: SMTP Relay (Email DLP) — Ported from CyberSentinel (July 17, 2026)
+
+### Summary
+
+SeceoKnight had no outbound email DLP at all. Ported CyberSentinel's SMTP relay — a small standalone service that sits in the actual mail flow and blocks sensitive outbound email at the protocol level, before it ever reaches a recipient.
+
+### What it does
+
+Google Workspace's outbound gateway (or any smarthost) routes outbound mail through `smtp-relay/`. It parses the MIME message, extracts text from every attachment (pdf/docx/xlsx/pptx/csv/txt/…) using its own bundled document parsers plus the message body, and calls the same `/agents/{id}/policy/evaluate` endpoint every other channel (USB, browser upload) uses — one classifier, one policy engine, everywhere. Public mail is forwarded and logged, Internal mail is forwarded with an alert, and Confidential/Restricted mail gets a `550` rejection at the SMTP `DATA` stage — a true block: the sending MTA never receives a `250`, so the message is never delivered and the sender gets a bounce. Fails open by default (a DLP outage must not stop company mail) but both `RELAY_BLOCK_UNEXTRACTABLE` and `RELAY_BLOCK_ON_DLP_ERROR` are available for stricter, opt-in enforcement.
+
+Deliberately a separate, slim Docker image (`python:3.11-slim` + `aiosmtpd`/`aiosmtplib`/`httpx` + document parsers) rather than reusing the manager image's multi-GB ML stack.
+
+### Adaptation notes (porting from CyberSentinel)
+
+- Rebranded throughout: `CyberSentinel DLP` → `SeceoKnight DLP` in README/config/main entrypoint (the reject message, docstrings). No functional code changes were needed — the relay already calls `/agents/{id}/policy/evaluate` and `/events/` generically and already sends `inspection_skipped` for unreadable attachments, which lines up exactly with the `inspection_skipped`/`extraction_status` handling added to `evaluate_policy_realtime()` earlier today for the document-extraction fix.
+- Added a `smtp-relay` service to `docker-compose.prod.yml` (container name `seceoknight-smtp-relay`, on the existing `seceoknight` network, `depends_on: manager` with a health condition), matching CyberSentinel's service definition but using SeceoKnight's existing manager/network naming conventions instead of introducing new ones.
+
+### Verification
+
+`python3 -m py_compile` passed on all six Python files (`__init__.py`, `config.py`, `dlp_client.py`, `extract.py`, `handler.py`, `main.py`). `docker-compose.prod.yml` validated with `yaml.safe_load`. Confirmed zero remaining `CyberSentinel` references anywhere in the ported directory.
+
+### Deployment
+
+Requires Google Workspace admin access to route outbound mail through the relay (Admin console → Apps → Google Workspace → Gmail → Hosts/Routing), a public-facing host/DNS for the relay (Google's gateway must reach it over the internet), and SPF record updates for the relay/next-hop. Set `RELAY_AGENT_ID`/`RELAY_AGENT_KEY` (a registered agent's id + `X-Agent-Key`) and `RELAY_NEXT_HOP_HOST`/`_PORT` in `.env`, then `docker compose -f docker-compose.prod.yml up -d smtp-relay`. Full walkthrough in `smtp-relay/README.md`.
+
+---
+
 ## 🌐 New Feature: Browser Extension (Cloud Upload Guard) — Ported from CyberSentinel (July 17, 2026)
 
 ### Summary

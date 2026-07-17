@@ -462,6 +462,53 @@ services:
       retries: 3
     restart: unless-stopped
 
+  # Email DLP: outbound mail is routed here (Google Workspace outbound gateway
+  # / smarthost). Inspects every attachment + body via the same
+  # /agents/{id}/policy/evaluate pipeline USB/browser use, and rejects (550)
+  # any message carrying Confidential/Restricted data before it can leave.
+  # A slim, standalone image on purpose — does NOT reuse the manager image
+  # (which carries the multi-GB ML stack); only needs SMTP + document
+  # parsers + an HTTP client. Optional: only starts if you set RELAY_AGENT_KEY.
+  smtp-relay:
+    build:
+      context: ./smtp-relay
+      dockerfile: Dockerfile
+    container_name: seceoknight-smtp-relay
+    networks:
+      - seceoknight
+    environment:
+      - DLP_SERVER_URL=http://manager:55000/api/v1
+      - DLP_AGENT_ID=${RELAY_AGENT_ID:-smtp-relay}
+      - DLP_AGENT_KEY=${RELAY_AGENT_KEY:-}
+      - RELAY_LISTEN_HOST=0.0.0.0
+      - RELAY_LISTEN_PORT=10025
+      # Where clean mail goes next (e.g. smtp-relay.gmail.com:587). If unset
+      # the relay accepts but does NOT deliver — fine for testing, not production.
+      - RELAY_NEXT_HOP_HOST=${RELAY_NEXT_HOP_HOST:-}
+      - RELAY_NEXT_HOP_PORT=${RELAY_NEXT_HOP_PORT:-587}
+      - RELAY_NEXT_HOP_USER=${RELAY_NEXT_HOP_USER:-}
+      - RELAY_NEXT_HOP_PASS=${RELAY_NEXT_HOP_PASS:-}
+      - RELAY_NEXT_HOP_STARTTLS=${RELAY_NEXT_HOP_STARTTLS:-true}
+      # Opt-in hardening: reject mail whose attachments can't be read
+      # (encrypted archives, scanned-image PDFs, legacy .doc).
+      - RELAY_BLOCK_UNEXTRACTABLE=${RELAY_BLOCK_UNEXTRACTABLE:-false}
+      - RELAY_BLOCK_ON_DLP_ERROR=${RELAY_BLOCK_ON_DLP_ERROR:-false}
+    ports:
+      - "${RELAY_HOST_PORT:-10025}:10025"
+    depends_on:
+      manager:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          memory: 128M
+    restart: unless-stopped
+
 networks:
   seceoknight:
     driver: bridge
