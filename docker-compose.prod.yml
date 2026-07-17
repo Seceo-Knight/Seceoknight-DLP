@@ -473,6 +473,13 @@ services:
     build:
       context: ./smtp-relay
       dockerfile: Dockerfile
+    # Pre-built by CI (.github/workflows/build-and-push.yml) and pushed to
+    # GHCR, same as manager/dashboard above — this is what lets the
+    # curl-one-liner installer (install.sh) bring this service up too, since
+    # that installer deliberately never places source code on the server and
+    # relies entirely on `docker compose pull` fetching this image. `build:`
+    # above is kept for local/dev builds (docker compose build smtp-relay).
+    image: ghcr.io/seceo-knight/dlp-smtp-relay:latest
     container_name: seceoknight-smtp-relay
     networks:
       - seceoknight

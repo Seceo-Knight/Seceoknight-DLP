@@ -8,6 +8,27 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐳 SMTP Relay Wasn't Deployable via the One-Liner Installer (July 17, 2026)
+
+### Summary
+
+`install.sh` (the `curl -fsSL .../install.sh | sudo bash` one-liner) is built on the principle of never placing source code on the production server — it only downloads `docker-compose.prod.yml`, `.env.example`, and the nginx config, then pulls pre-built images from GHCR. The `smtp-relay` service added earlier today used `build: context: ./smtp-relay` only, with no pre-built image — so on a server deployed purely via the one-liner (no git clone), `docker compose up -d` would fail specifically on `smtp-relay` with a missing-build-context error, since that folder was never fetched. `manager` and `dashboard` were unaffected since they already had pre-built GHCR images.
+
+### Fixed
+
+- Added a `Build and push smtp-relay image` step to `.github/workflows/build-and-push.yml`, matching the existing manager/dashboard steps exactly — pushes to `ghcr.io/seceo-knight/dlp-smtp-relay:latest` (and a commit-sha tag) on every push to `main`.
+- Added `image: ghcr.io/seceo-knight/dlp-smtp-relay:latest` to the `smtp-relay` service in `docker-compose.prod.yml`, alongside the existing `build:` block (same dual pattern already used by `manager`/`dashboard` — `image:` is what `docker compose pull` fetches; `build:` remains for local/dev builds).
+
+### Verification
+
+`docker-compose.prod.yml` and `build-and-push.yml` both validated with `yaml.safe_load`.
+
+### Result
+
+`curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install.sh | sudo bash` now brings up all three services (manager, dashboard, smtp-relay) correctly on a completely fresh server with zero source code present, once this CI run completes and pushes the new image.
+
+---
+
 ## 📋 New Feature: Audit Trail Dashboard Page — Ported from CyberSentinel (July 17, 2026)
 
 ### Summary

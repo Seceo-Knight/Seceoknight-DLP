@@ -38,6 +38,7 @@ jobs:
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "manager=ghcr.io/${OWNER}/dlp-manager" >> $GITHUB_OUTPUT
           echo "dashboard=ghcr.io/${OWNER}/dlp-dashboard" >> $GITHUB_OUTPUT
+          echo "smtp_relay=ghcr.io/${OWNER}/dlp-smtp-relay" >> $GITHUB_OUTPUT
 
       - name: Build and push manager image
         uses: docker/build-push-action@v6
@@ -60,5 +61,17 @@ jobs:
           tags: |
             ${{ steps.images.outputs.dashboard }}:latest
             ${{ steps.images.outputs.dashboard }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push smtp-relay image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./smtp-relay
+          file: ./smtp-relay/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.images.outputs.smtp_relay }}:latest
+            ${{ steps.images.outputs.smtp_relay }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
