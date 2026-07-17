@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📧 SMTP Relay Docs Were Google-Only — Added Microsoft 365 / Exchange Online Routing (July 17, 2026)
+
+### Summary
+
+The ported `smtp-relay/README.md` only documented deployment for Google Workspace (Admin console → Gmail → Hosts/Routing → outbound gateway). For an "enterprise grade DLP" product this is a real gap: an org's mail platform can't be assumed, and the relay itself is plain SMTP and was always platform-agnostic — only the setup instructions were narrow.
+
+### Root cause
+
+Documentation-only gap, not a code defect. The relay (`app/main.py`, `app/handler.py`, `app/dlp_client.py`) has no Google-specific logic anywhere — it just needs to sit in the outbound mail path, however that org's platform routes mail there.
+
+### Fixed
+
+- `smtp-relay/README.md`: added a full **Microsoft 365 / Exchange Online routing** section (mirrors the Google Workspace section) — Exchange admin center → Mail flow → Connectors → smart host, scoping via a mail-flow rule to outbound-only traffic, TLS, SPF, and `RELAY_NEXT_HOP_HOST` guidance (typically `<tenant>-com.mail.protection.outlook.com` if mail loops back through Exchange Online).
+- Updated the intro and the "How it works" diagram to be platform-neutral, with links to whichever routing section applies.
+- Updated the Limitations section's last bullet to name both platforms' bypass paths (Google's outbound gateway vs. Microsoft's connector/mail-flow-rule).
+
+### Verification
+
+Read through the full file end-to-end; confirmed the two intro anchor links (`#google-workspace-routing-the-deployment-step`, `#microsoft-365--exchange-online-routing-the-deployment-step`) match GitHub's auto-generated header slugs exactly. Routing mechanics cross-checked against Microsoft Learn's connector/mail-flow documentation.
+
+### Result
+
+The same relay binary/config now has documented, equally-supported setup paths for Gmail (Google Workspace) and Outlook (Microsoft 365) orgs — no assumption about which platform a customer runs.
+
+---
+
 ## 🐳 SMTP Relay Wasn't Deployable via the One-Liner Installer (July 17, 2026)
 
 ### Summary
