@@ -175,6 +175,8 @@ models/checkpoints/
 !vite.config.js
 !server/data/*.json
 !agents/endpoint/linux/agent_config.json
+!agents/browser-extension/manifest.json
+!agents/browser-extension/native-host/com.seceoknightdlp.dlp.json
 !dashboard/.dockerignore
 !server/.dockerignore
 *.parquet

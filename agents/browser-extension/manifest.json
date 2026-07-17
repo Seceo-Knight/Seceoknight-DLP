@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "SeceoKnight DLP — Cloud Upload Guard",
+  "version": "1.0.0",
+  "description": "Prevents uploading Confidential/Restricted files from this managed endpoint to cloud apps. Managed by SeceoKnight DLP.",
+  "minimum_chrome_version": "116",
+  "permissions": ["nativeMessaging", "storage", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "ISOLATED"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/inject.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    }
+  ]
+}
