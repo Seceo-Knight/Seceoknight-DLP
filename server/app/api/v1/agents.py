@@ -969,8 +969,31 @@ async def sync_agent_policies(
 class PolicyEvaluationRequest(BaseModel):
     """Request model for real-time policy evaluation"""
     file_name: Optional[str] = Field(None, description="Name of the file being transferred (omit for clipboard)")
-    file_content: Optional[str] = Field(None, description="Content of the file to classify")
+    file_content: Optional[str] = Field(
+        None,
+        description=(
+            "Plain-text content to classify (clipboard, or OCR'd image text). "
+            "Correct only for text formats — a binary file (pdf/docx/xlsx) "
+            "decoded into this field is unreadable to the classifier and will "
+            "look Public. Send file_content_b64 instead for any real file."
+        ),
+    )
     content: Optional[str] = Field(None, description="Clipboard or generic content (alias for file_content)")
+    # Raw file bytes, base64-encoded. Preferred for any file transfer: the
+    # server decodes and extracts real text (pdf/docx/xlsx/pptx/archives/
+    # text), so binary documents are classified on their actual contents
+    # rather than their compressed/binary bytes. See document_extract.py.
+    file_content_b64: Optional[str] = Field(
+        None, description="Base64 of the raw file bytes (preferred over file_content for real files)"
+    )
+    # Set by a caller that could NOT inspect the file at all (e.g. the agent
+    # refusing to read a file over its size cap). Callers must send this
+    # instead of silently allowing: the server marks the content
+    # uninspectable so a policy decides, rather than an unread file being
+    # classified Public and let through.
+    inspection_skipped: Optional[str] = Field(
+        None, description="Why the caller could not inspect: too_large | unreadable"
+    )
     file_size: Optional[int] = Field(None, description="File size in bytes")
     event_type: str = Field("clipboard_copy", description="Event type (e.g., 'usb_file_transfer', 'clipboard_copy')")
     destination_type: Optional[str] = Field(None, description="Destination type (e.g., 'removable_drive', 'network')")
@@ -980,7 +1003,8 @@ class PolicyEvaluationRequest(BaseModel):
     user_email: Optional[str] = Field(None, description="User email for ABAC")
 
     def get_content(self) -> str:
-        """Return whichever content field is populated."""
+        """Return whichever plain-text content field is populated (fallback
+        when there's no file_content_b64 to extract from)."""
         return self.file_content or self.content or ""
 
 
@@ -1000,6 +1024,11 @@ class PolicyEvaluationResponse(BaseModel):
     policies_triggered: List[Dict[str, Any]] = Field(default_factory=list, description="Policies that matched")
     should_log: bool = Field(True, description="Whether to log this event")
     alert_severity: Optional[str] = Field(None, description="Alert severity if applicable")
+    # How the content was read. extraction_status="unreadable" means we could
+    # NOT see inside (encrypted archive, scanned image, opaque binary) — the
+    # classification below is therefore not evidence of being clean.
+    extraction_status: str = Field("readable", description="readable | unreadable | too_large")
+    extraction_kind: str = Field("text", description="pdf | docx | xlsx | pptx | archive | text | ...")
 
 
 @router.post("/{agent_id}/policy/evaluate", response_model=PolicyEvaluationResponse)
@@ -1027,10 +1056,70 @@ async def evaluate_policy_realtime(
     await verify_agent_key(http_request)
 
     try:
+        # 0. Resolve the text to classify. When the caller sends raw bytes
+        #    (file_content_b64) we extract real text from them first
+        #    (pdf/docx/xlsx/pptx/archives/text) — this is what makes binary
+        #    documents classifiable at all. Decoding their raw bytes directly
+        #    into a text field yields compressed/binary garbage that always
+        #    looks "Public" and lets sensitive documents through untouched.
+        content_to_classify = request.get_content()
+        extract_kind = "text"
+        extraction_status = "readable"
+        extraction_reason = ""
+        if request.inspection_skipped:
+            # The caller told us up front it couldn't look inside (too big to
+            # read, etc). Don't pretend: mark it uninspectable and let policy rule.
+            extraction_status = "too_large" if request.inspection_skipped == "too_large" else "unreadable"
+            extract_kind = request.inspection_skipped
+            extraction_reason = f"caller skipped inspection: {request.inspection_skipped}"
+            content_to_classify = ""
+            logger.info(
+                "Caller skipped inspection",
+                agent_id=agent_id, file_name=request.file_name,
+                reason=request.inspection_skipped, file_size=request.file_size,
+            )
+        elif request.file_content_b64:
+            import base64 as _b64
+            from app.services.document_extract import extract_text as _extract_text
+            try:
+                raw = _b64.b64decode(request.file_content_b64, validate=False)
+            except Exception as e:  # noqa: BLE001 — malformed base64 from an agent
+                raise HTTPException(400, f"file_content_b64 is not valid base64: {e}")
+            extracted = _extract_text(request.file_name or "", raw)
+            content_to_classify = extracted.text
+            extract_kind = extracted.kind
+            extraction_reason = extracted.reason
+            if not extracted.ok:
+                # Unreadable (encrypted archive / scanned image / legacy .doc /
+                # opaque binary) or simply bigger than we'll parse. Kept as two
+                # distinct states so operators can treat them differently — an
+                # encrypted archive is suspicious, a huge video usually isn't.
+                extraction_status = "too_large" if extracted.kind == "too_large" else "unreadable"
+                logger.info(
+                    "Content not extractable",
+                    agent_id=agent_id, file_name=request.file_name,
+                    kind=extracted.kind, reason=extracted.reason,
+                )
+            elif extracted.truncated:
+                # We read it, but not all of it — it outran the scan budget, or
+                # an archive hit its safety limits. The text we DID get is
+                # still classified below (it may convict the file on its own),
+                # but we must not certify the part we never saw. Reported as
+                # too_large so the same "block uninspectable content" policy
+                # path governs it — otherwise padding a file with filler until
+                # the secret falls past the budget would be a trivial bypass.
+                extraction_status = "too_large"
+                logger.info(
+                    "Content only partially inspected",
+                    agent_id=agent_id, file_name=request.file_name,
+                    kind=extracted.kind, reason=extracted.reason,
+                    scanned_chars=len(extracted.text),
+                )
+
         # 1. Classify the file content using ClassificationEngine
         classification_engine = ClassificationEngine(db)
         classification_result = await classification_engine.classify_content(
-            request.get_content(),
+            content_to_classify,
             context={
                 "event_type": request.event_type,
                 "file_name": request.file_name or "",
@@ -1069,6 +1158,13 @@ async def evaluate_policy_realtime(
             "file_name": request.file_name,
             "file_size": request.file_size,
             "agent_id": agent_id,
+            # Policy-matchable: lets an operator write a rule like
+            #   extraction_status equals unreadable -> block
+            # to catch password-protected archives / scanned images / opaque
+            # binaries, which we cannot inspect and which would otherwise
+            # look "Public" with zero matches.
+            "extraction_status": extraction_status,
+            "extraction_kind": extract_kind,
         }
 
         # 3. Evaluate classification-aware policies
@@ -1159,6 +1255,8 @@ async def evaluate_policy_realtime(
             policies_triggered=triggered_policies,
             should_log=True,
             alert_severity=alert_severity,
+            extraction_status=extraction_status,
+            extraction_kind=extract_kind,
         )
 
     except Exception as e:

@@ -8,6 +8,36 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📄 Binary Documents (PDF/DOCX/XLSX/PPTX) Were Never Actually Classified — Real DLP Bypass (July 17, 2026)
+
+### Summary
+
+A comparison against the sibling CyberSentinel DLP project surfaced a real, unpatched bypass: sensitive content inside an actual `.docx`/`.pdf`/`.xlsx`/`.pptx` file (as opposed to a screenshot or plain `.txt`) transferred via USB was never being detected, no matter what policies were configured.
+
+### Root cause
+
+Two independent bugs on two sides of the same pipeline:
+
+1. **Agent side** (`EvaluatePolicyRealtime()` in `agent.cpp`): for any non-image file, the agent read the file's raw bytes and "escaped" them character-by-character for the JSON request body, replacing every non-printable byte with a space. A `.docx`/`.xlsx`/`.pptx` file is itself a ZIP container and a `.pdf` has a binary structure — almost the entire file is non-printable bytes. The content that reached the server was effectively a wall of spaces regardless of what the document actually said.
+2. **Server side** (`evaluate_policy_realtime()` in `agents.py`): even if real bytes had arrived, there was no code anywhere on the server that parsed PDF/DOCX/XLSX/PPTX binary formats into text before classifying — `pypdf`/`python-docx`/`openpyxl`/`python-pptx` weren't even in `requirements.txt`.
+
+Both bugs individually would have let sensitive Office/PDF documents slip through as "Public" on every channel that forwards file content for real-time classification (USB transfer, and — once built — the browser upload guard and SMTP relay).
+
+### Fixed
+
+- Added a `Base64Encode()` helper to the agent (using the already-linked `wincrypt.h`/crypt32, no new dependency) and changed `EvaluatePolicyRealtime()` to send raw file bytes as `file_content_b64` instead of destructively space-escaping them. Image files still go through the agent's existing local OCR path unchanged (works today, no server-side Tesseract required).
+- Ported `document_extract.py` from CyberSentinel into `server/app/services/` — a defensive, format-aware text extractor for pdf/docx/xlsx/pptx/text/archives (zip/tar/gz/7z, with zip-bomb guards), plus OCR fallback for scanned PDFs/images when Tesseract is available server-side.
+- Wired it into `evaluate_policy_realtime()`: when the agent sends `file_content_b64`, the server now decodes and extracts real text before classification instead of relying on `file_content`. Added `pypdf`, `python-docx`, `openpyxl`, `python-pptx`, `py7zr`, `pytesseract`, `pdf2image` to `requirements.txt`, and `tesseract-ocr`/`tesseract-ocr-eng`/`poppler-utils` to the server `Dockerfile`'s runtime stage.
+- Added `extraction_status`/`extraction_kind` to both the request handling and the response, so an operator can write a policy like "extraction_status equals unreadable → block" to catch encrypted archives/scanned images that can't be inspected at all — these are surfaced as uninspectable, never silently treated as clean.
+- **Preserved the existing quarantine support** (`should_quarantine`/action precedence block > quarantine > alert > allow) that was already fixed earlier this session — this port merged CyberSentinel's extraction logic into SeceoKnight's evaluator rather than replacing it wholesale, since CyberSentinel's own version doesn't have quarantine support at all.
+- Ported the corresponding `test_document_extract_truncation.py` test file.
+
+### Verification
+
+Ran the ported test file directly (`pytest tests/test_document_extract_truncation.py`) — 7 passed. Also manually verified extraction against a real generated `.docx` (containing "Study Report: Aadhaar ...") and `.xlsx` (containing an email address) — both correctly extracted the actual text, confirming this closes exactly the gap found during testing this week where a Study Report document's content wasn't being read correctly. Brace-balance check on `agent.cpp` unchanged at -5. `agents.py` and `document_extract.py` verified with `ast.parse`.
+
+---
+
 ## 📁 USB Transfer Quarantine Fallback Directory Didn't Match the Configured Quarantine Folder (July 17, 2026)
 
 ### Summary

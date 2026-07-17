@@ -78,6 +78,23 @@ kombu==5.3.4
 # imports it; STIX pattern parsing is done with the regex in ioc_service.py.
 taxii2-client==2.3.0
 
+# Document text extraction — lets the classifier read binary documents
+# (pdf/docx/xlsx/pptx). Without these, a sensitive PDF/DOCX/XLSX decodes to
+# compressed bytes, classifies as "Public", and is allowed through on every
+# channel (USB transfer, browser upload, email). See app/services/document_extract.py.
+pypdf==4.3.1
+python-docx==1.1.2
+openpyxl==3.1.5
+python-pptx==0.6.23
+py7zr==0.21.1          # .7z archives (zip/tar/gz are stdlib)
+
+# OCR for scanned PDFs / images (no text layer) as read by document_extract.py.
+# Needs the tesseract-ocr and poppler-utils system packages (see Dockerfile).
+# Optional at runtime: if absent, extraction reports the file "unreadable"
+# (blocked by policy), never "clean".
+pytesseract==0.3.13
+pdf2image==1.17.0
+
 # Testing
 pytest==7.4.3
 pytest-asyncio==0.21.1

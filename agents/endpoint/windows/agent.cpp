@@ -93,6 +93,30 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
      return std::string(buf);
  }
  
+ // Base64-encode raw bytes using the already-linked crypt32 (wincrypt.h is
+ // already included, -lcrypt32 already linked in the CI build). Used to send
+ // whole binary files (docx/pdf/xlsx/pptx) to the server's /policy/evaluate
+ // endpoint for real extraction — see the comment at EvaluatePolicyRealtime()
+ // for why this replaced the old byte-escaping-to-spaces approach.
+ std::string Base64Encode(const std::string& data) {
+     if (data.empty()) return "";
+     DWORD outLen = 0;
+     if (!CryptBinaryToStringA(
+             reinterpret_cast<const BYTE*>(data.data()), static_cast<DWORD>(data.size()),
+             CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, nullptr, &outLen) || outLen == 0) {
+         return "";
+     }
+     std::string out(outLen, '\0');
+     if (!CryptBinaryToStringA(
+             reinterpret_cast<const BYTE*>(data.data()), static_cast<DWORD>(data.size()),
+             CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF, &out[0], &outLen)) {
+         return "";
+     }
+     // CryptBinaryToStringA includes the trailing NUL in outLen — trim it.
+     if (!out.empty() && out.back() == '\0') out.pop_back();
+     return out;
+ }
+
  std::string GetCurrentTimestampISO() {
      auto now = std::chrono::system_clock::now();
      auto now_c = std::chrono::system_clock::to_time_t(now);
@@ -7282,14 +7306,31 @@ if (shouldMonitor) {
                 return result;
             }
 
-            // Read file content — OCR raster images instead of sending raw
-            // binary bytes (which the escaping loop below would just turn
-            // into a wall of spaces anyway). Everything else keeps using
-            // the existing binary-read path unchanged.
-            std::string fileContent;
+            // Read file content. Raster images still go through the agent's
+            // own local OCR (fast path, no server-side Tesseract required)
+            // and are sent as plain file_content text, unchanged.
+            //
+            // CRITICAL FIX: everything else (.docx/.pdf/.xlsx/.pptx/text/
+            // etc.) used to be read as raw bytes and then "escaped" for JSON
+            // character-by-character — but that escaping loop replaced every
+            // non-printable byte with a space. A .docx/.xlsx/.pptx file is
+            // itself a ZIP container and a .pdf has a binary structure, so
+            // almost the entire file was non-printable — the content that
+            // reached the server was effectively a wall of spaces,
+            // regardless of what the document actually said. It always
+            // classified as "Public" and slipped through, no matter how
+            // sensitive the real text inside was.
+            //
+            // Fixed by sending the RAW bytes, base64-encoded, as
+            // file_content_b64 instead. The server now runs a real
+            // pdf/docx/xlsx/pptx text extractor (document_extract.py) over
+            // the decoded bytes before classifying, so the file's actual
+            // content — not its compressed/binary bytes — is what gets
+            // scanned.
             std::string ocrText = OcrImageFileIfApplicable(filePath);
-            if (!ocrText.empty()) {
-                fileContent = ocrText;
+            bool useOcrText = !ocrText.empty();
+            std::string fileContentB64;
+            if (useOcrText) {
                 logger.Info("OCR extracted " + std::to_string(ocrText.size()) +
                             " chars from image file for USB transfer evaluation: " + filePath);
             } else {
@@ -7300,35 +7341,27 @@ if (shouldMonitor) {
                     return result;
                 }
 
-                fileContent.assign((std::istreambuf_iterator<char>(file)),
-                                    std::istreambuf_iterator<char>());
+                std::string fileContent((std::istreambuf_iterator<char>(file)),
+                                         std::istreambuf_iterator<char>());
                 file.close();
-            }
 
-            // Escape the file content for JSON (basic escaping)
-            std::string escapedContent;
-            escapedContent.reserve(fileContent.size());
-            for (char c : fileContent) {
-                switch (c) {
-                    case '"': escapedContent += "\\\""; break;
-                    case '\\': escapedContent += "\\\\"; break;
-                    case '\n': escapedContent += "\\n"; break;
-                    case '\r': escapedContent += "\\r"; break;
-                    case '\t': escapedContent += "\\t"; break;
-                    default:
-                        if (c >= 32 && c < 127) {
-                            escapedContent += c;
-                        } else {
-                            // Skip non-printable characters
-                            escapedContent += ' ';
-                        }
+                fileContentB64 = Base64Encode(fileContent);
+                if (fileContentB64.empty() && !fileContent.empty()) {
+                    logger.Warning("Base64 encoding failed for: " + filePath + " — falling back to fail-open");
+                    result.reason = "Base64 encoding failed";
+                    result.evaluationSucceeded = true;
+                    return result;
                 }
             }
 
             // Build JSON request using JsonBuilder
             JsonBuilder json;
             json.AddString("file_name", fileName);
-            json.AddString("file_content", escapedContent);
+            if (useOcrText) {
+                json.AddString("file_content", ocrText);
+            } else {
+                json.AddString("file_content_b64", fileContentB64);
+            }
             json.AddInt("file_size", static_cast<int>(fileSize));
             json.AddString("event_type", eventType);
             json.AddString("destination_type", "removable_drive");

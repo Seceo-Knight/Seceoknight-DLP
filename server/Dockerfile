@@ -42,9 +42,15 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install runtime dependencies
+#   tesseract-ocr + eng data: OCR engine for scanned PDFs / images with no
+#   text layer (see app/services/document_extract.py)
+#   poppler-utils: pdftoppm, used by pdf2image to rasterise PDF pages for OCR
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    poppler-utils \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
