@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🚫 No Way to Actually Build a Blocking Policy for Cloud Uploads or Email — Dropdown Missing the Event Types (July 17, 2026)
+
+### Summary
+
+Live-tested the browser extension end to end today: extension loaded, native host registered, bridge verified (`native host reachable (pong)`), and the extension correctly intercepted a Gmail attachment upload containing a fake credit-card number — but the server returned `allow` every time. Traced this to a real dashboard gap, not a config mistake: **there was no way to create a policy that would ever return `block` for the browser extension's or SMTP relay's events at all.**
+
+### Root cause
+
+The browser extension sends `event_type: "cloud_upload"` / `destination_type: "cloud"`, and the SMTP relay sends `event_type: "email_send"` — confirmed by reading `native-host/skdlp_host.py` and `smtp-relay/app/dlp_client.py`. The only dashboard policy type generic enough to match on `event_type` (**Classification-Aware Policy**) restricts that field to a fixed `<select>` dropdown in `dashboard/src/components/policies/ClassificationPolicyForm.tsx` — and neither `cloud_upload` nor `email_send` was in the list (only `file_transfer, clipboard, file_create, file_modify, file_delete, usb_connect`). The backend evaluator (`database_policy_evaluator.py`) is completely generic — it does a plain case-insensitive string match on whatever `event_type` value a condition specifies, no restriction at all — so this was purely a frontend dropdown gap, not a backend limitation. Also confirmed there's no separate "Cloud Upload Prevention" policy type either (the CyberSentinel docs' mention of "two cloud_upload_prevention policies" refers to a UI template that was never ported) and the existing "Browser Upload Monitoring" policy type is a different, older, alert-only feature (`network_exfil` — confirmed via `network_exfil_monitor.cpp`'s own comment: `// Alert only - not blocked`), unrelated to the new extension.
+
+### Fixed
+
+- `ClassificationPolicyForm.tsx`: added `cloud_upload` and `email_send` to the `event_type` field's dropdown options, and `cloud` to `destination_type`'s options (`email` was already present, which is what the SMTP relay already uses).
+
+### Verification
+
+`npx tsc --noEmit` shows zero new errors (all remaining errors pre-exist in unrelated files, same set noted throughout this session). `npm run build` succeeds; `dist/` reverted after building per this repo's established practice of not committing local build artifacts.
+
+### Result
+
+An admin can now build a **Classification-Aware Policy** with condition `event_type equals cloud_upload` (or `email_send`) + `classification_level in [Confidential, Restricted]` → action `block`, and it will actually take effect — closing the gap that made every browser-extension and SMTP-relay evaluation return `allow` regardless of content.
+
+---
+
 ## 🐛 Browser Extension's `native-host/install.ps1` Was Documented But Never Actually Created (July 17, 2026)
 
 ### Summary
