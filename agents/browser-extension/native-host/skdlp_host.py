@@ -36,6 +36,15 @@ import uuid
 
 try:
     import requests
+    try:
+        # Silence the per-request "InsecureRequestWarning" that verify=False
+        # triggers (goes to stderr via the warnings module, never stdout, so
+        # it can't corrupt the native-messaging protocol either way — this
+        # just keeps the terminal/log clean when running un-frozen).
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    except Exception:
+        pass
 except Exception:  # requests missing → still speak the protocol, fail open
     requests = None
 
@@ -72,10 +81,24 @@ def load_config():
                 break
             except Exception as e:
                 log("config read failed %s: %s" % (p, e))
+    # verify_tls: whether to validate the DLP server's TLS certificate.
+    # Defaults to False because install.sh provisions a self-signed cert by
+    # default (matching the -k flag this repo's docs use for every curl
+    # example against a fresh install). Set SKDLP_VERIFY_TLS=1 (or
+    # "verify_tls": true in dlp-host.json) once the server has a real
+    # CA-signed certificate — see README's "Getting a Trusted SSL
+    # Certificate" section.
+    verify_env = os.environ.get("SKDLP_VERIFY_TLS")
+    if verify_env is not None:
+        verify_tls = verify_env.strip().lower() not in ("0", "false", "no", "")
+    else:
+        verify_tls = bool(cfg.get("verify_tls", False))
+
     return {
         "server_url": os.environ.get("SKDLP_SERVER_URL") or cfg.get("server_url") or "http://localhost:55000/api/v1",
         "agent_id": os.environ.get("SKDLP_AGENT_ID") or cfg.get("agent_id") or "browser-guard",
         "agent_key": os.environ.get("SKDLP_AGENT_KEY") or cfg.get("agent_key") or "",
+        "verify_tls": verify_tls,
     }
 
 
@@ -126,6 +149,14 @@ def evaluate(meta):
                 "destination_path": meta.get("host") or meta.get("url"),
             },
             timeout=6,
+            # install.sh provisions a self-signed cert by default (same reason
+            # every curl example in this repo's docs uses -k). Without this,
+            # every call here raises SSLCertVerificationError, gets swallowed
+            # by the except below, and silently fails open to "allow" - which
+            # is exactly why this never blocked anything. If you replace the
+            # server's cert with one from a real CA (see README's "Getting a
+            # Trusted SSL Certificate" section), you can safely remove this.
+            verify=CFG.get("verify_tls", False),
         )
         r.raise_for_status()
         body = r.json()
@@ -165,6 +196,7 @@ def emit_event(meta, action_taken, severity, level, subtype, blocked):
                 "description": "Cloud upload %s (%s) to %s" % (subtype, level or "Unknown", meta.get("host")),
             },
             timeout=5,
+            verify=CFG.get("verify_tls", False),  # see the comment in evaluate()
         )
     except Exception as e:
         log("emit_event failed: %s" % e)

@@ -8,6 +8,33 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔒 Browser Extension Never Actually Worked — Silent TLS Verification Failure Against the Self-Signed Cert (July 17, 2026)
+
+### Summary
+
+Live-tested end to end today with a real Windows PC and a real server: the bridge worked (`native host reachable (pong)`), the extension intercepted every Gmail upload and logged `classify → decision`, but the manager's logs showed **zero** `/agents/{id}/policy/evaluate` requests ever arriving — for any test, including the very first one. The browser extension's real-world classification calls had never actually reached the server, from the start.
+
+### Root cause
+
+`install.sh` provisions a **self-signed TLS certificate** by default (every curl example throughout this session's docs uses `-k` for exactly this reason). `native-host/skdlp_host.py`'s `evaluate()` and `emit_event()` call `requests.post()` against the server's public HTTPS URL with default certificate verification — which fails with an SSL error against a self-signed cert. Both calls wrap the request in a broad `except Exception` that logs to `dlp-host.log` (never the browser console) and returns the fail-open default (`action=allow`), so the extension's background-console log always showed a normal-looking `decision → allow` with no visible sign anything had failed. This is a different failure mode from the "Cloud upload" policy's condition bug fixed two entries above — that bug meant a correctly-delivered request would never match a block rule; this bug meant the request was never being delivered to the server at all.
+
+### Fixed
+
+- `skdlp_host.py`: both `requests.post()` calls now pass `verify=CFG.get("verify_tls", False)`, defaulting to `False` to match the self-signed cert every fresh install ships with.
+- Added a `verify_tls` config option (`SKDLP_VERIFY_TLS=1` env var, or `"verify_tls": true` in `dlp-host.json`) so an admin who replaces the server's cert with a real CA-signed one (see README's "Getting a Trusted SSL Certificate" section) can turn verification back on.
+- Suppressed `urllib3`'s `InsecureRequestWarning` (goes to stderr, can't corrupt the native-messaging stdout protocol either way, but keeps logs clean).
+- Confirmed the **SMTP relay is not affected** by the same class of bug: `smtp-relay/app/dlp_client.py` talks to the `manager` container directly over plain HTTP on the internal Docker network (`DLP_SERVER_URL=http://manager:55000/api/v1` in `docker-compose.prod.yml`), never through the public HTTPS/self-signed-cert path.
+
+### Verification
+
+`python3 -m py_compile` passes. No live Windows/browser test possible in this sandbox — needs a re-test on the actual deployment (rebuild `skdlp_host.exe` with the updated script, or re-run un-frozen) to confirm requests now reach the server.
+
+### Result
+
+Once the native host is rebuilt with this fix and deployed, the browser extension's classification calls will actually reach the server for the first time — everything built and tested today (the event-type dropdown fix, the "in"-operator input fix, this fix) was necessary but this was the final blocker.
+
+---
+
 ## ⌨️ "in"-Operator Value Box Ate Commas/Spaces After the First Entry (July 17, 2026)
 
 ### Summary
