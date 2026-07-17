@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🌐 New Feature: Browser Extension (Cloud Upload Guard) — Ported from CyberSentinel (July 17, 2026)
+
+### Summary
+
+SeceoKnight previously had no way to intercept a browser-based upload before it reached a cloud destination — the existing browser-upload monitoring is reactive (it watches for the resulting file artifact after the fact). Ported CyberSentinel's browser extension, which pauses the actual upload request and blocks it before any bytes leave the browser.
+
+### What it does
+
+A Chrome/Edge MV3 extension (`agents/browser-extension/`) patches `fetch`/`XMLHttpRequest` in the page context to detect uploads (File/Blob/FormData/ArrayBuffer) to a fixed list of cloud hosts (Google Drive/Gmail, Dropbox, OneDrive/SharePoint, Box, WeTransfer, Slack, S3, etc.). Each upload is paused, base64-encoded, and relayed through a content script → background service worker → native-messaging host (`skdlp_host.py`), which calls the same `/agents/{id}/policy/evaluate` endpoint every other channel uses. Public files are allowed and logged, Internal files are allowed with an alert, Confidential/Restricted files are aborted client-side with an on-page banner, and `cloud_upload_attempt`/`cloud_upload_prevented` events land in the dashboard. Fails open at every hop — a DLP outage never bricks the browser.
+
+### Adaptation notes (porting from CyberSentinel)
+
+- Rebranded throughout: `CyberSentinelDLP`/`CyberSentinel DLP` → `SeceoKnight`/`SeceoKnight DLP` (matching the existing `C:\Program Files\SeceoKnight` / `C:\ProgramData\SeceoKnight` convention used by the main endpoint agent), `csdlp_host.py` → `skdlp_host.py`, `com.cybersentineldlp.dlp` → `com.seceoknightdlp.dlp`, `CSDLP_*` env vars → `SKDLP_*`, internal `__csdlp` postMessage marker → `__skdlp`.
+- **Fixed an additional instance of the same document-extraction bypass found and fixed earlier today**: `skdlp_host.py`'s `evaluate()` was decoding the uploaded file's raw bytes as UTF-8 text (`errors="replace"`) and sending them as `file_content` — for a real `.docx`/`.pdf`/`.xlsx`/`.pptx` upload this produces garbled replacement characters, not real text, exactly like the USB transfer bug. Changed it to send the already-base64-encoded raw bytes as `file_content_b64` instead (the bytes were already available from `inject.js` — no new encoding needed), so the server's `document_extract.py` does real parsing on browser uploads too.
+- Removed a hardcoded internal server path from `INSTALL_WINDOWS.md` (`/home/soc/Data-Loss-Prevention/...`) that was specific to CyberSentinel's own deployment box, replaced with a generic instruction.
+
+### Verification
+
+`node --check` passed on all three JS files (`background.js`, `content.js`, `inject.js`). `python3 -m py_compile` passed on `skdlp_host.py`. Both JSON files (`manifest.json`, `com.seceoknightdlp.dlp.json`) validated with `python3 -m json.tool`. Confirmed zero remaining `CyberSentinel`/`csdlp` references anywhere in the ported directory.
+
+### Deployment
+
+Server-side: none — it calls the existing `/agents/{id}/policy/evaluate` and `/events` endpoints unchanged. Per-endpoint: follow `agents/browser-extension/INSTALL_WINDOWS.md` (load the extension, build/install the native host, run `install.ps1` with the machine's agent id + key). Managed rollout: force-install via the `ExtensionInstallForcelist` Chrome/Edge group policy once packaged.
+
+---
+
 ## 📄 Binary Documents (PDF/DOCX/XLSX/PPTX) Were Never Actually Classified — Real DLP Bypass (July 17, 2026)
 
 ### Summary
