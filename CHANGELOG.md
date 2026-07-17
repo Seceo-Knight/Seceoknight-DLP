@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔑 README Didn't Explain Where RELAY_AGENT_ID/KEY or the Extension's AgentId/Key Actually Come From (July 17, 2026)
+
+### Summary
+
+Step 4 (SMTP relay) and Step 5 (browser extension) told the reader to set `RELAY_AGENT_ID`/`RELAY_AGENT_KEY` / `-AgentId`/`-AgentKey` without saying where those values come from or that a real API call is required first. Step 5 additionally told readers to "reuse this PC's existing endpoint-agent id/key" — checked against the actual Windows agent code (`agents/endpoint/windows/agent.cpp`, `RegisterAgent()` at line 3713) and confirmed **that's not possible**: the endpoint agent never parses or stores an `api_key` from its own registration response at all (`AgentConfig::SaveToFile` only ever persists `server_url`/`agent_id`/`agent_name`/intervals), and the dashboard's Agents page never displays a key either way (it's a one-time value returned only at registration). The old instruction would have sent a reader down a dead end.
+
+### Fixed
+
+- Step 4.1: added the full request→response walkthrough (what to run, where to run it, an example JSON response, and which two fields map to which two env vars), plus an explicit "you cannot reuse an installed agent's key" note.
+- Step 4.2: made the `.env` edit fully explicit — exact command to open the file, exact lines to add, explicit "don't paste the example values literally" warning.
+- Step 5: replaced the incorrect "reuse this PC's existing agent id/key" suggestion with a dedicated registration step (mirroring Step 4.1) for the native host's own identity, and renumbered the rest of the section accordingly.
+
+### Verification
+
+Independently re-confirmed (grep, not just the sub-agent's report) that `agent.cpp` has no `api_key` parsing anywhere outside the unrelated "detect API keys in scanned content" classification rule — `RegisterAgent()` only checks the HTTP status code on success and never reads the response body.
+
+### Result
+
+Both setup sections are now runnable by someone with no prior context: exact commands, exact file paths, and an accurate description of which values exist where.
+
+---
+
 ## 📖 Main README Had No Setup Steps for the SMTP Relay or Browser Extension (July 17, 2026)
 
 ### Summary

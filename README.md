@@ -146,24 +146,49 @@ leaves your organization, whether your org uses **Gmail (Google Workspace)**
 or **Outlook (Microsoft 365 / Exchange Online)** — the relay is a plain SMTP
 server that doesn't care which platform routes mail to it.
 
-1. **Register an agent identity for the relay** — run this once from anywhere
-   that can reach the server (it authenticates to the DLP server like any
-   endpoint agent):
+1. **Register an agent identity for the relay.** The relay is not a Windows/
+   Linux endpoint — you do **not** need to install the agent from Step 2 or
+   Step 3 anywhere for this. It just needs its own identity (an `agent_id` +
+   `api_key`) so it can call the DLP API the same way an endpoint agent does.
+   **You also can't reuse an already-installed agent's key** — the dashboard's
+   Agents page shows an agent's `agent_id`, but never its `api_key` (it's only
+   ever returned once, at registration). So register a fresh one dedicated to
+   the relay.
+
+   Run this **on the server itself** (SSH into it first):
    ```bash
-   curl -k -X POST https://YOUR_SERVER_IP/api/v1/agents/ \
+   curl -k -X POST https://localhost/api/v1/agents/ \
      -H "Content-Type: application/json" \
      -d '{"name": "smtp-relay", "os": "linux", "ip_address": "127.0.0.1"}'
    ```
-   The response contains `agent_id` and a one-time `api_key` — **copy both now**,
-   the key is never shown again (re-register to get a fresh one if you lose it).
-
-2. **Add the relay's config to `/opt/seceoknight/.env`** on the server:
+   You'll get back JSON that looks like this:
+   ```json
+   {
+     "agent_id": "LINUX-smtp-relay",
+     "name": "smtp-relay",
+     "api_key": "csak_9f2K7pQ...(long random string)...xYz",
+     "os": "linux",
+     "...": "..."
+   }
    ```
-   RELAY_AGENT_ID=<agent_id from step 1>
-   RELAY_AGENT_KEY=<api_key from step 1>
-   RELAY_NEXT_HOP_HOST=<see step 3>
+   **Copy two values from that response now** — the `api_key` is shown this
+   one time only; if you lose it, just run the same curl command again to get
+   a fresh one (re-registering rotates the key):
+   - `agent_id` → this becomes `RELAY_AGENT_ID`
+   - `api_key` → this becomes `RELAY_AGENT_KEY`
+
+2. **Put those two values into `/opt/seceoknight/.env`** on the server (this
+   is the same `.env` file `install.sh` created — open it with
+   `sudo nano /opt/seceoknight/.env`, add these lines at the bottom, then save
+   with `Ctrl+O`, `Enter`, `Ctrl+X`):
+   ```
+   RELAY_AGENT_ID=LINUX-smtp-relay        # the agent_id you copied in step 1
+   RELAY_AGENT_KEY=csak_9f2K7pQ...xYz     # the api_key you copied in step 1
+   RELAY_NEXT_HOP_HOST=smtp-relay.gmail.com   # see step 3 for where this comes from
    RELAY_NEXT_HOP_PORT=587
    ```
+   (Replace the example values above with your own — don't paste the literal
+   `LINUX-smtp-relay` / `csak_9f2K7pQ...xYz` from this guide.)
 
 3. **Point your mail platform's outbound routing at the relay**, and get the
    right `RELAY_NEXT_HOP_HOST` for your platform:
@@ -196,14 +221,31 @@ Blocks uploads of Confidential/Restricted files to cloud apps (Google Drive,
 Gmail, Dropbox, OneDrive, Box, …) straight from Chrome/Edge on a managed
 Windows endpoint.
 
-1. **Get the extension + native host onto the PC** — copy
+1. **Register a dedicated agent identity for this PC's native host.** Same
+   situation as the relay in Step 4 — the extension's native host authenticates
+   to the DLP API with its own `agent_id` + `api_key`, and there is **no way
+   to reuse or look up the key of the Windows endpoint agent** you installed
+   in Step 2: that agent doesn't request or store an `api_key` at all
+   (it only sends its own name/id at heartbeat time), and the dashboard's
+   Agents page never displays a key either way (shown once, at registration,
+   full stop). So register a fresh identity per PC, from any machine that can
+   reach the server:
+   ```bash
+   curl -k -X POST https://YOUR_SERVER_IP/api/v1/agents/ \
+     -H "Content-Type: application/json" \
+     -d '{"name": "browser-ext-<this PCs hostname>", "os": "windows", "ip_address": "<this PCs IP>"}'
+   ```
+   Copy `agent_id` and `api_key` from the JSON response (same shape as shown
+   in Step 4.1) — you'll paste them into `install.ps1` in step 4 below.
+
+2. **Get the extension + native host onto the PC** — copy
    `agents/browser-extension/` from this repo to the endpoint (e.g.
    `C:\SeceoKnight\browser-extension\`).
-2. **Load the extension** — `chrome://extensions` (or `edge://extensions`) →
+3. **Load the extension** — `chrome://extensions` (or `edge://extensions`) →
    Developer mode → Load unpacked → select that folder. Copy the **extension
    ID** it's assigned (for a managed fleet, push it instead via the
    `ExtensionInstallForcelist` group policy).
-3. **Build/register the native host** — from an elevated PowerShell:
+4. **Build/register the native host** — from an elevated PowerShell:
    ```powershell
    cd C:\SeceoKnight\browser-extension\native-host
    pip install pyinstaller requests
@@ -212,18 +254,16 @@ Windows endpoint.
    copy dist\skdlp_host.exe "C:\Program Files\SeceoKnight\skdlp_host.exe"
 
    .\install.ps1 `
-     -ExtensionId  <EXTENSION_ID_FROM_STEP_2> `
+     -ExtensionId  <EXTENSION_ID_FROM_STEP_3> `
      -ServerUrl    https://YOUR_SERVER_IP/api/v1 `
-     -AgentId      <this PC's agent id> `
-     -AgentKey     <this PC's agent API key> `
+     -AgentId      <agent_id from step 1> `
+     -AgentKey     <api_key from step 1> `
      -HostCommand  "C:\Program Files\SeceoKnight\skdlp_host.exe"
    ```
-   (Reuse this PC's existing endpoint-agent id/key from the Agents page — or
-   register a dedicated one the same way as Step 4.1.)
-4. **Restart the browser fully** and verify the bridge before testing uploads:
+5. **Restart the browser fully** and verify the bridge before testing uploads:
    `chrome://extensions` → the extension → **service worker** → Console →
    look for `native host reachable (pong)`.
-5. **Test** — upload a plain text file (allowed) and a file with fake PII/credit-card
+6. **Test** — upload a plain text file (allowed) and a file with fake PII/credit-card
    numbers (blocked, red banner + `cloud_upload_prevented` event in the dashboard).
 
 Full step-by-step (with troubleshooting):
