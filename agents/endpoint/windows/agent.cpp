@@ -48,6 +48,7 @@
  #include <ctime>
  #include <cctype>
  #include <dbt.h>
+#include <wtsapi32.h>
 #include <setupapi.h>
 #include <initguid.h>
 #include <cfgmgr32.h>
@@ -764,21 +765,23 @@ std::string OcrImageFileIfApplicable(const std::string& filePath) {
 }
 
 // Must be called with the clipboard already open (i.e. from inside a
-// successful OpenClipboard(...) block, matching the pattern the
-// existing CF_UNICODETEXT handling already uses). Reads a CF_DIB bitmap
-// off the clipboard if present, reconstructs it as a standalone .bmp
-// file, OCRs it, and returns the recognized text — or "" if there's no
-// image on the clipboard, or anything about the DIB looks malformed.
-// Never throws.
-std::string TryOcrClipboardImage() {
+// successful OpenClipboard(...) block, matching the pattern the existing
+// CF_UNICODETEXT handling already uses). Reads a CF_DIB bitmap off the
+// clipboard if present and writes it out as a standalone .bmp temp file —
+// this is the only part of the old TryOcrClipboardImage() that actually
+// needs the clipboard open, and it's fast (memory copy + one WriteFile).
+// Returns false if there's no image on the clipboard, or anything about
+// the DIB looks malformed. Never throws. Deliberately does NOT run OCR —
+// see the split rationale on TryOcrClipboardImage() below.
+bool ExtractClipboardDibToBmpFile(std::string& outBmpPath) {
     try {
         HANDLE hDib = GetClipboardData(CF_DIB);
-        if (hDib == nullptr) return "";
+        if (hDib == nullptr) return false;
 
         BITMAPINFO* pbmi = static_cast<BITMAPINFO*>(GlobalLock(hDib));
-        if (pbmi == nullptr) return "";
+        if (pbmi == nullptr) return false;
 
-        std::string result;
+        bool wrote = false;
         int width  = pbmi->bmiHeader.biWidth;
         int height = std::abs(pbmi->bmiHeader.biHeight);
 
@@ -827,17 +830,35 @@ std::string TryOcrClipboardImage() {
                 WriteFile(hF, &bf, sizeof(bf), &wr, NULL);
                 WriteFile(hF, pbmi, headerSize + imageSize, &wr, NULL);
                 CloseHandle(hF);
-
-                result = RunTesseractOnFile(bmpPath);
-                DeleteFileA(bmpPath.c_str());
+                outBmpPath = bmpPath;
+                wrote = true;
             }
         }
 
         GlobalUnlock(hDib);
-        return result;
+        return wrote;
     } catch (...) {
-        return "";
+        return false;
     }
+}
+
+// CRITICAL FIX: this used to open the clipboard, extract the DIB, run
+// Tesseract (an external process — can take seconds) on it, AND (via the
+// caller) run full policy classification + an HTTP POST to the server, all
+// while still holding OpenClipboard(). The Windows clipboard is a single
+// systemwide resource — holding it open for that long blocked copy/paste
+// for every other process on the machine (Explorer, Office, browsers...)
+// for as long as the slowest step took, up to WinHTTP's ~45s combined
+// timeout on a degraded network. This wrapper is kept only for any other
+// caller that still wants the old all-in-one behavior; ClipboardMonitor()
+// itself now calls ExtractClipboardDibToBmpFile() (fast, clipboard open)
+// and RunTesseractOnFile() (slow, clipboard already closed) separately.
+std::string TryOcrClipboardImage() {
+    std::string bmpPath;
+    if (!ExtractClipboardDibToBmpFile(bmpPath)) return "";
+    std::string result = RunTesseractOnFile(bmpPath);
+    DeleteFileA(bmpPath.c_str());
+    return result;
 }
  
  // ==================== JSON Helper ====================
@@ -2063,18 +2084,35 @@ static ClassificationResult Classify(const std::string& content,
  private:
      AgentConfig config;
      Logger logger;
-     std::unique_ptr<HttpClient> httpClient;
-     // Guards httpClient itself (the pointer), not just requests through it.
+     std::shared_ptr<HttpClient> httpClient;
+     // Guards httpClient itself (the pointer), not requests through it.
      // httpClient is reassigned by the heartbeat thread's reconnect logic
      // (see "reinitializing HTTP client" below) while OTHER threads
      // (browser-dialog handlers, USB monitor, kernel event forwarding) may
-     // be concurrently calling through the existing pointer. Without this,
-     // the old HttpClient object can be destroyed while another thread is
-     // still inside a call on it -- undefined behavior that manifested as
-     // both stuck browser-upload alerts and the agent going offline
-     // (heartbeat thread hanging on a destroyed object).
+     // be concurrently calling through the existing pointer.
+     //
+     // CRITICAL FIX: this used to be a unique_ptr, and every call site held
+     // httpClientMutex for the ENTIRE blocking network call (Post/Put can
+     // take up to ~45s per WinHttpSetTimeouts before giving up). That meant
+     // one slow/hanging event POST (e.g. classifying a large clipboard
+     // paste while the network is degraded) fully blocked the heartbeat
+     // thread's own attempt to acquire the same mutex — heartbeats stopped
+     // reaching the server (agent shows "offline" in the dashboard even
+     // though the machine has internet) for as long as that one call was
+     // stuck. Now it's a shared_ptr: GetHttpClient() below only holds the
+     // lock long enough to copy the pointer (refcount bump, no I/O), so the
+     // actual network call always runs unlocked and can never block any
+     // other caller — including the heartbeat.
      std::mutex httpClientMutex;
-     
+
+     // Returns the current HttpClient via a fast, non-blocking pointer copy.
+     // Callers make their (possibly slow) request on the returned shared_ptr
+     // AFTER this returns, never while holding httpClientMutex.
+     std::shared_ptr<HttpClient> GetHttpClient() {
+         std::lock_guard<std::mutex> lock(httpClientMutex);
+         return httpClient;
+     }
+
      std::atomic<bool> running{false};
      std::atomic<bool> hasFilePolices{false};
      std::atomic<bool> hasClipboardPolicies{false};
@@ -2144,7 +2182,46 @@ static ClassificationResult Classify(const std::string& content,
          if (uMsg == WM_DEVICECHANGE && s_instance) {
              return s_instance->HandleDeviceChange(wParam, lParam);
          }
+         // CRITICAL FIX: the agent had zero awareness of the workstation
+         // being locked/unlocked. Reported symptom: after a screen lock +
+         // unlock, the dashboard kept showing the agent offline, and it
+         // never reconnected on its own — only a full reinstall fixed it.
+         // WTSRegisterSessionNotification (registered where this window is
+         // created) delivers WM_WTSSESSION_CHANGE here on lock/unlock;
+         // WTS_SESSION_UNLOCK forces an immediate HTTP client reinit +
+         // heartbeat instead of waiting for the next scheduled interval
+         // (and its 3-consecutive-failure reinit threshold) to notice.
+         if (uMsg == WM_WTSSESSION_CHANGE && s_instance) {
+             return s_instance->HandleSessionChange(wParam, lParam);
+         }
          return DefWindowProc(hwnd, uMsg, wParam, lParam);
+     }
+
+     LRESULT HandleSessionChange(WPARAM wParam, LPARAM lParam) {
+         if (wParam == WTS_SESSION_UNLOCK) {
+             logger.Info("Workstation unlocked — forcing immediate reconnect");
+             // Off the message-pump thread: reinitializing the HTTP client
+             // and sending a heartbeat both do network I/O, and this
+             // function runs on the same thread that pumps USB device
+             // notifications — don't block that on a slow/degraded network.
+             std::thread([this]() { TriggerImmediateReconnect(); }).detach();
+         } else if (wParam == WTS_SESSION_LOCK) {
+             logger.Info("Workstation locked");
+         }
+         return 0;
+     }
+
+     void TriggerImmediateReconnect() {
+         try {
+             {
+                 std::lock_guard<std::mutex> lock(httpClientMutex);
+                 httpClient = std::make_shared<HttpClient>(config.serverUrl);
+             }
+             SendHeartbeat();
+             logger.Info("Reconnect after unlock: HTTP client reinitialized, heartbeat sent");
+         } catch (...) {
+             logger.Error("Reconnect after unlock failed — will retry on next scheduled heartbeat");
+         }
      }
      
      LRESULT HandleDeviceChange(WPARAM wParam, LPARAM lParam) {
@@ -2989,8 +3066,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
      DLPAgent(const std::string& configPath = "agent_config.json") 
          : config(configPath) {
          
-         httpClient = std::make_unique<HttpClient>(config.serverUrl);
-         
+         httpClient = std::make_shared<HttpClient>(config.serverUrl);
+
          if (config.GetQuarantine().enabled) {
              try {
                  fs::create_directories(config.GetQuarantine().folder);
@@ -3080,10 +3157,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      "\"file_path\":\"" + path + "\","
                      "\"process_id\":" + pid + ","
                      "\"blocked\":" + blocked + "}";
-                 {
-                     std::lock_guard<std::mutex> lock(httpClientMutex);
-                     httpClient->Post("/events/kernel", evJson);
-                 }
+                 GetHttpClient()->Post("/events/kernel", evJson);
              } catch (...) {}
          });
 
@@ -3617,11 +3691,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              json.AddString("ip_address", GetRealIPAddress());
              json.AddString("version", "1.0.0");
              
-             std::pair<int, std::string> reg;
-             {
-                 std::lock_guard<std::mutex> lock(httpClientMutex);
-                 reg = httpClient->Post("/agents", json.Build());
-             }
+             std::pair<int, std::string> reg = GetHttpClient()->Post("/agents", json.Build());
              auto& [status, response] = reg;
              
              if (status == 200 || status == 201) {
@@ -3644,11 +3714,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
      
      void UnregisterAgent() {
          try {
-             std::pair<int, std::string> res;
-             {
-                 std::lock_guard<std::mutex> lock(httpClientMutex);
-                 res = httpClient->Delete("/agents/" + config.agentId + "/unregister");
-             }
+             std::pair<int, std::string> res = GetHttpClient()->Delete("/agents/" + config.agentId + "/unregister");
              auto& [status, response] = res;
              if (status == 200 || status == 204) {
                  logger.Info("Agent unregistered from server");
@@ -3671,14 +3737,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              std::string requestBody = json.Build();
              logger.Debug("Policy sync request: " + requestBody);
              
-             std::pair<int, std::string> sync;
-             {
-                 std::lock_guard<std::mutex> lock(httpClientMutex);
-                 sync = httpClient->Post(
-                     "/agents/" + config.agentId + "/policies/sync",
-                     requestBody
-                 );
-             }
+             std::pair<int, std::string> sync = GetHttpClient()->Post(
+                 "/agents/" + config.agentId + "/policies/sync",
+                 requestBody
+             );
              auto& [status, response] = sync;
              
              if (status == 200) {
@@ -4465,7 +4527,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 logger.Warning("3 consecutive heartbeat failures - reinitializing HTTP client");
                 try {
                     std::lock_guard<std::mutex> lock(httpClientMutex);
-                    httpClient = std::make_unique<HttpClient>(config.serverUrl);
+                    httpClient = std::make_shared<HttpClient>(config.serverUrl);
                     consecutiveFailures = 0;
                     logger.Info("HTTP client reinitialized - will retry heartbeat");
                 } catch (...) {
@@ -4486,14 +4548,10 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                  json.AddString("policy_version", activePolicyVersion);
              }
              
-             std::pair<int, std::string> hb;
-             {
-                 std::lock_guard<std::mutex> lock(httpClientMutex);
-                 hb = httpClient->Put(
-                     "/agents/" + config.agentId + "/heartbeat",
-                     json.Build()
-                 );
-             }
+             std::pair<int, std::string> hb = GetHttpClient()->Put(
+                 "/agents/" + config.agentId + "/heartbeat",
+                 json.Build()
+             );
              auto& [status, response] = hb;
              
              if (status == 200) {
@@ -4711,6 +4769,28 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              }
              lastClipboardSeq = seq;
 
+             // CRITICAL FIX: everything slow (OCR's external Tesseract
+             // process, and HandleClipboardEvent()'s classification + HTTP
+             // POST to the server) used to run INSIDE the OpenClipboard(...)
+             // / CloseClipboard() window. The Windows clipboard is a single
+             // systemwide resource — while this thread held it open, EVERY
+             // other process on the machine (Explorer, Office, browsers)
+             // had copy/paste fail or hang too, for as long as the slowest
+             // step took (an OCR run, or an HTTP call stalling up to
+             // WinHTTP's ~45s combined timeout on a degraded network). This
+             // is what made the whole machine "misbehave" whenever the
+             // agent's connection to the server was slow or briefly down.
+             //
+             // Now: only the FAST clipboard reads (grab text, or dump the
+             // DIB bitmap to a temp file) happen between Open/CloseClipboard.
+             // The clipboard is closed immediately afterward, and OCR +
+             // classification + network I/O all run afterward with the
+             // clipboard already released.
+             std::string capturedText;
+             bool haveText = false;
+             std::string bmpPathForOcr;
+             bool haveImage = false;
+
              try {
                  // Get active window title to detect source file
                  HWND hwnd = GetForegroundWindow();
@@ -4719,37 +4799,25 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                      GetWindowTextA(hwnd, windowTitle, sizeof(windowTitle));
                      lastActiveWindow = std::string(windowTitle);
                  }
-                 
+
                  if (OpenClipboard(nullptr)) {
-                     bool handledText = false;
                      HANDLE hData = GetClipboardData(CF_UNICODETEXT);
                      if (hData != nullptr) {
                          wchar_t* pData = static_cast<wchar_t*>(GlobalLock(hData));
                          if (pData != nullptr) {
                              std::wstring wtext(pData);
-                             std::string text(wtext.begin(), wtext.end());
+                             capturedText = std::string(wtext.begin(), wtext.end());
                              GlobalUnlock(hData);
-                             
-                             if (!text.empty() && text != lastClipboard) {
-                                 lastClipboard = text;
-                                 handledText = true;
-                                 HandleClipboardEvent(text, lastActiveWindow);
-                             }
+                             haveText = !capturedText.empty();
                          }
                      }
 
-                     // No new text this cycle — check for a pasted/copied
-                     // image (screenshot, scanned photo, etc.) and OCR it.
-                     // Mirrors the text path above: only fires when the
-                     // clipboard content actually changed.
-                     if (!handledText) {
-                         std::string ocrText = TryOcrClipboardImage();
-                         if (!ocrText.empty() && ocrText != lastClipboard) {
-                             lastClipboard = ocrText;
-                             logger.Info("OCR extracted " + std::to_string(ocrText.size()) +
-                                         " chars from clipboard image");
-                             HandleClipboardEvent(ocrText, lastActiveWindow);
-                         }
+                     // No text this cycle — check for a pasted/copied image
+                     // (screenshot, scanned photo, etc.). Just dump the DIB
+                     // to a temp file here (fast); OCR runs after the
+                     // clipboard is closed, below.
+                     if (!haveText) {
+                         haveImage = ExtractClipboardDibToBmpFile(bmpPathForOcr);
                      }
 
                      CloseClipboard();
@@ -4757,7 +4825,26 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              } catch (...) {
                  logger.Debug("Clipboard access error");
              }
-             
+
+             // Everything below runs with the clipboard already closed.
+             try {
+                 if (haveText && capturedText != lastClipboard) {
+                     lastClipboard = capturedText;
+                     HandleClipboardEvent(capturedText, lastActiveWindow);
+                 } else if (haveImage) {
+                     std::string ocrText = RunTesseractOnFile(bmpPathForOcr);
+                     DeleteFileA(bmpPathForOcr.c_str());
+                     if (!ocrText.empty() && ocrText != lastClipboard) {
+                         lastClipboard = ocrText;
+                         logger.Info("OCR extracted " + std::to_string(ocrText.size()) +
+                                     " chars from clipboard image");
+                         HandleClipboardEvent(ocrText, lastActiveWindow);
+                     }
+                 }
+             } catch (...) {
+                 logger.Debug("Clipboard classification error");
+             }
+
              std::this_thread::sleep_for(std::chrono::seconds(2));
          }
      }
@@ -4858,11 +4945,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                         if (!allowEvents) {
                             logger.Debug("Dropping public clipboard event — no active policies");
                         } else {
-                            std::pair<int, std::string> ev;
-                            {
-                                std::lock_guard<std::mutex> lock(httpClientMutex);
-                                ev = httpClient->Post("/events", pubPayload);
-                            }
+                            std::pair<int, std::string> ev = GetHttpClient()->Post("/events", pubPayload);
                             auto& [evStatus, evBody] = ev;
                             if (evStatus == 200 || evStatus == 201) {
                                 logger.Debug("Event sent successfully (public path)");
@@ -5044,11 +5127,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                     if (!allowEvents) {
                         logger.Debug("Dropping event because no active policies");
                     } else {
-                        std::pair<int, std::string> ev;
-                        {
-                            std::lock_guard<std::mutex> lock(httpClientMutex);
-                            ev = httpClient->Post("/events", eventPayload);
-                        }
+                        std::pair<int, std::string> ev = GetHttpClient()->Post("/events", eventPayload);
                         auto& [evStatus, evBody] = ev;
                         if (evStatus == 200 || evStatus == 201) {
                             logger.Debug("Event sent successfully");
@@ -5218,7 +5297,15 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             logger.Error("Failed to create USB monitor window");
             return;
         }
-        
+
+        // Register for session lock/unlock notifications (WM_WTSSESSION_CHANGE,
+        // handled in UsbWindowProc / HandleSessionChange) — this is what lets
+        // the agent force an immediate reconnect right after an unlock instead
+        // of silently staying offline until the next scheduled heartbeat cycle.
+        if (!WTSRegisterSessionNotification(usbMonitorWindow, NOTIFY_FOR_THIS_SESSION)) {
+            logger.Warning("Failed to register for session lock/unlock notifications (non-fatal)");
+        }
+
         // Register for device notifications
         DEV_BROADCAST_DEVICEINTERFACE_A notificationFilter;
         ZeroMemory(&notificationFilter, sizeof(notificationFilter));
@@ -5257,6 +5344,9 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
         
     cleanup:
         // Cleanup
+        if (usbMonitorWindow) {
+            WTSUnRegisterSessionNotification(usbMonitorWindow);
+        }
         if (usbDevNotify) {
             UnregisterDeviceNotification(usbDevNotify);
         }
@@ -6769,13 +6859,9 @@ if (shouldMonitor) {
                  return;
              }
              
-             std::pair<int, std::string> ev;
-             {
-                 std::lock_guard<std::mutex> lock(httpClientMutex);
-                 ev = httpClient->Post("/events", eventData);
-             }
+             std::pair<int, std::string> ev = GetHttpClient()->Post("/events", eventData);
              auto& [status, response] = ev;
-             
+
              if (status == 200 || status == 201) {
                  logger.Debug("Event sent successfully");
              } else {
@@ -7237,11 +7323,7 @@ if (shouldMonitor) {
 
             logger.Info("🔍 Calling real-time classification API for: " + fileName);
 
-            std::pair<int, std::string> resp;
-            {
-                std::lock_guard<std::mutex> lock(httpClientMutex);
-                resp = httpClient->Post(apiPath, requestBody);
-            }
+            std::pair<int, std::string> resp = GetHttpClient()->Post(apiPath, requestBody);
             auto& [statusCode, responseBody] = resp;
 
             if (statusCode != 200) {

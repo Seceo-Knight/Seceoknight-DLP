@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔌 Agent Goes "Offline" When Idle/Locked, Machine's Copy-Paste Breaks, No Auto-Reconnect on Unlock (July 17, 2026)
+
+### Summary
+
+Reported: the dashboard shows the agent offline even though the endpoint is on and has internet; while this happens, the *entire machine's* copy/paste stops working; locking the screen triggers the disconnect, and unlocking never brings it back — only a full reinstall fixed it. Three separate but related bugs, all now fixed.
+
+### Root causes
+
+1. **The clipboard was held open during slow work, freezing copy/paste machine-wide.** `ClipboardMonitor()` called `OpenClipboard()`, then — while still holding it open — ran OCR (an external Tesseract process, can take seconds) and/or full policy classification plus an HTTP POST to the server (`HandleClipboardEvent()` → `SendEvent()`), before finally calling `CloseClipboard()`. The Windows clipboard is a single systemwide resource: while one process holds it open, no other process (Explorer, Office, browsers — anything) can copy or paste. On a slow or degraded network connection to the DLP server, that HTTP call could take up to ~45 seconds (the configured WinHTTP timeout) before failing — and for that whole window, the entire machine's clipboard was unusable. This is exactly the "misbehaves, copy paste stops working" symptom, and it's tied to network health, matching "when the agent machine is disconnect then agent machine is misbehave."
+2. **A slow event-send could block the heartbeat, making the agent falsely appear offline.** All server calls (heartbeat, clipboard/file/USB events, policy sync) shared one `httpClient` object guarded by a single mutex that was held for the *entire* network call, not just the pointer access. If any one of those calls got slow (e.g. the same network degradation above), the heartbeat thread would block trying to acquire that same mutex — so heartbeats silently stopped reaching the server, and the dashboard showed the agent offline, even on a machine with working internet.
+3. **No awareness of screen lock/unlock at all.** The agent had zero handling for Windows session lock/unlock events, so if anything left it in a bad connection state around a lock, there was no mechanism to detect the unlock and proactively reconnect — it just sat there until the next scheduled heartbeat (or indefinitely, per bug #2 above).
+
+### Fixed
+
+- `ClipboardMonitor()` restructured so only the fast clipboard reads (grab text, or dump the image to a temp file) happen between `OpenClipboard()`/`CloseClipboard()`. OCR and all classification/network work now run strictly *after* the clipboard is already closed. Split `TryOcrClipboardImage()` into `ExtractClipboardDibToBmpFile()` (fast, needs clipboard open) + a separate OCR step (slow, clipboard already closed).
+- `httpClient` changed from `unique_ptr` to `shared_ptr`; all ~9 call sites now use a new `GetHttpClient()` helper that holds the mutex only long enough to copy the pointer (a refcount bump), then make their network call unlocked. No call can ever block another anymore — the heartbeat is now completely independent of how slow any other in-flight request is.
+- Added `WTSRegisterSessionNotification` on the existing USB-monitor message-only window, handling `WM_WTSSESSION_CHANGE`: on `WTS_SESSION_UNLOCK`, the agent now immediately reinitializes its HTTP client and sends a heartbeat on a background thread, instead of waiting for the next scheduled interval.
+- Added `-lwtsapi32` to the Windows build workflow's link step for the new API.
+
+### Verification
+
+Brace-balance check on agent.cpp: -5 (matches established baseline, no structural regression).
+
+---
+
 ## 🗄️ USB File Transfer Quarantine Silently Failed for Cross-Volume Moves (July 16, 2026)
 
 ### Summary

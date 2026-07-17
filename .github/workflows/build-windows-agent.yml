@@ -94,6 +94,7 @@ jobs:
             -lwinspool \
             -lfltlib \
             -lcrypt32 \
+            -lwtsapi32 \
             -static-libgcc \
             -static-libstdc++ \
             -static -lpthread \
