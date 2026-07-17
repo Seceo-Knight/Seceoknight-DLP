@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📁 USB Transfer Quarantine Fallback Directory Didn't Match the Configured Quarantine Folder (July 17, 2026)
+
+### Summary
+
+A screenshot copied to a USB drive triggered a "USB Transfer Quarantine" event and correctly disappeared from the USB drive, but the file was nowhere to be found in `C:\ProgramData\SeceoKnight\quarantine`. An earlier test the same day (a plain `.txt` file) had quarantined correctly into that exact folder, making this look inconsistent/broken.
+
+### Root cause
+
+`HandleUSBFileTransferQuarantineNoTimestamp()` (and its dead-code duplicate `HandleUSBFileTransferQuarantine()`) resolve the destination folder as `policy.quarantinePath.empty() ? "C:\\Quarantine" : policy.quarantinePath` — i.e. if the policy that fired doesn't have an explicit quarantine path configured on the server, it silently falls back to `C:\Quarantine`, a completely different, hardcoded folder that has nothing to do with the actual configured default (`C:\ProgramData\SeceoKnight\quarantine`, used everywhere else in the agent, including the `QuarantineConfig` struct's own default). A fresh screenshot with no `monitoredPaths` match falls through to the classification-only "scan everything" policy path (PASS 2 in `CheckUSBDriveForMonitoredFiles`), which is exactly the kind of policy less likely to have a quarantine path explicitly set — so the file wasn't lost, it just landed in a folder nobody was told to check. Confirmed by asking the user to check `C:\Quarantine` directly on affected test, and by a subsequent test (which matched a policy with a configured path) correctly landing in `C:\ProgramData\SeceoKnight\quarantine`.
+
+### Fixed
+
+Changed the empty-`quarantinePath` fallback in both `HandleUSBFileTransferQuarantineNoTimestamp()` and the dead-code duplicate to `C:\ProgramData\SeceoKnight\quarantine`, matching the real default used everywhere else. Also corrected `QuarantineConfig::folder`'s default value for the same reason, so there's exactly one default quarantine location across the whole agent instead of two disagreeing ones.
+
+### Verification
+
+Brace-balance check on `agent.cpp` unchanged at -5 (matches established baseline, no structural regression).
+
+### Still open
+
+The same screenshot's OCR-detected content only matched "Email Address" — the "Study Report" text also visible in the screenshot wasn't flagged. Not yet root-caused; needs a retest with the corrected quarantine path (so the file is actually recoverable for inspection) to compare what OCR extracted against what's visible in the image.
+
+---
+
 ## 🔍 Clipboard Classification Debug Output Was Invisible in Production (July 17, 2026)
 
 ### Summary

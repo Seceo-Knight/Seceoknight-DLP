@@ -1242,7 +1242,7 @@ void Log(const std::string& level, const std::string& message) {
  
  struct QuarantineConfig {
      bool enabled = true;
-     std::string folder = "C:\\Quarantine";
+     std::string folder = "C:\\ProgramData\\SeceoKnight\\quarantine";
  };
  
  struct ClassificationConfig {
@@ -2849,7 +2849,13 @@ void HandleUSBFileTransferQuarantine(const std::string& fileName, const std::str
     std::string usbFile = usbPath + "\\" + fileName;
     std::string monitoredFile = monitoredPath + "\\" + relativePath;
     std::string timestamp = std::to_string(time(NULL));
-    std::string quarantinePath = policy.quarantinePath.empty() ? "C:\\Quarantine" : policy.quarantinePath;
+    // Fallback default must match the actual configured quarantine root
+    // (C:\ProgramData\SeceoKnight\quarantine) used everywhere else in the
+    // agent — a mismatched fallback of C:\Quarantine here silently sent
+    // files to a folder the user never checks, for any policy (e.g. a
+    // classification-only "scan everything" policy) that doesn't have an
+    // explicit quarantinePath configured on the server.
+    std::string quarantinePath = policy.quarantinePath.empty() ? "C:\\ProgramData\\SeceoKnight\\quarantine" : policy.quarantinePath;
     std::string quarantineFile = quarantinePath + "\\" + fileName + "_" + timestamp;
     std::string fileKey = usbPath + ":" + fileName;
     
@@ -8177,13 +8183,20 @@ void HandleUSBFileTransferQuarantineNoTimestamp(const std::string& fileName, con
     std::string usbFile = usbPath + "\\" + fileName;
     std::string monitoredFile = monitoredPath + "\\" + relativePath;
     std::string timestamp = std::to_string(time(NULL));
-    std::string quarantinePath = policy.quarantinePath.empty() ? "C:\\Quarantine" : policy.quarantinePath;
+    // Fallback default must match the actual configured quarantine root
+    // (C:\ProgramData\SeceoKnight\quarantine) used everywhere else in the
+    // agent — a mismatched fallback of C:\Quarantine here silently sent
+    // files to a folder the user never checks, for any policy (e.g. a
+    // classification-only "scan everything" policy, which is the one that
+    // fires for a fresh screenshot with no monitoredPaths) that doesn't
+    // have an explicit quarantinePath configured on the server.
+    std::string quarantinePath = policy.quarantinePath.empty() ? "C:\\ProgramData\\SeceoKnight\\quarantine" : policy.quarantinePath;
     std::string quarantineFile = quarantinePath + "\\" + fileName + "_" + timestamp;
-    
+
     if (!fs::exists(usbFile)) return;
-    
+
     bool existsInMonitored = fs::exists(monitoredFile);
-    
+
     logger.Warning("============================================================");
     logger.Warning("  ⚠️ USB FILE TRANSFER QUARANTINED!");
     logger.Warning("============================================================");
