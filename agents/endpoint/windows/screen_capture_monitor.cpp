@@ -127,9 +127,41 @@ void ScreenCaptureMonitor::HandleCaptureAttempt(const std::string& method) {
     std::string windowTitle = GetActiveWindowTitle();
     std::string processName = GetForegroundProcessName();
 
+    // The actual block/allow DECISION has to use the cached flag —
+    // ContentScanThread's most recent classification — because the keyboard
+    // hook that triggers this must return in real time and cannot run OCR
+    // synchronously. actionTaken below reflects that real decision, which
+    // is correct: it's a factual record of what the hook actually did.
     bool isSensitive   = m_screenIsSensitive.load();
-    std::string classification = isSensitive ? "Restricted" : "Public";
-    std::string action         = isSensitive ? "Block"      : "Allow";
+    std::string action = isSensitive ? "Block" : "Allow";
+
+    // CRITICAL FIX: the reported classification/detectedText used to reuse
+    // that SAME cached flag/text — but ContentScanThread only re-scans
+    // every ~1-1.3s, so a screenshot taken between scans got whatever
+    // verdict was cached from up to that long ago. That's fine for the
+    // block decision (unavoidable — has to be fast), but it made the
+    // EVENT itself inconsistent: "sometimes it detects, sometimes it
+    // shows Public" for screenshots of the same sensitive content, purely
+    // depending on timing luck relative to the last scan.
+    //
+    // This function already runs on a detached background thread (see the
+    // callers in LowLevelKeyboardProc), so unlike the hook itself, there's
+    // no real-time constraint here — it can afford a fresh, synchronous
+    // classification of the CURRENT foreground window right now, at the
+    // moment the event is actually being built, instead of trusting a
+    // stale cache. This is what fixes the reported inconsistency: the
+    // classification attached to the event now reflects reality at
+    // capture time, not whatever the last background poll happened to see.
+    std::string classification = "Public";
+    std::string freshText;
+    if (m_classifier) {
+        try {
+            classification = m_classifier(windowTitle, processName, freshText);
+        } catch (...) {
+            classification = "Public";
+        }
+    }
+    bool containsSensitiveData = (classification == "Restricted" || classification == "Confidential");
 
     char username[256] = {0};
     DWORD userSize = sizeof(username);
@@ -141,15 +173,17 @@ void ScreenCaptureMonitor::HandleCaptureAttempt(const std::string& method) {
     event.activeWindow          = windowTitle;
     event.user                  = username;
     event.classification        = classification;
-    event.containsSensitiveData = isSensitive;
+    event.containsSensitiveData = containsSensitiveData;
     event.actionTaken           = action;
     event.timestamp             = GetTimestamp();
-
-    {
+    // Cap at 5000 chars — matches the content-snippet size used elsewhere
+    // in the agent for file/clipboard events, plenty for rule matching
+    // without bloating the event payload. Falls back to the cached scan
+    // text only if this fresh classification found nothing readable
+    // (e.g. classifier unavailable or a transient window slipped through).
+    event.detectedText = !freshText.empty() ? freshText.substr(0, 5000) : std::string();
+    if (event.detectedText.empty()) {
         std::lock_guard<std::mutex> lock(m_scanTextMutex);
-        // Cap at 5000 chars — matches the content-snippet size used
-        // elsewhere in the agent for file/clipboard events, plenty for
-        // rule matching without bloating the event payload.
         event.detectedText = m_lastScannedText.substr(0, 5000);
     }
 

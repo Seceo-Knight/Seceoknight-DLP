@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📸 Screen Capture Events Inconsistently Detected Sensitive Content — Timing Race With the Background Scanner (July 17, 2026)
+
+### Summary
+
+Taking a screenshot of the same kind of sensitive content (email, Study Report keyword, etc.) sometimes produced a correctly-classified event and sometimes came back "Public" with nothing detected — inconsistent across otherwise-identical tests.
+
+### Root cause
+
+`HandleCaptureAttempt()` in screen_capture_monitor.cpp built the reported event's `classification`/`containsSensitiveData`/`detectedText` fields from `m_screenIsSensitive` / `m_lastScannedText` — values set by a *separate background thread* (`ContentScanThread`) that only re-OCRs the foreground window on its own independent ~1-1.3 second cadence. Pressing PrintScreen doesn't wait for that cycle to land — if the screenshot was taken shortly after a scan cycle had already cached a stale verdict (e.g. right after switching windows, or right after typing new content into the same window), the event reported whatever that last cached scan happened to see, not what was actually on screen at capture time. That's an inherent race, not a one-off bug, which is why it looked random from test to test.
+
+Note this only affected the *reported* classification. The real-time block-or-allow decision correctly still uses the fast cached flag, since the keyboard hook that makes that call must return immediately and can't run OCR synchronously — that part was never the problem.
+
+### Fixed
+
+`HandleCaptureAttempt()` already runs on a detached background thread (dispatched from the keyboard hook, not the hook itself), so there's no real-time constraint stopping it from doing a fresh, synchronous classification of the current foreground window at the moment the event is actually built — instead of trusting the potentially-stale cache. It now calls the same classifier used by `ContentScanThread` directly, and only falls back to the cached scan text if the fresh call finds nothing readable. `actionTaken` (Block/Allow) is unchanged and still reflects what the hook actually enforced in real time.
+
+### Verification
+
+Brace-balance check on screen_capture_monitor.cpp/.h: 0 (matches established baseline).
+
+---
+
 ## 🕳️ USB File Transfer Quarantine Never Triggered — Real-Time Evaluation Had No Concept of "Quarantine" (July 17, 2026)
 
 ### Summary
