@@ -15,6 +15,7 @@ import {
   BarChart2,
   UserCog,
   Radar,
+  ClipboardList,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/hooks/usePermission'
@@ -47,6 +48,9 @@ const navigation: NavItem[] = [
   { name: 'Policies',        to: '/policies',      icon: Shield,          requires: ['create_policy', 'update_policy'] },
   { name: 'Reports',         to: '/reports',       icon: BarChart2,       requires: ['view_events'] },
   { name: 'Threat Intel',    to: '/threat-intel',  icon: Radar,           requires: [], adminOnly: true },
+  // /audit-logs/ is also require_role("admin") server-side (audit_logs.py) —
+  // same reasoning as Threat Intel above, gate on the real role.
+  { name: 'Audit Trail',     to: '/audit-trail',   icon: ClipboardList,  requires: [], adminOnly: true },
   { name: 'User Management', to: '/admin/users',   icon: UserCog,         requires: ['manage_users'] },
   { name: 'Settings',        to: '/settings',      icon: Settings,        requires: [] },
 ]

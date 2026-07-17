@@ -8,6 +8,27 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📋 New Feature: Audit Trail Dashboard Page — Ported from CyberSentinel (July 17, 2026)
+
+### Summary
+
+SeceoKnight already has a full audit log backend (`app/models/audit_log.py`, `app/api/v1/audit_logs.py`, `app/services/audit_service.py`) but no dashboard page to view it — admins had no UI way to see who did what. Ported CyberSentinel's `AuditTrail.tsx` page and **wired it into routing and navigation**, which CyberSentinel's own copy is not: it's an orphaned file in their repo — never imported by their `App.tsx` or any nav component, so it's unreachable in their actual running app.
+
+### What it does
+
+A filterable, paginated table of every admin/system action (action type, date range), each row expandable to show the raw `details`/`metadata` JSON. Uses the dashboard's existing `getAuditLogs()`/`getAuditActions()` API functions and `formatDateTimeIST()` util — both already present in `lib/api.ts`/`lib/utils.ts`, so no new dependencies were needed.
+
+### Wiring
+
+- Added the route `audit-trail` → `<AuditTrail />` in `App.tsx`.
+- Added a sidebar nav entry ("Audit Trail", `ClipboardList` icon) gated with `adminOnly: true` — matching the existing "Threat Intel" entry's pattern, since `/audit-logs/` is `require_role("admin")` server-side (coarse role check, not a permission string), same reasoning documented in the `NavItem.adminOnly` comment.
+
+### Verification
+
+`npx tsc --noEmit` shows zero new errors introduced by `AuditTrail.tsx`, `App.tsx`, or `Sidebar.tsx` (only pre-existing unrelated errors in other policy-form components). `npm run build` succeeds. Confirmed the backend response shape (`{logs: [...], total: N}`) matches what the ported page already expects.
+
+---
+
 ## 📧 New Feature: SMTP Relay (Email DLP) — Ported from CyberSentinel (July 17, 2026)
 
 ### Summary
