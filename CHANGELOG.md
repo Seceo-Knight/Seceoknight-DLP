@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🖼️ Snipping Tool Screenshots Never Detected Content — Classifying the Tool's Own Toolbar Instead of the Document Underneath (July 17, 2026)
+
+### Summary
+
+A screenshot taken via Snipping Tool of content containing a "Study Report" keyword match and an IP address still showed the screen_capture event as "Public," no detection. The raw event's `content` field revealed the actual bug: it contained `"@ snipping Tool = o x |\n...\nPress ff + Shift + S to start a snip\n..."` — the OCR had read the Snipping Tool's own toolbar and instructional overlay text, not the document being captured.
+
+### Root cause
+
+`ProcessMonitorThread()` detects a capture-tool process (Snipping Tool, Snip & Sketch, etc.) the moment it appears in the process list and immediately classifies `GetForegroundWindow()` at that instant — but by then the tool has already launched and stolen focus, so the "foreground window" being classified is the tool's own overlay, never the document underneath. This was true both for the tool's own auto-terminate-if-sensitive enforcement check, and — after last session's fix that made `HandleCaptureAttempt()` classify fresh instead of using the cache — also for the reported event, which made this specific case (capture-tool-launch detection) consistently wrong instead of just occasionally stale. Keyboard-triggered captures (PrintScreen, Win+Shift+S) don't have this problem since those keys don't change the foreground window.
+
+### Fixed
+
+Both the auto-terminate check in `ProcessMonitorThread()` and `HandleCaptureAttempt()` (specifically for the `capture_tool` method only) now use the cached `m_screenIsSensitive` / `m_lastScannedText` — maintained continuously by `ContentScanThread` from whatever the last *real* foreground window was — instead of freshly classifying the capture tool's own just-launched window. Keyboard-shortcut-triggered captures are unaffected and still use the fresh classification from the previous fix, since a focus change isn't a concern there.
+
+### Verification
+
+Brace-balance check on screen_capture_monitor.cpp: 0 (matches established baseline).
+
+---
+
 ## 📸 Screen Capture Events Inconsistently Detected Sensitive Content — Timing Race With the Background Scanner (July 17, 2026)
 
 ### Summary

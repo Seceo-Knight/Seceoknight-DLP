@@ -135,30 +135,40 @@ void ScreenCaptureMonitor::HandleCaptureAttempt(const std::string& method) {
     bool isSensitive   = m_screenIsSensitive.load();
     std::string action = isSensitive ? "Block" : "Allow";
 
-    // CRITICAL FIX: the reported classification/detectedText used to reuse
-    // that SAME cached flag/text — but ContentScanThread only re-scans
-    // every ~1-1.3s, so a screenshot taken between scans got whatever
-    // verdict was cached from up to that long ago. That's fine for the
-    // block decision (unavoidable — has to be fast), but it made the
-    // EVENT itself inconsistent: "sometimes it detects, sometimes it
-    // shows Public" for screenshots of the same sensitive content, purely
-    // depending on timing luck relative to the last scan.
+    // The reported classification/detectedText used to reuse that SAME
+    // cached flag/text — but ContentScanThread only re-scans every ~1-1.3s,
+    // so a screenshot taken between scans got whatever verdict was cached
+    // from up to that long ago, making the EVENT inconsistent for
+    // PrintScreen/Win+Shift+S captures (fixed below by classifying fresh).
     //
-    // This function already runs on a detached background thread (see the
-    // callers in LowLevelKeyboardProc), so unlike the hook itself, there's
-    // no real-time constraint here — it can afford a fresh, synchronous
-    // classification of the CURRENT foreground window right now, at the
-    // moment the event is actually being built, instead of trusting a
-    // stale cache. This is what fixes the reported inconsistency: the
-    // classification attached to the event now reflects reality at
-    // capture time, not whatever the last background poll happened to see.
-    std::string classification = "Public";
+    // CRITICAL FIX (capture_tool method specifically): a fresh classify
+    // is only correct when the foreground window HASN'T changed since the
+    // capture action — true for keyboard shortcuts, but NOT for a capture
+    // tool (Snipping Tool, Snip & Sketch, etc.) launching, since by the
+    // time this fires the TOOL itself has already stolen focus. A fresh
+    // classify here would OCR the tool's own toolbar/instructions overlay
+    // ("Press Windows+Shift+S to start a snip") instead of the document
+    // the user is about to capture — confirmed via a raw event showing
+    // exactly that text with classification "Public" despite real
+    // sensitive content (Study Report, an IP address) being on screen
+    // underneath. For capture_tool, use the cached pre-launch state
+    // instead — it reflects whatever the last REAL window was, which is
+    // exactly the content about to be captured.
+    std::string classification;
     std::string freshText;
-    if (m_classifier) {
-        try {
-            classification = m_classifier(windowTitle, processName, freshText);
-        } catch (...) {
-            classification = "Public";
+    if (method == "capture_tool") {
+        bool cachedSensitive = m_screenIsSensitive.load();
+        classification = cachedSensitive ? "Restricted" : "Public";
+        std::lock_guard<std::mutex> lock(m_scanTextMutex);
+        freshText = m_lastScannedText;
+    } else {
+        classification = "Public";
+        if (m_classifier) {
+            try {
+                classification = m_classifier(windowTitle, processName, freshText);
+            } catch (...) {
+                classification = "Public";
+            }
         }
     }
     bool containsSensitiveData = (classification == "Restricted" || classification == "Confidential");
@@ -532,17 +542,27 @@ void ScreenCaptureMonitor::ProcessMonitorThread() {
                             if (knownCapProcesses.find(procName) == knownCapProcesses.end()) {
                                 if (m_logger) m_logger("INFO", "SCREEN_CAPTURE_PROCESS_DETECTED: " + procName);
 
-                                std::string windowTitle = GetActiveWindowTitle();
-                                std::string classification = "Public";
-                                std::string extractedText;
-                                if (m_classifier) classification = m_classifier(windowTitle, procName, extractedText);
-
-                                {
-                                    std::lock_guard<std::mutex> lock(m_scanTextMutex);
-                                    m_lastScannedText = extractedText;
-                                }
-
-                                bool isSensitive = (classification == "Restricted" || classification == "Confidential");
+                                // CRITICAL FIX: this used to call GetActiveWindowTitle()
+                                // + m_classifier() right here — but by the moment a
+                                // capture tool (Snipping Tool, Snip & Sketch, etc.) shows
+                                // up in the process list, IT has already become the
+                                // foreground window and stolen focus. That classified
+                                // the tool's own toolbar/instructions overlay ("Press
+                                // Windows+Shift+S to start a snip"), not the actual
+                                // document/window the user is about to capture — always
+                                // "Public" no matter what's underneath, both here (which
+                                // decided whether to auto-terminate the tool) and in the
+                                // event this fires below via HandleCaptureAttempt().
+                                //
+                                // m_screenIsSensitive / m_lastScannedText are maintained
+                                // continuously by ContentScanThread from whatever the
+                                // REAL foreground window was, and haven't been touched by
+                                // this tool launch (ContentScanThread has its own ~1s
+                                // cadence and doesn't specifically re-target this
+                                // instant) — that cached, pre-launch state is exactly
+                                // what should decide sensitivity here.
+                                bool isSensitive = m_screenIsSensitive.load();
+                                std::string classification = isSensitive ? "Restricted" : "Public";
 
                                 if (isSensitive) {
                                     TerminateProcessByName(procName);
