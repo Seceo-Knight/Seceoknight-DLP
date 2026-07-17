@@ -340,6 +340,40 @@ static bool IsTransientForegroundWindow(HWND hwnd) {
     GetWindowThreadProcessId(hwnd, &fgPid);
     if (fgPid == GetCurrentProcessId()) return true;
 
+    // CRITICAL FIX: also skip windows owned by a known capture-tool process
+    // (Snipping Tool, Snip & Sketch, etc.). Without this, ContentScanThread
+    // would re-classify the tool's OWN toolbar/overlay the instant it grabs
+    // foreground focus (its window class isn't always one of the known UWP
+    // shell classes below) and overwrite m_screenIsSensitive/
+    // m_lastScannedText with that — the tool's UI, not the document behind
+    // it — before HandleCaptureAttempt()/ProcessMonitorThread() ever got a
+    // chance to read the correct pre-launch cache. That's what made the
+    // "use the cached state for capture_tool" fix ineffective: the cache
+    // itself was getting contaminated independently, moments after launch.
+    if (fgPid != 0) {
+        HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, fgPid);
+        if (hProc) {
+            char exeName[MAX_PATH] = {0};
+            DWORD exeNameLen = MAX_PATH;
+            if (QueryFullProcessImageNameA(hProc, 0, exeName, &exeNameLen)) {
+                std::string fullPath(exeName);
+                size_t slash = fullPath.find_last_of("\\/");
+                std::string baseName = (slash == std::string::npos) ? fullPath : fullPath.substr(slash + 1);
+                std::string baseLower = baseName;
+                std::transform(baseLower.begin(), baseLower.end(), baseLower.begin(), ::tolower);
+                for (const auto& capProc : ScreenCaptureMonitor::CAPTURE_PROCESSES) {
+                    std::string capLower = capProc;
+                    std::transform(capLower.begin(), capLower.end(), capLower.begin(), ::tolower);
+                    if (baseLower == capLower) {
+                        CloseHandle(hProc);
+                        return true;
+                    }
+                }
+            }
+            CloseHandle(hProc);
+        }
+    }
+
     char cls[256] = {0};
     if (GetClassNameA(hwnd, cls, sizeof(cls)) > 0) {
         // Known shell / system window classes that should never count as

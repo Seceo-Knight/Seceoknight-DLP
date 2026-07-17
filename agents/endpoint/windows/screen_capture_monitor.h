@@ -38,6 +38,12 @@ public:
                                                          const std::string& processName,
                                                          std::string& outExtractedText)>;
 
+    // Made public (moved up from the private section) so the free-function
+    // IsTransientForegroundWindow() in the .cpp can check a foreground
+    // window's owning process against this same list, without duplicating
+    // it — see the fix note there for why that's needed.
+    static const std::vector<std::string> CAPTURE_PROCESSES;
+
     ScreenCaptureMonitor(CaptureCallback callback, LogCallback logger = nullptr,
                          ClassifyCallback classifier = nullptr);
     ~ScreenCaptureMonitor();
@@ -104,6 +110,4 @@ private:
     // Static instance pointer for the hook callback
     static ScreenCaptureMonitor* s_instance;
     static HHOOK s_keyboardHook;
-
-    static const std::vector<std::string> CAPTURE_PROCESSES;
 };

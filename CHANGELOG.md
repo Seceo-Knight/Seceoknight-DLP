@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🖼️ Snipping Tool Fix Was Ineffective — the Cache Itself Was Getting Contaminated (July 17, 2026 — follow-up)
+
+### Summary
+
+After the previous fix (use the cached pre-launch state instead of freshly classifying Snipping Tool's own window), retesting still showed the exact same symptom: `content` still contained Snipping Tool's own toolbar text, and two consecutive identical screenshots even produced two *different* wrong results (one showing a stray "CONTACT/PHONE" match against garbled OCR noise, the next showing nothing).
+
+### Root cause
+
+The previous fix made `HandleCaptureAttempt()` read the cached `m_screenIsSensitive`/`m_lastScannedText` instead of classifying fresh — but that cache is continuously maintained by a *separate* thread, `ContentScanThread`, which polls the foreground window on its own independent ~1 second cadence regardless of what `ProcessMonitorThread` is doing. Snipping Tool's window wasn't in `IsTransientForegroundWindow()`'s skip-list, so the moment `ContentScanThread`'s own poll cycle landed on Snipping Tool being foreground (which happens almost immediately after launch, independent of the tool-launch detection), it re-classified Snipping Tool's own toolbar and overwrote the shared cache with that — contaminating the exact state the previous fix was relying on to be correct. Two consecutive tests randomly landing on different OCR noise from the toolbar explains the two different (both wrong) results.
+
+### Fixed
+
+`IsTransientForegroundWindow()` now also checks the foreground window's owning process against the same capture-tool list `ProcessMonitorThread` already uses (`SnippingTool.exe`, `ScreenClippingHost.exe`, `ScreenSketch.exe`, etc.) and treats it as transient too — so `ContentScanThread` leaves the cache alone while a capture tool is focused, the same way it already does for the taskbar/desktop/start menu. `CAPTURE_PROCESSES` was moved from private to public on `ScreenCaptureMonitor` so this free function can reference the same list instead of duplicating it.
+
+### Verification
+
+Brace-balance check on screen_capture_monitor.cpp/.h: 0 (matches established baseline).
+
+---
+
 ## 🖼️ Snipping Tool Screenshots Never Detected Content — Classifying the Tool's Own Toolbar Instead of the Document Underneath (July 17, 2026)
 
 ### Summary
