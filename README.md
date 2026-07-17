@@ -5,9 +5,11 @@ SeceoKnight DLP is an enterprise Data Loss Prevention platform. It monitors your
 **What it does:**
 - Monitors file access, USB transfers, clipboard, screen capture, and print jobs on Windows
 - Monitors file system activity on Linux
-- Classifies sensitive content automatically using 20+ detection rules
+- Classifies sensitive content automatically using 20+ detection rules, including inside binary documents (PDF/DOCX/XLSX/PPTX) — not just plain text
 - Enforces policies: block, quarantine, encrypt, or alert
-- Provides a web dashboard to view events, manage policies, and monitor agents
+- Blocks sensitive **cloud uploads** (Drive, Gmail, Dropbox, OneDrive, Box, …) straight from the browser via the Cloud Upload Guard extension (see Step 4)
+- Blocks sensitive **outbound email** at the mail-flow level via the SMTP relay — works with both Google Workspace and Microsoft 365 (see Step 5)
+- Provides a web dashboard to view events, manage policies, and monitor agents, including a full admin **Audit Trail** of who changed what
 - Generates 7 report types: Executive Summary, Policy Violations, Incident Trends, Top Violators, Policy Effectiveness, Compliance Overview, and Incident Detail Report
 - Ingests and shares threat-intelligence indicators (IOCs) via STIX 2.1 / TAXII 2.1 — poll external feeds, add IOCs manually or via CSV/STIX import, and optionally publish your own DLP-derived indicators to partner vendors
 - Supports domain-scoped admin roles (Threat, Data Protection, Access Control) alongside the global Super Admin, so each admin sees and manages only the policies, events, and incidents in their own domain
@@ -137,6 +139,98 @@ sudo systemctl status seceoknight-agent
 
 ---
 
+## Step 4 — Enable the SMTP Relay (Email DLP) — Optional
+
+Blocks outbound email carrying sensitive data (attachments + body) before it
+leaves your organization, whether your org uses **Gmail (Google Workspace)**
+or **Outlook (Microsoft 365 / Exchange Online)** — the relay is a plain SMTP
+server that doesn't care which platform routes mail to it.
+
+1. **Register an agent identity for the relay** — run this once from anywhere
+   that can reach the server (it authenticates to the DLP server like any
+   endpoint agent):
+   ```bash
+   curl -k -X POST https://YOUR_SERVER_IP/api/v1/agents/ \
+     -H "Content-Type: application/json" \
+     -d '{"name": "smtp-relay", "os": "linux", "ip_address": "127.0.0.1"}'
+   ```
+   The response contains `agent_id` and a one-time `api_key` — **copy both now**,
+   the key is never shown again (re-register to get a fresh one if you lose it).
+
+2. **Add the relay's config to `/opt/seceoknight/.env`** on the server:
+   ```
+   RELAY_AGENT_ID=<agent_id from step 1>
+   RELAY_AGENT_KEY=<api_key from step 1>
+   RELAY_NEXT_HOP_HOST=<see step 3>
+   RELAY_NEXT_HOP_PORT=587
+   ```
+
+3. **Point your mail platform's outbound routing at the relay**, and get the
+   right `RELAY_NEXT_HOP_HOST` for your platform:
+   - **Google Workspace** — Admin console → Gmail → Hosts/Routing → outbound
+     gateway. Full walkthrough: [`smtp-relay/README.md` § Google Workspace
+     routing](smtp-relay/README.md#google-workspace-routing-the-deployment-step).
+   - **Microsoft 365 / Exchange Online** — Exchange admin center → Mail flow →
+     Connectors → smart host. Full walkthrough: [`smtp-relay/README.md` §
+     Microsoft 365 / Exchange Online
+     routing](smtp-relay/README.md#microsoft-365--exchange-online-routing-the-deployment-step).
+
+4. **Start the relay:**
+   ```bash
+   cd /opt/seceoknight
+   docker compose -f docker-compose.prod.yml up -d smtp-relay
+   ```
+
+5. **Test it** — send a message containing a fake credit-card/SSN number
+   through your normal mail client. It should bounce with a `550` rejection;
+   clean mail goes through normally. See [`smtp-relay/README.md` §
+   Test](smtp-relay/README.md#test) for a ready-made test script.
+
+Full reference (env vars, limitations, diagram): [`smtp-relay/README.md`](smtp-relay/README.md).
+
+---
+
+## Step 5 — Install the Browser Extension (Cloud Upload Guard) — Optional
+
+Blocks uploads of Confidential/Restricted files to cloud apps (Google Drive,
+Gmail, Dropbox, OneDrive, Box, …) straight from Chrome/Edge on a managed
+Windows endpoint.
+
+1. **Get the extension + native host onto the PC** — copy
+   `agents/browser-extension/` from this repo to the endpoint (e.g.
+   `C:\SeceoKnight\browser-extension\`).
+2. **Load the extension** — `chrome://extensions` (or `edge://extensions`) →
+   Developer mode → Load unpacked → select that folder. Copy the **extension
+   ID** it's assigned (for a managed fleet, push it instead via the
+   `ExtensionInstallForcelist` group policy).
+3. **Build/register the native host** — from an elevated PowerShell:
+   ```powershell
+   cd C:\SeceoKnight\browser-extension\native-host
+   pip install pyinstaller requests
+   pyinstaller --onefile skdlp_host.py
+   mkdir "C:\Program Files\SeceoKnight" -Force
+   copy dist\skdlp_host.exe "C:\Program Files\SeceoKnight\skdlp_host.exe"
+
+   .\install.ps1 `
+     -ExtensionId  <EXTENSION_ID_FROM_STEP_2> `
+     -ServerUrl    https://YOUR_SERVER_IP/api/v1 `
+     -AgentId      <this PC's agent id> `
+     -AgentKey     <this PC's agent API key> `
+     -HostCommand  "C:\Program Files\SeceoKnight\skdlp_host.exe"
+   ```
+   (Reuse this PC's existing endpoint-agent id/key from the Agents page — or
+   register a dedicated one the same way as Step 4.1.)
+4. **Restart the browser fully** and verify the bridge before testing uploads:
+   `chrome://extensions` → the extension → **service worker** → Console →
+   look for `native host reachable (pong)`.
+5. **Test** — upload a plain text file (allowed) and a file with fake PII/credit-card
+   numbers (blocked, red banner + `cloud_upload_prevented` event in the dashboard).
+
+Full step-by-step (with troubleshooting):
+[`agents/browser-extension/INSTALL_WINDOWS.md`](agents/browser-extension/INSTALL_WINDOWS.md).
+
+---
+
 ## Updating to a New Version
 
 ```bash
@@ -238,6 +332,9 @@ docker compose -f docker-compose.prod.yml down
 | [Classification System](CLASSIFICATION_SYSTEM.md) | How sensitive data is detected |
 | [Classification Policies Guide](CLASSIFICATION_POLICIES_GUIDE.md) | How to configure detection policies |
 | [OneDrive Setup](ONEDRIVE_SETUP_GUIDE.md) | Connecting OneDrive cloud monitoring |
+| [SMTP Relay (Email DLP)](smtp-relay/README.md) | Full setup for Google Workspace **and** Microsoft 365, config vars, limitations |
+| [Browser Extension — Windows Install](agents/browser-extension/INSTALL_WINDOWS.md) | Complete step-by-step Cloud Upload Guard install + troubleshooting |
+| [Browser Extension — Overview](agents/browser-extension/README.md) | How it works, components, test steps |
 | [Security Policy](SECURITY.md) | Reporting vulnerabilities |
 | [Changelog](CHANGELOG.md) | Version history |
 

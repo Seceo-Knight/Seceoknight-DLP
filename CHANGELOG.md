@@ -8,6 +8,29 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📖 Main README Had No Setup Steps for the SMTP Relay or Browser Extension (July 17, 2026)
+
+### Summary
+
+The SMTP relay and browser extension were fully built, ported, and documented in their own subdirectory READMEs (`smtp-relay/README.md`, `agents/browser-extension/INSTALL_WINDOWS.md`), but the top-level `README.md` — the file anyone deploying the product actually starts from — never mentioned either feature. A new user following the main README top to bottom would have no idea these features existed, let alone how to turn them on.
+
+### Fixed
+
+- `README.md`: added two new step-by-step sections, **Step 4 — Enable the SMTP Relay (Email DLP)** and **Step 5 — Install the Browser Extension (Cloud Upload Guard)**, both marked Optional, placed right after the Linux Agent step. Each gives the condensed end-to-end path (register an agent identity, set env vars / run `install.ps1`, point the mail platform or browser at it, test) and links out to the full subdirectory guide for details.
+- Added `RELAY_AGENT_ID`/`RELAY_AGENT_KEY` acquisition steps inline (`POST /api/v1/agents/` → one-time `api_key`), matching the actual `register_agent` endpoint contract in `server/app/api/v1/agents.py`.
+- Updated the "What it does" bullet list to mention binary-document classification, Cloud Upload Guard, the SMTP relay (both Gmail and Outlook), and the Audit Trail page.
+- Updated the Documentation table with links to `smtp-relay/README.md` and both browser-extension docs.
+
+### Verification
+
+Re-read the full `README.md` end-to-end; confirmed the new sections' links to `smtp-relay/README.md#google-workspace-routing-the-deployment-step` and `#microsoft-365--exchange-online-routing-the-deployment-step` match that file's actual header slugs (checked earlier this session). Confirmed the `POST /agents/` request body shown matches the real `AgentCreate` model (`name`, `os`, `ip_address` required) and that the response contains `agent_id` + a one-time `api_key`, by reading `server/app/api/v1/agents.py`'s `register_agent()`.
+
+### Result
+
+Everything shipped this session (document extraction, browser extension, SMTP relay for both Gmail and Outlook, Audit Trail) is now discoverable and configurable directly from the main README — no need to already know a subdirectory exists.
+
+---
+
 ## 📧 SMTP Relay Docs Were Google-Only — Added Microsoft 365 / Exchange Online Routing (July 17, 2026)
 
 ### Summary
