@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🕳️ USB File Transfer Quarantine Never Triggered — Real-Time Evaluation Had No Concept of "Quarantine" (July 17, 2026)
+
+### Summary
+
+With a path-based ("monitoredPaths") USB File Transfer policy set to quarantine, copying a sensitive file (`Configuration.docx`, `MicrosoftAzure.txt`, `Fail2Ban.txt`) onto a USB drive logged "Traditional Policy: USB File Transfer (action: quarantine)" and then... nothing. No block, no quarantine, no error — the file just stayed on the USB drive with no further log output for that transfer at all, across every single test.
+
+### Root cause
+
+Two matching bugs, one on each side of the real-time classification call:
+
+1. **Server** (`server/app/api/v1/agents.py`, `evaluate_policy_realtime()`): the loop that reads each matched policy's configured actions only recognized `action_type == "block"` and `"alert"` — there was no `elif action_type == "quarantine"` case at all. So a quarantine-actioned policy's action was silently ignored, and the endpoint always fell through to its final `action = "block" if should_block else "allow"` — meaning quarantine policies were unconditionally reported back as `"allow"`.
+2. **Agent** (`agent.cpp`, `EvaluatePolicyRealtime()`): even if the server had reported the action correctly, the agent computed `result.shouldBlock = (result.action == "block")` and every USB-file-transfer call site branched only on that boolean — `if (evalResult.shouldBlock) { BLOCK } else { ALLOWED }`. There was no path for "quarantine" at all; it would have been funneled into the same "allowed" branch as truly benign content.
+
+Together: any USB file transfer policy configured for quarantine (going through the real-time classification path, which is the normal/common case whenever the classification API call succeeds) was **always silently allowed**, with no enforcement action and no error indicating why.
+
+### Fixed
+
+- `agents.py`: added the missing `elif action_type == "quarantine": should_quarantine = True` case, with response precedence block > quarantine > alert > allow (matching the precedence already used elsewhere, e.g. `agent_policy_transformer.py`).
+- `agent.cpp`: both `CheckUSBDriveForMonitoredFiles()` call sites (path-based and classification-only) now dispatch on `evalResult.action` directly (`"block"` / `"quarantine"` / else-allowed) instead of the `shouldBlock` bool that only ever recognized `"block"`, and call `HandleUSBFileTransferQuarantineNoTimestamp()` on the new quarantine branch.
+
+### Verification
+
+Server: `python3 -c "import ast; ast.parse(...)"` — no syntax errors. Agent: brace-balance check on agent.cpp: -5 (matches established baseline).
+
+---
+
 ## 🔌 Agent Goes "Offline" When Idle/Locked, Machine's Copy-Paste Breaks, No Auto-Reconnect on Unlock (July 17, 2026)
 
 ### Summary

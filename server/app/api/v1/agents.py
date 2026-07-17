@@ -1077,6 +1077,7 @@ async def evaluate_policy_realtime(
 
         # 4. Determine action based on matched policies
         should_block = False
+        should_quarantine = False
         should_alert = False
         alert_severity = None
         triggered_policies = []
@@ -1094,6 +1095,15 @@ async def evaluate_policy_realtime(
                 action_type = action.get("type") or action.get("action")
                 if action_type == "block":
                     should_block = True
+                elif action_type == "quarantine":
+                    # CRITICAL FIX: this case was missing entirely, so a
+                    # quarantine-actioned USB file transfer policy always
+                    # fell through to the final "allow" default below — the
+                    # real-time evaluation had no way to tell the agent
+                    # "quarantine this" instead of just "block" or "allow".
+                    # The file was silently left in place with no
+                    # enforcement action taken at all.
+                    should_quarantine = True
                 elif action_type == "alert":
                     should_alert = True
                     # Get highest severity
@@ -1103,7 +1113,15 @@ async def evaluate_policy_realtime(
                             alert_severity = action_severity
 
         # 5. Build response
-        action = "block" if should_block else "allow"
+        # Precedence: block > quarantine > alert > allow (matches the same
+        # precedence used elsewhere for policy enforcement, e.g.
+        # agent_policy_transformer.py's _serialize_policy()).
+        if should_block:
+            action = "block"
+        elif should_quarantine:
+            action = "quarantine"
+        else:
+            action = "allow"
 
         # Build detailed reason
         if classification_result.matched_rules:
@@ -1117,6 +1135,8 @@ async def evaluate_policy_realtime(
 
         if should_block:
             reason = f"BLOCKED - {reason}"
+        elif should_quarantine:
+            reason = f"QUARANTINED - {reason}"
 
         logger.info(
             "Policy evaluation complete",

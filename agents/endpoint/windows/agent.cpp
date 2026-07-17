@@ -7219,8 +7219,19 @@ if (shouldMonitor) {
 
     // Real-time classification evaluation result
     struct PolicyEvaluationResult {
+        // CRITICAL FIX: shouldBlock used to be the ONLY signal callers
+        // checked, and it was only ever set true for action == "block".
+        // The server can also return "quarantine" (once
+        // evaluate_policy_realtime() learned about that action type — see
+        // agents.py fix), which every USB file transfer call site here was
+        // silently treating as "allow" since it wasn't literally "block".
+        // A quarantine-actioned policy's real-time evaluation therefore
+        // always resulted in the file being let through with no
+        // enforcement action at all. Callers should dispatch on `action`
+        // directly ("block" / "quarantine" / "allow") rather than this
+        // bool; kept only for any existing caller that still checks it.
         bool shouldBlock;
-        std::string action;  // "allow" or "block"
+        std::string action;  // "allow", "block", or "quarantine"
         std::string reason;
         std::string classificationLevel;  // "Public", "Internal", "Confidential", "Restricted"
         double confidenceScore;
@@ -7538,8 +7549,12 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                                                       matchedMonitoredPath, policy);
                         }
                     } else {
-                        // Use classification-aware decision
-                        if (evalResult.shouldBlock) {
+                        // CRITICAL FIX: dispatch on the actual action string
+                        // ("block" / "quarantine" / "allow"), not just the
+                        // shouldBlock bool — that only recognized "block",
+                        // so a quarantine-actioned policy always fell into
+                        // the "allowed" branch below with zero enforcement.
+                        if (evalResult.action == "block") {
                             logger.Warning("============================================================");
                             logger.Warning("  🚫 CONTENT-AWARE BLOCKING TRIGGERED!");
                             logger.Warning("============================================================");
@@ -7562,6 +7577,24 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                                                       evalResult.classificationLevel,
                                                       evalResult.confidenceScore,
                                                       evalResult.matchedRules);
+                        } else if (evalResult.action == "quarantine") {
+                            logger.Warning("============================================================");
+                            logger.Warning("  ⚠️ CONTENT-AWARE QUARANTINE TRIGGERED!");
+                            logger.Warning("============================================================");
+                            logger.Warning("  File: " + fileName);
+                            logger.Warning("  Classification: " + evalResult.classificationLevel);
+                            logger.Warning("  Confidence: " + std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "%");
+                            logger.Warning("  Reason: " + evalResult.reason);
+                            if (!evalResult.matchedRules.empty()) {
+                                logger.Warning("  Sensitive data detected:");
+                                for (size_t i = 0; i < evalResult.matchedRules.size() && i < 10; i++) {
+                                    logger.Warning("    • " + evalResult.matchedRules[i]);
+                                }
+                            }
+                            logger.Warning("============================================================");
+
+                            HandleUSBFileTransferQuarantineNoTimestamp(fileName, meta.relativePath, drivePath,
+                                                           matchedMonitoredPath, policy);
                         } else {
                             logger.Info("✅ File ALLOWED - Classification: " + evalResult.classificationLevel +
                                        " (" + std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "% confidence)");
@@ -7669,7 +7702,7 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                             HandleUSBFileTransferAlertNoTimestamp(
                                 fileName, fileName, drivePath, drivePath, policy);
                         }
-                    } else if (evalResult.shouldBlock) {
+                    } else if (evalResult.action == "block") {
                         logger.Warning("🚫 CONTENT-AWARE BLOCK: " + fileName +
                                       " (" + evalResult.classificationLevel + " " +
                                       std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "%)");
@@ -7679,6 +7712,19 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                             evalResult.confidenceScore,
                             evalResult.matchedRules);
                         // Reset classifKey so the same file can be detected if re-copied
+                        currentUSBFileState.erase(classifKey);
+                    } else if (evalResult.action == "quarantine") {
+                        // CRITICAL FIX: this branch didn't exist before —
+                        // "quarantine" was falling through to the ALLOWED
+                        // branch below (evalResult.shouldBlock only ever
+                        // recognized "block"), so a quarantine policy's
+                        // real-time evaluation never actually quarantined
+                        // anything.
+                        logger.Warning("⚠️ CONTENT-AWARE QUARANTINE: " + fileName +
+                                      " (" + evalResult.classificationLevel + " " +
+                                      std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "%)");
+                        HandleUSBFileTransferQuarantineNoTimestamp(
+                            fileName, fileName, drivePath, drivePath, policy);
                         currentUSBFileState.erase(classifKey);
                     } else {
                         logger.Info("✅ ALLOWED: " + fileName +
