@@ -15,7 +15,8 @@ There are two pieces:
 - Windows 10/11 with **Chrome** or **Microsoft Edge**.
 - **Python 3.8+** on the machine, with the `requests` package
   (`pip install requests`) — *or* build the host as an `.exe` (Step 3, Option A).
-- Network access from this PC to the DLP server (`https://<server>/api/v1`).
+- Network access from this PC to the DLP server (`http://<server>/api/v1` —
+  see the note in Step 4; plain HTTP is correct here, not HTTPS).
 - An identity for the native host to authenticate with. Two ways to get one
   (see Step 5):
   - **Recommended:** the main SeceoKnight endpoint agent already installed
@@ -94,9 +95,13 @@ From the `native-host` folder, in an **elevated PowerShell** (Run as admin):
 cd C:\SeceoKnight\browser-extension\native-host
 .\install.ps1 `
   -ExtensionId  <PASTE_EXTENSION_ID_FROM_STEP_2> `
-  -ServerUrl    https://<your-dlp-server>/api/v1 `
+  -ServerUrl    http://<your-dlp-server>/api/v1 `
   -HostCommand  "C:\Program Files\SeceoKnight\skdlp_host.exe"   # or the .bat
 ```
+> Use `http://`, not `https://`. Nginx deliberately leaves port 80's `/api/`
+> path open for plain-HTTP agent traffic (same path the main endpoint agent
+> uses), so there's no self-signed certificate to worry about here.
+
 It auto-discovers the identity from `C:\ProgramData\SeceoKnight\
 agent_key.json` (written by the endpoint agent after it registers — see
 Step 5) and prints `Reusing endpoint agent identity from: ...` to confirm.
@@ -107,7 +112,7 @@ identity explicitly:
 cd C:\SeceoKnight\browser-extension\native-host
 .\install.ps1 `
   -ExtensionId  <PASTE_EXTENSION_ID_FROM_STEP_2> `
-  -ServerUrl    https://<your-dlp-server>/api/v1 `
+  -ServerUrl    http://<your-dlp-server>/api/v1 `
   -AgentId      <this PC's agent id> `
   -AgentKey     <this PC's agent API key> `
   -HostCommand  "C:\Program Files\SeceoKnight\skdlp_host.exe"   # or the .bat
@@ -129,10 +134,12 @@ The host authenticates to the server exactly like the endpoint agent (the
 - **Standalone identity** (no endpoint agent on this PC): register one
   yourself —
   ```bash
-  curl -k -X POST https://<your-dlp-server>/api/v1/agents/ \
+  curl -X POST http://<your-dlp-server>/api/v1/agents/ \
     -H "Content-Type: application/json" \
     -d '{"name": "browser-ext-<hostname>", "os": "windows", "ip_address": "<this PCs IP>"}'
   ```
+  (Plain `http://` on port 80, same reasoning as Step 4 above — no `-k` flag
+  needed since there's no certificate involved on this path.)
   Copy `agent_id`/`api_key` from the response — shown once, at registration.
   If you lose it, re-run the same command to get a fresh key.
 

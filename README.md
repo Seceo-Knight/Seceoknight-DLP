@@ -397,6 +397,13 @@ network drive, a zip file over email/USB, or `git clone` if the PC has git.
 
 ### 5.4 — Build and register the native host
 
+This step needs **Python** on this PC (most Windows PCs don't have it by
+default — this is different from PowerShell, which is already built in). If
+`python --version` in PowerShell shows an error instead of a version number,
+install it first from [python.org/downloads](https://www.python.org/downloads/) —
+when running the installer, make sure to tick **"Add python.exe to PATH"**
+on the first screen, otherwise the commands below won't be found.
+
 Open PowerShell **as Administrator** (right-click PowerShell → "Run as
 administrator"), then run:
 ```powershell
@@ -493,7 +500,10 @@ built-in list (Gmail, Outlook, Drive, Dropbox, OneDrive, Box, Slack, and a
 few others are covered automatically), you can add it from the dashboard —
 no reinstalling or redeploying anything to any PC required.
 
-1. Log into the dashboard as an **admin** account.
+1. Log into the dashboard as the **Super Admin** account (the global admin
+   account created during Step 1 — a domain-scoped admin such as Threat,
+   Data Protection, or Access Control admin won't see this section, since
+   it affects every domain fleet-wide).
 2. Go to **Settings**.
 3. Scroll to the section titled **"Cloud Upload Guard — Extra
    Destinations."**
