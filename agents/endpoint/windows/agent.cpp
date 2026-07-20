@@ -1284,6 +1284,17 @@ void Log(const std::string& level, const std::string& message) {
         std::string agentId;
         std::string agentName;
         std::string serverUrl;
+        // The server-issued API key from registration (POST /agents ->
+        // response.api_key). Historically never captured — RegisterAgent()
+        // only checked the HTTP status — so the agent had no credential of
+        // its own to hand to anything else that needed to authenticate as
+        // this same agent (e.g. the browser extension's native host, which
+        // previously required its own, separately-registered identity per
+        // machine — impractical at fleet scale). Persisted via
+        // SaveApiKeyFile() (NOT SaveToFile() — see that method's comment for
+        // why) so install.ps1 for the browser extension can read it and
+        // reuse this agent's identity instead of registering a new one.
+        std::string apiKey;
         int heartbeatInterval = 3;
         int policySyncInterval = 60;
         
@@ -1399,7 +1410,14 @@ void Log(const std::string& level, const std::string& message) {
                 } else {
                     agentId = GenerateUUID();
                 }
-                
+
+                // Extract api_key, if this config was previously saved after
+                // a successful registration (see RegisterAgent()). Empty on
+                // first run / older configs predating this — that's fine,
+                // RegisterAgent() will populate and persist it once it gets
+                // a successful response from the server.
+                apiKey = ExtractJsonValue(content, "api_key");
+
                 // Extract heartbeat_interval
                 std::string hbInterval = ExtractJsonValue(content, "heartbeat_interval");
                 if (!hbInterval.empty()) {
@@ -1504,6 +1522,21 @@ void Log(const std::string& level, const std::string& message) {
                 return;
             }
             
+            // Deliberately NOT writing api_key here. This method does a full
+            // overwrite of `path` — which install-agent.ps1 uses for
+            // C:\Program Files\SeceoKnight\agent_config.json, a location the
+            // scheduled task runs against as a standard, non-elevated user
+            // (RunLevel Limited — same reason the Logger's default path had
+            // to move out of Program Files earlier in this project). Two
+            // problems with persisting the key here instead of via
+            // SaveApiKeyFile(): (1) this write would very likely fail
+            // silently (falls into the "Could not create config file"
+            // branch above) since Program Files isn't writable by that
+            // account, and (2) this method only knows about
+            // server_url/agent_id/agent_name/intervals — it doesn't
+            // preserve quarantine_path/log_path/cache_path, which
+            // install-agent.ps1 also writes into this same file, so any
+            // successful call here would silently wipe those out.
             file << "{\n";
             file << "  \"server_url\": \"" << serverUrl << "\",\n";
             file << "  \"agent_id\": \"" << agentId << "\",\n";
@@ -1511,10 +1544,32 @@ void Log(const std::string& level, const std::string& message) {
             file << "  \"heartbeat_interval\": " << heartbeatInterval << ",\n";
             file << "  \"policy_sync_interval\": " << policySyncInterval << "\n";
             file << "}\n";
-            
+
             file.close();
-            
+
             std::cout << "Configuration saved to: " << path << std::endl;
+        }
+
+        // Persists just {agent_id, api_key} to a small, separate file — see
+        // the comment in SaveToFile() for why this can't just be folded into
+        // that method. install-agent.ps1 pre-creates C:\ProgramData\
+        // SeceoKnight\ (and its quarantine/logs/cache subfolders) as
+        // writable by the same standard user the agent's scheduled task
+        // runs as, so this location is expected to actually succeed where
+        // Program Files would not. The browser extension's install.ps1
+        // reads this file to reuse this agent's identity instead of
+        // requiring its own separate registration per machine.
+        void SaveApiKeyFile(const std::string& path) const {
+            std::ofstream file(path);
+            if (!file.is_open()) {
+                std::cerr << "WARNING: Could not write agent key file: " << path << std::endl;
+                return;
+            }
+            file << "{\n";
+            file << "  \"agent_id\": \"" << agentId << "\",\n";
+            file << "  \"api_key\": \"" << apiKey << "\"\n";
+            file << "}\n";
+            file.close();
         }
     };
  
@@ -3093,9 +3148,9 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
 }
      
  public:
-     DLPAgent(const std::string& configPath = "agent_config.json") 
+     DLPAgent(const std::string& configPath = "agent_config.json")
          : config(configPath) {
-         
+
          httpClient = std::make_shared<HttpClient>(config.serverUrl);
 
          if (config.GetQuarantine().enabled) {
@@ -3723,9 +3778,31 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              
              std::pair<int, std::string> reg = GetHttpClient()->Post("/agents", json.Build());
              auto& [status, response] = reg;
-             
+
              if (status == 200 || status == 201) {
                  logger.Info("Agent registered with server");
+
+                 // Capture the server-issued api_key (see AgentConfig::apiKey
+                 // for why: previously this response was only checked for
+                 // status and the key was discarded, so nothing on this
+                 // machine had a reusable credential for this agent's
+                 // identity — the browser extension's native host needed its
+                 // own, separately-registered identity as a workaround,
+                 // which doesn't scale past a handful of machines. Only
+                 // re-save when the key actually changed, to avoid a
+                 // pointless disk write on every agent restart (RegisterAgent()
+                 // runs once per Start(), i.e. every process/service start).
+                 //
+                 // Written to C:\ProgramData\SeceoKnight\agent_key.json, NOT
+                 // to agent_config.json in Program Files — see the comment
+                 // in AgentConfig::SaveToFile() for why that path isn't safe
+                 // to rewrite from here.
+                 std::string returnedKey = config.ExtractJsonValue(response, "api_key");
+                 if (!returnedKey.empty() && returnedKey != config.apiKey) {
+                     config.apiKey = returnedKey;
+                     config.SaveApiKeyFile("C:\\ProgramData\\SeceoKnight\\agent_key.json");
+                     logger.Info("Agent api_key captured and saved to C:\\ProgramData\\SeceoKnight\\agent_key.json");
+                 }
              } else if (status == 0) {
                  logger.Error("Cannot connect to server at " + config.serverUrl);
                  logger.Error("Please ensure the server is running and accessible");

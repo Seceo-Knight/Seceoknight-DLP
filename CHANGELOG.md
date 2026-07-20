@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔑 Agent Now Persists Its Own api_key — Browser Extension Can Reuse It (No More Per-Machine Registration) (July 20, 2026)
+
+### Summary
+
+Flagged earlier this session as a real fleet-scale concern: the browser extension's native host needs its own registered agent identity, and until now that meant a separate manual `curl` registration per machine — impractical past a handful of endpoints. Root cause: `RegisterAgent()` in `agent.cpp` sent the registration request but only ever checked the HTTP status — the server-issued `api_key` in the response was read nowhere and discarded, so the endpoint agent had no credential of its own to hand to anything else, including the extension.
+
+### Fixed
+
+- `AgentConfig` gains an `apiKey` member, extracted from the registration response's `api_key` field in `RegisterAgent()`.
+- Persisted via a new `AgentConfig::SaveApiKeyFile()` to `C:\ProgramData\SeceoKnight\agent_key.json` — deliberately **not** folded into the existing `SaveToFile()` (which owns `C:\Program Files\SeceoKnight\agent_config.json`). Two reasons: the agent's scheduled task runs as a standard, non-elevated user (`RunLevel Limited`) that can't write to Program Files — the exact same class of bug already fixed once for the Logger's default path earlier in this project — and `SaveToFile()` doesn't know about the `quarantine_path`/`log_path`/`cache_path` keys `install-agent.ps1` also writes into that file, so rewriting it from `RegisterAgent()` would have silently wiped those out. `C:\ProgramData\SeceoKnight\` is already proven writable by this exact process (quarantine/logs/cache already live there).
+- `agents/browser-extension/native-host/install.ps1`: `-AgentId`/`-AgentKey` are now optional. When omitted, the script reads them from `C:\ProgramData\SeceoKnight\agent_key.json` (falling back to an explicit error telling the admin to either update the agent first or pass the values explicitly). The main agent must already be installed and have registered at least once.
+
+### Result
+
+At fleet scale, setting up the browser extension on a machine that already has the endpoint agent installed no longer needs a separate manual registration step — `install.ps1` just reuses the agent's own identity, and browser-extension events now show up under the same agent record as that machine's real endpoint agent. Passing `-AgentId`/`-AgentKey` explicitly is still supported for a standalone/distinct identity.
+
+### Verification
+
+No C++ compiler is available in this environment (agent.cpp is Windows-only, depends on `windows.h`/`wincrypt.h`/etc.), so this was verified by careful manual review only: the diff was re-read in full, brace/paren balance around the specific edited regions was checked, and the exact call chain (`AgentConfig::apiKey` → `RegisterAgent()` → `SaveApiKeyFile()` → `install.ps1`) was traced end to end. **Real verification requires GitHub Actions' `build-windows-agent.yml` to actually compile this on a Windows runner, then a live install + registration test.** Do not treat this as verified until CI is green and it's been tested on a real machine.
+
+### Not yet done
+
+Distinguishing which physical machine a browser-extension event came from: `emit_event()` in `skdlp_host.py` doesn't send a hostname today, so under either the old (per-machine) or new (shared with the main agent) identity model, the dashboard's "Agent" column doesn't by itself tell you which machine fired a given cloud-upload event — a possible follow-up if that's needed.
+
+---
+
 ## 🔍 Gmail/Filebin Uploads Not Blocked — Content Was Never Actually Extracted (July 20, 2026)
 
 ### Summary
