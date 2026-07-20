@@ -8,6 +8,29 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 💥 install.ps1 Crashed With "Unexpected token" — Em-Dash Mojibake Breaking the PowerShell Parser (July 20, 2026)
+
+### Summary
+
+Live-reproduced by the user: running the browser extension's `install.ps1` (downloaded via `Invoke-WebRequest -OutFile`, then executed as `.\install.ps1 ...`) failed with cryptic parser errors — `Unexpected token '" +'`, `Missing closing ')'`, `The string is missing the terminator: '`.
+
+### Root cause
+
+The script's comments and one `throw (...)` error-message string used a Unicode em-dash (`—`, U+2014). The file is authored/served as UTF-8 with no BOM. Windows PowerShell 5.1's script-file parser (not `irm | iex`, which decodes into an in-memory string first and doesn't hit this) falls back to the system ANSI codepage when there's no BOM to detect UTF-8 from, so the em-dash's 3 UTF-8 bytes get misread as several separate mojibake characters (`â€”`). Where that corruption landed inside an actual string literal (`throw (... "api_key — " + ...)`), the mangled bytes broke the tokenizer outright — not just a display glitch, an actual crash.
+
+This didn't show up during my own review because I never round-tripped the file through Windows' file-encoding path in this sandbox (no PowerShell interpreter available here) — only `node --check`/`python3 -m py_compile`-equivalent structural checks were possible, which don't catch this class of bug at all.
+
+### Fixed
+
+- `agents/browser-extension/native-host/install.ps1`: every em-dash replaced with a plain ASCII ` - `.
+- `install-agent.ps1` (the main one-liner agent installer): same sweep, even though it currently isn't hit in practice — it's normally run via `irm ... | iex`, which sidesteps this exact bug by never re-parsing the script from a saved file. But it contains 43 non-ASCII characters (em-dashes and box-drawing separator characters, `─`) inside real `Write-ColorOutput "..."` string literals, several of which would crash exactly the same way if anyone ever downloads it to disk and runs it directly (a completely reasonable thing for an IT admin to do before running an admin-elevated script) instead of the documented one-liner. Fixed proactively before anyone hits it, given this is the very first script most users run.
+
+### Verification
+
+`python3` scan confirms zero non-ASCII characters remain in either file. Brace/paren counts re-checked (install-agent.ps1: perfectly balanced 98/98 braces, 148/148 parens; install.ps1: unchanged from before, previously verified by manual line-by-line review). No Windows PowerShell interpreter available in this environment to literally re-run the script — the user's own retry after this fix is the real verification.
+
+---
+
 ## 🔐 SMTP Relay Had No Inbound TLS — Added STARTTLS Support (July 20, 2026)
 
 ### Summary

@@ -1,4 +1,4 @@
-# SeceoKnight DLP Agent — Windows installation script
+# SeceoKnight DLP Agent  - Windows installation script
 # Requires Administrator privileges.
 #
 # Usage (one-liner):
@@ -8,7 +8,7 @@
 #   1. Validates server connectivity (IP or DNS hostname).
 #   2. Cleans previous installs (scheduled task, service, running process).
 #   3. Installs Chocolatey + Tesseract + Poppler for OCR (screenshots,
-#      image files, USB-transferred images, clipboard paste, and PDFs —
+#      image files, USB-transferred images, clipboard paste, and PDFs  -
 #      only if missing).
 #   4. Downloads seceoknight_agent.exe from the repo, verifies its
 #      SHA-256 against the sidecar manifest in the repo, and refuses to
@@ -193,7 +193,7 @@ Write-Host ""
 
 # Step 4: Install OCR dependencies (Chocolatey + Tesseract + Poppler)
 # Tesseract is used by the screen-capture classifier as its Stage 4 OCR
-# fallback — it lets the agent read text from a screenshot when window-
+# fallback  - it lets the agent read text from a screenshot when window-
 # text extraction doesn't find anything. It's also used to OCR image
 # files being written/saved, copied to USB, or pasted from the
 # clipboard. Poppler (pdftotext + pdftoppm) extends that coverage to
@@ -209,7 +209,7 @@ function Test-CommandExists {
 }
 
 function Install-Chocolatey {
-    Write-ColorOutput "  Chocolatey not found — installing..." -Type "Warning"
+    Write-ColorOutput "  Chocolatey not found  - installing..." -Type "Warning"
     try {
         Set-ExecutionPolicy Bypass -Scope Process -Force
         # TLS 1.2 is required by chocolatey.org
@@ -240,7 +240,7 @@ function Install-Chocolatey {
 }
 
 function Install-Tesseract {
-    Write-ColorOutput "  Tesseract not found — installing via choco..." -Type "Warning"
+    Write-ColorOutput "  Tesseract not found  - installing via choco..." -Type "Warning"
     try {
         # -y auto-confirms; --no-progress keeps logs clean
         $proc = Start-Process -FilePath "choco" `
@@ -277,7 +277,7 @@ function Install-Tesseract {
 }
 
 function Install-Poppler {
-    Write-ColorOutput "  Poppler not found — installing via choco..." -Type "Warning"
+    Write-ColorOutput "  Poppler not found  - installing via choco..." -Type "Warning"
     try {
         # -y auto-confirms; --no-progress keeps logs clean
         $proc = Start-Process -FilePath "choco" `
@@ -323,28 +323,28 @@ if ($chocoOk) {
     } else {
         $tessOk = Install-Tesseract
         if (-not $tessOk) {
-            Write-ColorOutput "  Tesseract install incomplete — screenshot OCR fallback will be disabled" -Type "Warning"
+            Write-ColorOutput "  Tesseract install incomplete  - screenshot OCR fallback will be disabled" -Type "Warning"
             Write-ColorOutput "  After this script finishes, run: choco install tesseract -y" -Type "Warning"
         }
     }
 } else {
-    Write-ColorOutput "  Skipping Tesseract — Chocolatey is not available" -Type "Warning"
+    Write-ColorOutput "  Skipping Tesseract  - Chocolatey is not available" -Type "Warning"
     Write-ColorOutput "  Install manually from https://github.com/UB-Mannheim/tesseract/wiki, then re-run this script" -Type "Warning"
 }
 
-# 4c. Poppler (pdftotext + pdftoppm — PDF text extraction and OCR fallback for scanned PDFs)
+# 4c. Poppler (pdftotext + pdftoppm  - PDF text extraction and OCR fallback for scanned PDFs)
 if ($chocoOk) {
     if (Test-CommandExists "pdftotext") {
         Write-ColorOutput "  Poppler already installed" -Type "Success"
     } else {
         $popplerOk = Install-Poppler
         if (-not $popplerOk) {
-            Write-ColorOutput "  Poppler install incomplete — PDF text/OCR extraction will be disabled" -Type "Warning"
+            Write-ColorOutput "  Poppler install incomplete  - PDF text/OCR extraction will be disabled" -Type "Warning"
             Write-ColorOutput "  After this script finishes, run: choco install poppler -y" -Type "Warning"
         }
     }
 } else {
-    Write-ColorOutput "  Skipping Poppler — Chocolatey is not available" -Type "Warning"
+    Write-ColorOutput "  Skipping Poppler  - Chocolatey is not available" -Type "Warning"
     Write-ColorOutput "  Install manually from https://github.com/oschwartz10612/poppler-windows/releases, then re-run this script" -Type "Warning"
 }
 
@@ -370,21 +370,21 @@ try {
 
 # SECURITY: verify the binary's SHA-256 against the sidecar file checked
 # into the repo. If the sidecar is not yet published (first-time rollout),
-# emit a clear warning but continue — the operator can gate deployment on
+# emit a clear warning but continue  - the operator can gate deployment on
 # signed releases once the sidecar is in place.
 $expectedHash = $null
 try {
     Write-ColorOutput "Fetching integrity manifest: $sumUrl" -Type "Info"
     $expectedHash = (Invoke-WebRequest -Uri $sumUrl -UseBasicParsing -ErrorAction Stop).Content.Trim().Split()[0].ToUpper()
 } catch {
-    Write-ColorOutput "WARNING: no SHA-256 sidecar at $sumUrl — skipping integrity check." -Type "Warning"
+    Write-ColorOutput "WARNING: no SHA-256 sidecar at $sumUrl  - skipping integrity check." -Type "Warning"
     Write-ColorOutput "  Create one at repo root/.../seceoknight_agent.exe.sha256 to gate installs." -Type "Warning"
 }
 
 if ($expectedHash) {
     $actualHash = (Get-FileHash -Algorithm SHA256 -Path $exePath).Hash.ToUpper()
     if ($actualHash -ne $expectedHash) {
-        Write-ColorOutput "CRITICAL: SHA-256 mismatch — refusing to install a tampered binary." -Type "Error"
+        Write-ColorOutput "CRITICAL: SHA-256 mismatch  - refusing to install a tampered binary." -Type "Error"
         Write-ColorOutput "  expected: $expectedHash" -Type "Error"
         Write-ColorOutput "  actual  : $actualHash"   -Type "Error"
         Remove-Item $exePath -Force -ErrorAction SilentlyContinue
@@ -446,7 +446,7 @@ $config | ConvertTo-Json -Depth 4 | Out-File -FilePath $configPath -Encoding UTF
 Write-ColorOutput "Configuration created: $configPath" -Type "Success"
 Write-Host ""
 
-# Step 8: (Skipped — no VBScript launcher needed; exe has built-in --bg mode)
+# Step 8: (Skipped  - no VBScript launcher needed; exe has built-in --bg mode)
 Write-ColorOutput "Step 8: Skipping VBScript launcher (exe has built-in background mode)..." -Type "Info"
 Write-Host ""
 
@@ -476,7 +476,7 @@ try {
     $triggerStartup.Delay = "PT30S"
 
     # Principal: run at normal user privilege (Interactive, RunLevel Limited).
-    # This is essential — clipboard hooks and keyboard/mouse event monitoring
+    # This is essential  - clipboard hooks and keyboard/mouse event monitoring
     # require the process to run in the same security context as the desktop.
     # Running elevated (RunLevel Highest) isolates the process from non-elevated
     # apps and silently breaks all hook-based monitoring.  USB block via registry
@@ -508,7 +508,7 @@ try {
     Write-ColorOutput "Task Name: $TASK_NAME" -Type "Info"
     Write-ColorOutput "Agent will start automatically at logon and restart if it ever stops." -Type "Success"
 
-    # ── USB block: one-shot elevated task at startup ─────────────────────────
+    # -- USB block: one-shot elevated task at startup -------------------------
     # The main agent runs at normal privilege (required for clipboard/hooks).
     # USB drive blocking via the USBSTOR registry key needs elevation.
     # Register a separate task that runs once at startup as SYSTEM to set it.

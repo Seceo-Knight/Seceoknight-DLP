@@ -10,7 +10,7 @@
 
   -AgentId / -AgentKey are now OPTIONAL. If you omit them, this script reads
   them from the main SeceoKnight endpoint agent's own key file (which now
-  persists its server-issued api_key — see AgentConfig::SaveApiKeyFile in
+  persists its server-issued api_key  - see AgentConfig::SaveApiKeyFile in
   agent.cpp). That means at fleet scale you do NOT need to separately
   register a browser-extension identity per machine with a curl command: as
   long as the main agent is already installed and has registered at least
@@ -19,7 +19,7 @@
   Pass -AgentId/-AgentKey explicitly only if you want a distinct identity, or
   if this machine runs the browser extension without the main endpoint agent.
 
-  Example (typical — reuse the already-installed endpoint agent's identity):
+  Example (typical  - reuse the already-installed endpoint agent's identity):
     .\install.ps1 `
         -ExtensionId  ppkk...your-extension-id... `
         -ServerUrl    https://dlp.example.com/api/v1 `
@@ -40,7 +40,7 @@ param(
   [string]$AgentKey,
   # Where the main endpoint agent persists its own identity (written by
   # AgentConfig::SaveApiKeyFile() in agent.cpp, in C:\ProgramData\SeceoKnight
-  # rather than Program Files — the agent's scheduled task runs as a
+  # rather than Program Files  - the agent's scheduled task runs as a
   # standard, non-elevated user that can't write to Program Files). Used to
   # auto-discover -AgentId/-AgentKey when they aren't passed explicitly.
   [string]$AgentConfigPath = (Join-Path $env:ProgramData 'SeceoKnight\agent_key.json'),
@@ -73,7 +73,7 @@ if (-not $AgentId -or -not $AgentKey) {
 if (-not $AgentId -or -not $AgentKey) {
   throw ("Could not determine -AgentId/-AgentKey. Either: (1) make sure the main " +
          "SeceoKnight agent is installed and has registered at least once (its " +
-         "config at '$AgentConfigPath' should then contain agent_id + api_key — " +
+         "config at '$AgentConfigPath' should then contain agent_id + api_key  - " +
          "an older agent build that predates api_key persistence won't have one, " +
          "in which case reinstall/update the agent first), or (2) pass -AgentId " +
          "and -AgentKey explicitly for a standalone browser-extension identity.")
