@@ -8,6 +8,34 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📮 Outlook Web Wasn't in CLOUD_HOSTS at All — Extension Never Fired for It (July 20, 2026)
+
+### Summary
+
+Live-tested against Outlook web and `filebin`: Outlook triggered zero extension events (only the older, unrelated `network_exfil` browser-upload detector fired); `filebin` did trigger correctly but still showed `upload.bin`.
+
+### Root cause (Outlook)
+
+`inject.js`'s `CLOUD_HOSTS` allowlist had `office.com` and `live.com`, but Outlook web actually runs on `outlook.office365.com` and bare `outlook.com` — neither matches those entries (`office365.com` is a different root domain from `office.com`; bare `outlook.com` doesn't end with `.live.com`). Given this product is explicitly required to support both Gmail and Outlook (per this session's earlier instruction), this was a direct, concrete gap for that requirement, not a corner case.
+
+### Fixed
+
+- Added `outlook.com`, `outlook.office.com`, `outlook.office365.com`, `outlook.cloud.microsoft`, and `microsoftonline.com` to `CLOUD_HOSTS`.
+
+### Filename (further improvement)
+
+`guessFileNameFromUrl()` previously only checked URL query parameters. Some services (S3-backed uploaders, `filebin`-style services) encode the filename as the **last path segment** instead (e.g. `PUT /uploads/abc123/report.pdf`). Added a path-segment fallback, only trusted when it looks like a real filename (has a short extension) rather than an opaque session/object ID — so it won't mistake a UUID-style upload token for a filename.
+
+### Verification
+
+`node --check` passes. Not live-tested in this sandbox.
+
+### Result
+
+Outlook web uploads should now be intercepted at all. Filename recovery now also covers path-encoded filenames (e.g. `filebin`), in addition to the earlier query-param case. Gmail/Drive's resumable-upload filename gap remains open and documented — neither of today's two filename improvements touches that specific pattern.
+
+---
+
 ## 🚧 Filename Best-Effort Recovery + Policy Exception Operators (not_equals / not_in) (July 20, 2026)
 
 ### Summary

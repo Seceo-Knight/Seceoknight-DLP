@@ -25,6 +25,14 @@
     "drive.google.com", "docs.google.com", "mail.google.com",
     "dropbox.com", "dropboxapi.com", "dropboxusercontent.com",
     "onedrive.live.com", "1drv.ms", "sharepoint.com", "live.com", "office.com",
+    // Outlook web mail runs on domains of its own that "office.com"/"live.com"
+    // don't cover ("outlook.office365.com" does NOT end with ".office.com" —
+    // office365.com is a different root domain; bare "outlook.com" doesn't
+    // end with ".live.com" either) — found missing entirely after a real
+    // Outlook test never triggered a single interception. Enterprise-grade
+    // support for Outlook (explicitly required alongside Gmail) needs these.
+    "outlook.com", "outlook.office.com", "outlook.office365.com",
+    "outlook.cloud.microsoft", "microsoftonline.com",
     "box.com", "boxcloud.com", "app.box.com",
     "wetransfer.com", "mega.nz", "mediafire.com", "icloud.com",
     "slack.com", "files.slack.com", "amazonaws.com", "wasabisys.com",
@@ -96,14 +104,29 @@
   // per upload, which isn't safe to build without being able to inspect the
   // actual live traffic — so for Gmail/Drive specifically, "upload.bin" is a
   // known, documented limitation for now, not something this function fixes.
+  // A path segment "looks like" a filename if it ends in a short extension —
+  // filters out opaque upload-session IDs/tokens (e.g. S3 object keys,
+  // UUIDs) that happen to be the last path segment but aren't a real name.
+  function looksLikeFileName(segment) {
+    return /\.[A-Za-z0-9]{1,8}$/.test(segment) && segment.length <= 120;
+  }
+
   function guessFileNameFromUrl(url) {
     try {
-      var params = new URL(url, location.href).searchParams;
+      var parsed = new URL(url, location.href);
       var candidates = ["filename", "fileName", "name", "title", "upload_name"];
       for (var i = 0; i < candidates.length; i++) {
-        var v = params.get(candidates[i]);
+        var v = parsed.searchParams.get(candidates[i]);
         if (v) return decodeURIComponent(v);
       }
+      // Some services (S3-backed uploaders, filebin-style services, ...)
+      // encode the filename as the LAST PATH SEGMENT instead of a query
+      // param, e.g. PUT /uploads/abc123/report.pdf. Only trust it if it
+      // looks like a real filename (has an extension), not an opaque
+      // session/object id.
+      var parts = parsed.pathname.split("/").filter(Boolean);
+      var last = parts.length ? decodeURIComponent(parts[parts.length - 1]) : "";
+      if (last && looksLikeFileName(last)) return last;
     } catch (e) {}
     return null;
   }
