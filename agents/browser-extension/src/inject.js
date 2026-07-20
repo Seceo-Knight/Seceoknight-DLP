@@ -106,6 +106,76 @@
     return new File([bytes], name || "upload.bin", { type: type || "application/octet-stream" });
   }
 
+  // Real file capture (fixes the Gmail/Drive filename+content problem at the
+  // source instead of guessing at it downstream).
+  //
+  // Chunked/resumable upload protocols (Gmail, Google Drive) send the file's
+  // actual bytes to an opaque session URI with no filename anywhere in that
+  // specific request — the real name only exists in an earlier, separate
+  // metadata-initiation call this code never sees. Worse: because the server
+  // picks how to parse a file BY ITS EXTENSION, an unrecoverable filename
+  // doesn't just mean an ugly "upload.bin" in the dashboard — the server logs
+  // "binary/unknown format .bin" and extracts NO content at all, so nothing
+  // ever gets classified and everything defaults to Public/allow. That is a
+  // real detection bypass, not a cosmetic issue (confirmed via the manager's
+  // own "Content not extractable" / "matched_rules_count: 0" logs).
+  //
+  // Fix: capture the REAL File object the moment the user selects it (via a
+  // <input type=file> change event) or drops it onto the page — both fire
+  // BEFORE the site's own JS reads/repackages the bytes into whatever upload
+  // request(s) it sends. That gives us the true name AND untouched original
+  // bytes, sidestepping Gmail's chunking entirely: even if a later network
+  // request only carries a fragment/byte-range of the file, we substitute
+  // the complete originally-selected File for classification instead of
+  // trying to parse that fragment.
+  //
+  // This never fires more classify/log requests than before: it only swaps
+  // WHICH bytes+name get sent into the exact same per-request classify flow
+  // that already runs in decideForBody(). No capture -> identical behavior
+  // to before (fail-open by construction, not just by exception handling).
+  var capturedFiles = []; // { file, capturedAt } newest first
+  var CAPTURE_MAX_AGE_MS = 60000;
+
+  function captureFileList(list) {
+    try {
+      if (!list || !list.length) return;
+      for (var i = 0; i < list.length; i++) {
+        var f = list[i];
+        if (f && typeof File !== "undefined" && f instanceof File && f.size > 0) {
+          capturedFiles.unshift({ file: f, capturedAt: Date.now() });
+          try { console.debug("[SK-DLP] captured file selection:", f.name, "(" + f.size + " bytes)"); } catch (e) {}
+        }
+      }
+      if (capturedFiles.length > 8) capturedFiles.length = 8;
+    } catch (e) {}
+  }
+
+  document.addEventListener("change", function (e) {
+    var t = e.target;
+    if (t && t.files) captureFileList(t.files);
+  }, true);
+  document.addEventListener("drop", function (e) {
+    try { if (e.dataTransfer && e.dataTransfer.files) captureFileList(e.dataTransfer.files); } catch (err) {}
+  }, true);
+
+  // Best-effort match: prefer a captured file whose size exactly matches the
+  // network body we're about to classify (covers simple single-request
+  // uploads exactly); otherwise fall back to the most recent capture (covers
+  // chunked uploads, where no individual chunk equals the full file size —
+  // still correct, since it's the same file, just a different byte range of
+  // the request that triggered classification).
+  function pickCapturedFile(byteLength) {
+    var now = Date.now();
+    capturedFiles = capturedFiles.filter(function (c) { return (now - c.capturedAt) <= CAPTURE_MAX_AGE_MS; });
+    if (!capturedFiles.length) return null;
+    if (typeof byteLength === "number") {
+      for (var i = 0; i < capturedFiles.length; i++) {
+        if (capturedFiles[i].file.size === byteLength) return capturedFiles[i].file;
+      }
+    }
+    return capturedFiles[0].file;
+  }
+
   // Best-effort filename recovery for raw Blob/ArrayBuffer bodies, which the
   // Fetch/XHR APIs never attach a name to (only a real File object has one —
   // see the module-level comment in decideForBody for the full explanation).
@@ -149,20 +219,34 @@
     var files = [];
     var urlHint = url ? guessFileNameFromUrl(url) : null;
     if (body instanceof File) files.push(body);
-    else if (body instanceof Blob) files.push(asFile(body, urlHint || "upload.bin", body.type));
+    else if (body instanceof Blob) {
+      var capturedB = pickCapturedFile(body.size);
+      files.push(capturedB || asFile(body, urlHint || "upload.bin", body.type));
+    }
     // Resumable uploads (Google Drive, etc.) send raw bytes, not File/Blob.
-    else if (body instanceof ArrayBuffer) files.push(asFile(body, urlHint || "upload.bin"));
+    else if (body instanceof ArrayBuffer) {
+      var capturedAB = pickCapturedFile(body.byteLength);
+      files.push(capturedAB || asFile(body, urlHint || "upload.bin"));
+    }
     else if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(body)) {
-      files.push(asFile(body.buffer ? body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) : body, urlHint || "upload.bin"));
+      var capturedTB = pickCapturedFile(body.byteLength);
+      files.push(capturedTB || asFile(body.buffer ? body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) : body, urlHint || "upload.bin"));
     }
     else if (typeof FormData !== "undefined" && body instanceof FormData) {
       try {
         body.forEach(function (v) {
           if (v instanceof File) files.push(v);
-          else if (v instanceof Blob) files.push(asFile(v, urlHint || "upload.bin", v.type)); // bare Blob part (no filename)
+          else if (v instanceof Blob) {
+            var capturedFD = pickCapturedFile(v.size);
+            files.push(capturedFD || asFile(v, urlHint || "upload.bin", v.type)); // bare Blob part (no filename)
+          }
         });
       } catch (e) {}
     }
+    try {
+      var usedCapture = files.length && files[0] && capturedFiles.some(function (c) { return c.file === files[0]; });
+      if (usedCapture) console.debug("[SK-DLP] using captured file selection for classification:", files[0].name, "(" + files[0].size + " bytes)");
+    } catch (e) {}
     return files;
   }
 

@@ -8,6 +8,39 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔍 Gmail/Filebin Uploads Not Blocked — Content Was Never Actually Extracted (July 20, 2026)
+
+### Summary
+
+Live evidence from the manager's own logs, provided by the user for a Gmail upload event that fired as `Cloud upload cloud_upload_allowed (Public)` (not blocked) despite the same file already being flagged by the older, unrelated "Detect Browser Upload" (`network_exfil`) feature:
+
+```
+"file_name": "upload.bin", "kind": "unsupported", "reason": "binary/unknown format .bin", "event": "Content not extractable"
+"classification": "Public", "confidence": 0.0, "matched_rules_count": 0, "event": "Content classified"
+```
+
+### Root cause
+
+This is not the cosmetic filename issue it looked like — it's a real content-detection bypass. `document_extract.py` picks which parser to use **by file extension**. Because the extension could never recover Gmail's real filename (the byte-content request goes to an opaque resumable-upload session URI carrying no filename — the real name only exists in an earlier, separate metadata-initiation request), the server received the generic fallback name `upload.bin`, didn't recognize `.bin` as a known/textual format, extracted **zero content**, and classified it Public by default. Nothing was ever actually inspected. Every previous filename fix (URL query params, then URL path segments) narrowed this gap for services that don't hide the name, but structurally could never fix Gmail/Drive's chunked pattern, because their content-bytes request simply doesn't contain the filename anywhere for us to recover.
+
+### Fixed — capture the real file at the source instead of guessing downstream
+
+`inject.js` now listens for `change` events on `<input type="file">` elements and `drop` events (capture phase, so nothing a site does can suppress it), and captures the actual `File` object — real name, real untouched bytes — the moment the user selects/drops it, before Gmail (or any site) reads and repackages those bytes into its own upload request(s).
+
+When a later network request's body has no usable identity of its own (a bare `Blob`/`ArrayBuffer`/typed array — the same case that previously fell back to `upload.bin`), `collectFiles()` now substitutes the most recently captured real file instead (exact-size match preferred; otherwise the most recent capture within 60s — because a chunked upload's individual byte-range request never equals the full file's size, but is still the same file). This means classification now runs against the complete, correctly-named original file — sidestepping Gmail's chunking rather than trying to parse a fragment of it — and the server's extension-based parser dispatch (docx/pdf/xlsx/text/...) works the way it's supposed to.
+
+This is strictly additive: with no captured file available, behavior is identical to before (same URL-based guess, same `upload.bin` fallback) — a capture never happens more than once per real file selection, so it doesn't add or duplicate any classify/log requests.
+
+### Verification
+
+`node --check` passes. Not live-tested in this sandbox (no browser/Gmail access here) — needs a real re-test after redeploying `inject.js` and reloading the extension. The service worker / page console should now show `[SK-DLP] using captured file selection for classification: <realname> (<size> bytes)` when this path is taken.
+
+### Result
+
+Gmail and filebin uploads should now classify against the real file's actual content and show the real filename in dashboard events, instead of silently defaulting to Public because the content was never extracted. Needs a live redeploy + retest to confirm blocking now fires correctly for a genuinely sensitive test file.
+
+---
+
 ## ⚙️ Dashboard-Managed Extra Cloud Upload Destinations (July 20, 2026)
 
 ### Summary
