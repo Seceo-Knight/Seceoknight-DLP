@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🕐 Audit Trail Timestamp Column Showed Blank/Dot for Every Row (July 20, 2026)
+
+### Summary
+
+User reported the **Timestamp** column on the dashboard's Audit Trail page showed just a bare `.`/`-` for every row, no matter which event it was.
+
+### Root cause
+
+`dashboard/src/pages/AuditTrail.tsx` read `log.timestamp`, but the `/audit-logs/` API (`AuditLogOut` schema in `server/app/api/v1/audit_logs.py`) returns the field as `created_at` — matching the `AuditLog` model's actual database column. `log.timestamp` was therefore always `undefined`, so every row fell through to the column's `'-'` fallback regardless of its real timestamp.
+
+### Fixed
+
+`AuditTrail.tsx` now reads `log.created_at` (falling back to `log.timestamp` for forward-compatibility if the API shape ever changes).
+
+### Verification
+
+Confirmed via the actual API response contract: `AuditLogOut` in `audit_logs.py` explicitly declares `created_at: datetime` with no `timestamp` field. No dashboard build available in this sandbox — needs a redeploy + a real Audit Trail page load to see the fix live (`docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d` on the server, matching the "Updating to a New Version" section of the README).
+
+### Result
+
+The Audit Trail's Timestamp column now shows the real date/time (IST-formatted) each audit event actually happened.
+
+---
+
 ## 🏁 Two Events Instead of One — Piggyback In-Flight Classify Requests (July 20, 2026)
 
 ### Summary
