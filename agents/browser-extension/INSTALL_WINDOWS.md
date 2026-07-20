@@ -16,8 +16,14 @@ There are two pieces:
 - **Python 3.8+** on the machine, with the `requests` package
   (`pip install requests`) — *or* build the host as an `.exe` (Step 3, Option A).
 - Network access from this PC to the DLP server (`https://<server>/api/v1`).
-- A **registered SeceoKnight agent** on this PC — you need its **agent id**
-  and **API key** (see Step 5).
+- An identity for the native host to authenticate with. Two ways to get one
+  (see Step 5):
+  - **Recommended:** the main SeceoKnight endpoint agent already installed
+    and registered on this PC — `install.ps1` (Step 4) auto-discovers its
+    `agent_id`/`api_key` from `C:\ProgramData\SeceoKnight\agent_key.json`,
+    no extra registration needed.
+  - Or a standalone registration (`curl -X POST .../api/v1/agents/`) if this
+    PC won't have the main endpoint agent installed.
 
 ---
 
@@ -81,6 +87,22 @@ Host command = `C:\Program Files\SeceoKnight\skdlp_host.bat`
 
 ## 4. Register the host (manifest + registry + server config)
 From the `native-host` folder, in an **elevated PowerShell** (Run as admin):
+
+**If the main endpoint agent is already installed on this PC** (recommended
+— see Step 5), you don't need `-AgentId`/`-AgentKey` at all:
+```powershell
+cd C:\SeceoKnight\browser-extension\native-host
+.\install.ps1 `
+  -ExtensionId  <PASTE_EXTENSION_ID_FROM_STEP_2> `
+  -ServerUrl    https://<your-dlp-server>/api/v1 `
+  -HostCommand  "C:\Program Files\SeceoKnight\skdlp_host.exe"   # or the .bat
+```
+It auto-discovers the identity from `C:\ProgramData\SeceoKnight\
+agent_key.json` (written by the endpoint agent after it registers — see
+Step 5) and prints `Reusing endpoint agent identity from: ...` to confirm.
+
+**Otherwise** (this PC won't run the main endpoint agent), pass a standalone
+identity explicitly:
 ```powershell
 cd C:\SeceoKnight\browser-extension\native-host
 .\install.ps1 `
@@ -95,13 +117,24 @@ Chrome/Edge registry keys, and `C:\ProgramData\SeceoKnight\dlp-host.json`.
 
 ---
 
-## 5. Where to get the agent id + API key
+## 5. Where the agent id + API key come from
 The host authenticates to the server exactly like the endpoint agent (the
-`X-Agent-Key` header). Reuse **this PC's existing agent identity**:
-- The agent id is the machine's registered agent in the dashboard (Agents page).
-- The API key was issued when that agent registered. If you don't have it,
-  ask your DLP admin to retrieve it (it's stored server-side against the agent),
-  or re-register the agent to get a fresh key.
+`X-Agent-Key` header).
+
+- **Recommended: reuse this PC's endpoint agent identity.** If the main
+  SeceoKnight agent (from the repo's root `install-agent.ps1`) is installed
+  and has registered at least once on this same PC, it saves its own
+  `agent_id`/`api_key` to `C:\ProgramData\SeceoKnight\agent_key.json` —
+  `install.ps1` in Step 4 reads this automatically. Nothing to copy by hand.
+- **Standalone identity** (no endpoint agent on this PC): register one
+  yourself —
+  ```bash
+  curl -k -X POST https://<your-dlp-server>/api/v1/agents/ \
+    -H "Content-Type: application/json" \
+    -d '{"name": "browser-ext-<hostname>", "os": "windows", "ip_address": "<this PCs IP>"}'
+  ```
+  Copy `agent_id`/`api_key` from the response — shown once, at registration.
+  If you lose it, re-run the same command to get a fresh key.
 
 ---
 
