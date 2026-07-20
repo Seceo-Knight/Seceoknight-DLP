@@ -10,6 +10,29 @@
 (function () {
   "use strict";
 
+  // Admin-managed EXTRA cloud-upload destinations (dashboard-managed, on top
+  // of inject.js's own hardcoded baseline). background.js keeps
+  // chrome.storage.local's "skdlpExtraHosts" fresh; this content script
+  // (ISOLATED world, has chrome.storage access) reads it and hands it to
+  // inject.js (MAIN world, no chrome.* access) via postMessage.
+  function pushExtraHosts(domains) {
+    window.postMessage({ __skdlp: 1, dir: "toPage", kind: "extraHosts", domains: domains || [] }, "*");
+  }
+
+  try {
+    chrome.storage.local.get("skdlpExtraHosts", function (res) {
+      pushExtraHosts(res && res.skdlpExtraHosts);
+    });
+    chrome.storage.onChanged.addListener(function (changes, area) {
+      if (area === "local" && changes.skdlpExtraHosts) {
+        pushExtraHosts(changes.skdlpExtraHosts.newValue);
+      }
+    });
+  } catch (e) {
+    // Extension context invalidated or storage unavailable — inject.js just
+    // keeps using its baseline CLOUD_HOSTS list, fail-open by omission.
+  }
+
   window.addEventListener("message", function (e) {
     if (e.source !== window) return;
     var d = e.data;

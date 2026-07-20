@@ -63,10 +63,24 @@
   var recentDecisions = new Map(); // host -> { promise, expiresAt }
   var COALESCE_WINDOW_MS = 4000;
 
+  // Admin-managed EXTRA cloud-upload destinations, added from the dashboard
+  // (server/app/models/cloud_upload_hosts.py) on top of the CLOUD_HOSTS
+  // baseline above — lets an admin start monitoring a new destination
+  // without redeploying this file to every machine. Populated by content.js
+  // (this file can't use chrome.* APIs directly, since it runs in the page's
+  // MAIN world) and kept fresh in the background as the admin edits the list.
+  var extraHosts = [];
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (!d || d.__skdlp !== 1 || d.dir !== "toPage" || d.kind !== "extraHosts") return;
+    extraHosts = Array.isArray(d.domains) ? d.domains : [];
+  });
+
   function isCloudUrl(url) {
     try {
       var host = new URL(url, location.href).hostname.toLowerCase();
-      return CLOUD_HOSTS.some(function (s) { return host === s || host.endsWith("." + s); });
+      var matches = function (s) { return host === s || host.endsWith("." + s); };
+      return CLOUD_HOSTS.some(matches) || extraHosts.some(matches);
     } catch (e) { return false; }
   }
 

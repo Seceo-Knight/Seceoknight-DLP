@@ -845,6 +845,36 @@ export const deleteIpAllowlist = async (entryId: string) => {
   return data
 }
 
+// ── Cloud Upload Guard — extra monitored destinations (Admin only) ─────────
+// Additive on top of the browser extension's built-in baseline host list
+// (Gmail, Outlook, Drive, Dropbox, ...) — lets an admin start monitoring a
+// new cloud destination without redeploying the extension to every machine.
+export type CloudUploadHost = {
+  id: string
+  domain: string
+  label?: string | null
+  is_enabled: boolean
+  created_at?: string | null
+}
+export type CloudUploadHostsResponse = {
+  entries: CloudUploadHost[]
+}
+
+export const getCloudUploadHosts = async (): Promise<CloudUploadHostsResponse> => {
+  const { data } = await apiClient.get('/security/cloud-upload-hosts')
+  return data
+}
+
+export const addCloudUploadHost = async (domain: string, label?: string) => {
+  const { data } = await apiClient.post('/security/cloud-upload-hosts', { domain, label })
+  return data
+}
+
+export const deleteCloudUploadHost = async (entryId: string) => {
+  const { data } = await apiClient.delete(`/security/cloud-upload-hosts/${entryId}`)
+  return data
+}
+
 // ── Threat Intelligence (IOC / STIX / TAXII) ────────────────────────────────
 export type IOC = {
   id: string

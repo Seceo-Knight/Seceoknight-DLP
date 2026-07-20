@@ -8,6 +8,47 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ⚙️ Dashboard-Managed Extra Cloud Upload Destinations (July 20, 2026)
+
+### Summary
+
+Every destination the browser extension (Cloud Upload Guard) watches was hardcoded in `inject.js`'s `CLOUD_HOSTS` array — adding one more (e.g. a partner's file-sharing portal) meant editing the file and redeploying it to every endpoint. Added a dashboard-managed, admin-only list of extra destinations that the extension picks up without a redeploy.
+
+### Design
+
+Followed this codebase's existing convention for admin-managed settings (no generic key-value settings table exists — each gets its own model + migration + router, per the IP-allowlist precedent):
+
+- `server/app/models/cloud_upload_hosts.py` — new `CloudUploadHost` table (`domain`, `label`, `is_enabled`, `created_by`, `created_at`).
+- `server/alembic/versions/032_cloud_upload_hosts.py` — idempotent `CREATE TABLE IF NOT EXISTS`, chained after `031_siem_connectors` (the current migration head).
+- `server/app/api/v1/cloud_upload_hosts.py` — admin-only `GET/POST/DELETE /security/cloud-upload-hosts`, mounted alongside `ip_allowlist` in `app/api/v1/__init__.py`.
+- `server/app/api/v1/agents.py` — new agent-authenticated `GET /agents/{agent_id}/cloud-upload-hosts` (uses the existing `verify_agent_key` dependency) returning the enabled domain list, for the extension's native host to poll.
+
+This is purely **additive**: the table only ever extends the extension's built-in baseline list, never disables or replaces an entry that ships built in — a dashboard mistake here can't silently turn off protection for Gmail, Outlook, etc.
+
+### Extension changes
+
+- `skdlp_host.py` — new `get_hosts` native-messaging request type; `fetch_extra_hosts()` calls the new agent endpoint (fail-open to the last-known list on any error, 120s in-process cache).
+- `background.js` — fetches the extra-hosts list on startup/install and every 15 minutes via `chrome.alarms` (a plain `setInterval` isn't reliable since MV3 service workers can be killed between page loads), and mirrors it into `chrome.storage.local`.
+- `content.js` (ISOLATED world, has `chrome.storage` access) — reads the stored list and relays it into the page via `postMessage`, plus listens for `chrome.storage.onChanged` so open tabs pick up an admin's edit without a reload.
+- `inject.js` (MAIN world, no `chrome.*` access) — listens for the relayed list and checks it in `isCloudUrl()` alongside the existing hardcoded `CLOUD_HOSTS` baseline.
+- `manifest.json` — added the `alarms` permission (`storage` was already present).
+
+### Dashboard changes
+
+- `lib/api.ts` — `CloudUploadHost` type + `getCloudUploadHosts`/`addCloudUploadHost`/`deleteCloudUploadHost`.
+- `components/settings/CloudUploadHostsSection.tsx` — new admin-only section (add/list/remove domains), modeled on `IpAllowlistSection.tsx`.
+- `pages/Settings.tsx` — renders the new section under the same `isSuperAdmin` (role === ADMIN) gate as the IP allowlist.
+
+### Verification
+
+`python3 -c "import ast; ast.parse(...)"` passes on all new/changed server files. `node --check` passes on `inject.js`, `background.js`, `content.js`. `python3 -m py_compile` passes on `skdlp_host.py`. `npx tsc --noEmit` shows only the same pre-existing, unrelated errors as every prior dashboard change this session (no new errors). `npm run build` succeeds; `dashboard/dist/` reverted afterward. Not live-tested — no server/DB/browser access in this sandbox; migration, endpoints, and the extension's fetch/merge/refresh cycle all need real deployment verification.
+
+### Result
+
+Admins can now add (and remove) extra monitored cloud-upload destinations from the dashboard, and endpoints pick the change up within about 15 minutes — or immediately after a browser restart — without needing `inject.js` redeployed to every machine.
+
+---
+
 ## 📮 Outlook Web Wasn't in CLOUD_HOSTS at All — Extension Never Fired for It (July 20, 2026)
 
 ### Summary

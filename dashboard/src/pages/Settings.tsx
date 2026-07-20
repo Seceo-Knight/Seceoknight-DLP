@@ -12,6 +12,7 @@ import {
 import { useAuthStore } from '@/lib/store/auth'
 import { API_URL } from '@/lib/config'
 import IpAllowlistSection from '@/components/settings/IpAllowlistSection'
+import CloudUploadHostsSection from '@/components/settings/CloudUploadHostsSection'
 import SiemForwardingSection from '@/components/settings/SiemForwardingSection'
 
 type MfaStep = 'idle' | 'setup_qr' | 'setup_verify'
@@ -392,6 +393,7 @@ export default function Settings() {
               </div>
 
               {isSuperAdmin && <IpAllowlistSection />}
+              {isSuperAdmin && <CloudUploadHostsSection />}
             </div>
           )}
 

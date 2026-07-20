@@ -38,6 +38,20 @@ const requestHosts = new Map(); // requestId -> destHost, ONLY set for requests 
 const recentDecisions = new Map(); // destination host -> { decision, expiresAt }
 const COALESCE_WINDOW_MS = 4000;
 
+// Admin-managed EXTRA cloud-upload destinations (dashboard-managed, additive
+// only — see server/app/models/cloud_upload_hosts.py). Fetched from the
+// native host, which itself fetches from the DLP server, and mirrored into
+// chrome.storage.local so every tab's content.js can hand it to inject.js
+// (MAIN world, no chrome.* API access) without a round trip per page load.
+const HOSTS_REFRESH_ALARM = "skdlp-hosts-refresh";
+
+function fetchExtraHosts() {
+  if (!port) connect();
+  if (!port) { warn("fetchExtraHosts: no native host available"); return; }
+  try { port.postMessage({ type: "get_hosts" }); }
+  catch (e) { warn("fetchExtraHosts: postMessage failed:", e && e.message); }
+}
+
 function failOpenAll(reason) {
   for (const [, respond] of waiters) { try { respond({ action: "allow", reason }); } catch (e) {} }
   waiters.clear();
@@ -49,6 +63,12 @@ function connect() {
     log("connectNative attempted for", NATIVE_HOST);
     port.onMessage.addListener((msg) => {
       if (msg && msg.type === "pong") { log("native host reachable (pong):", JSON.stringify(msg)); return; }
+      if (msg && msg.type === "hosts") {
+        const domains = Array.isArray(msg.domains) ? msg.domains : [];
+        chrome.storage.local.set({ skdlpExtraHosts: domains });
+        log("extra cloud hosts updated:", domains.length, domains.length ? "(" + domains.join(", ") + ")" : "");
+        return;
+      }
       if (!msg || !msg.requestId) return;
       const respond = waiters.get(msg.requestId);
       if (respond) {
@@ -98,6 +118,21 @@ function selfTest() {
 chrome.runtime.onStartup.addListener(selfTest);
 chrome.runtime.onInstalled.addListener(selfTest);
 selfTest(); // also fires when the service worker first spins up
+
+// Refresh the admin-managed extra-hosts list on every self-test trigger, plus
+// on a recurring alarm — MV3 service workers can be terminated between page
+// loads, so a plain setInterval isn't reliable; chrome.alarms survives that.
+fetchExtraHosts();
+chrome.runtime.onStartup.addListener(fetchExtraHosts);
+chrome.runtime.onInstalled.addListener(fetchExtraHosts);
+try {
+  chrome.alarms.create(HOSTS_REFRESH_ALARM, { periodInMinutes: 15 });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === HOSTS_REFRESH_ALARM) fetchExtraHosts();
+  });
+} catch (e) {
+  warn("chrome.alarms unavailable, extra-hosts list will only refresh on browser/extension restart:", e && e.message);
+}
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.kind !== "classify") return false;

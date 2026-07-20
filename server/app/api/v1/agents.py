@@ -966,6 +966,30 @@ async def sync_agent_policies(
     )
 
 
+@router.get("/{agent_id}/cloud-upload-hosts")
+async def get_cloud_upload_hosts(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(verify_agent_key),
+):
+    """
+    Extra cloud-upload destinations an admin has added from the dashboard, on
+    top of the browser extension's built-in baseline CLOUD_HOSTS list. Polled
+    by the extension's native host (skdlp_host.py) so admins can add a new
+    monitored destination without redeploying inject.js to every machine.
+    Requires ``X-Agent-Key`` header — same auth as policy sync/evaluate.
+    """
+    from app.models.cloud_upload_hosts import CloudUploadHost
+    from sqlalchemy import select
+
+    rows = (
+        await db.execute(
+            select(CloudUploadHost.domain).where(CloudUploadHost.is_enabled == True)  # noqa: E712
+        )
+    ).scalars().all()
+    return {"domains": list(rows)}
+
+
 class PolicyEvaluationRequest(BaseModel):
     """Request model for real-time policy evaluation"""
     file_name: Optional[str] = Field(None, description="Name of the file being transferred (omit for clipboard)")

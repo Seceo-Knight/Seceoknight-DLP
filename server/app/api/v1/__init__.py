@@ -29,6 +29,7 @@ from app.api.v1 import (
     permissions,
     email_settings,
     ip_allowlist,
+    cloud_upload_hosts,
     threat_intel,
     taxii,
     system,
@@ -68,6 +69,7 @@ api_router.include_router(scans.router, prefix="/scans", tags=["Scans"])
 api_router.include_router(decision.router, prefix="/decision", tags=["Decision"])
 api_router.include_router(email_settings.router, prefix="/settings", tags=["Settings"])
 api_router.include_router(ip_allowlist.router, prefix="/security", tags=["Security"])
+api_router.include_router(cloud_upload_hosts.router, prefix="/security", tags=["Security"])
 api_router.include_router(threat_intel.router, prefix="/threat-intel", tags=["Threat Intelligence"])
 api_router.include_router(taxii.router, tags=["TAXII"])
 api_router.include_router(system.router, prefix="/system", tags=["System"])

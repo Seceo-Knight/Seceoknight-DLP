@@ -202,6 +202,45 @@ def emit_event(meta, action_taken, severity, level, subtype, blocked):
         log("emit_event failed: %s" % e)
 
 
+# ---- admin-managed extra cloud-upload destinations ----
+# Cached in-process so a "get_hosts" ping from the extension doesn't hit the
+# server every time — the extension itself only asks every few minutes (see
+# background.js), but the host's own TTL is a second line of defense in case
+# a future caller polls more often.
+_hosts_cache = {"domains": [], "expires_at": 0}
+_HOSTS_CACHE_TTL = 120  # seconds
+
+
+def fetch_extra_hosts():
+    """Admin-added cloud-upload destinations from the dashboard, on top of
+    the extension's built-in baseline CLOUD_HOSTS list. Fail-open to the
+    last-known (or empty) list on any error — this must never block or delay
+    an upload decision; it only ever ADDS destinations to watch."""
+    now = time.time()
+    if _hosts_cache["expires_at"] > now:
+        return _hosts_cache["domains"]
+    if requests is None or not CFG["agent_key"]:
+        return _hosts_cache["domains"]
+    try:
+        r = requests.get(
+            "%s/agents/%s/cloud-upload-hosts" % (CFG["server_url"].rstrip("/"), CFG["agent_id"]),
+            headers={"X-Agent-Key": CFG["agent_key"]},
+            timeout=6,
+            verify=CFG.get("verify_tls", False),  # see the comment in evaluate()
+        )
+        r.raise_for_status()
+        domains = r.json().get("domains") or []
+        _hosts_cache["domains"] = domains
+        _hosts_cache["expires_at"] = now + _HOSTS_CACHE_TTL
+        return domains
+    except Exception as e:
+        log("fetch_extra_hosts failed: %s" % e)
+        # Keep serving the last-known list rather than resetting to empty —
+        # a transient server hiccup shouldn't momentarily un-watch a
+        # destination an admin explicitly added.
+        return _hosts_cache["domains"]
+
+
 def handle(meta):
     action, level, reason = evaluate(meta)
     if action == "block":
@@ -230,6 +269,12 @@ def main():
             log("ping received -> pong")
             send_message({"type": "pong", "ok": True, "keyed": bool(CFG["agent_key"]),
                           "server": CFG["server_url"]})
+            continue
+        if msg.get("type") == "get_hosts":
+            # Admin-managed extra destinations (dashboard-managed CLOUD_HOSTS
+            # additions) — see fetch_extra_hosts() for the fail-open/caching
+            # behavior.
+            send_message({"type": "hosts", "domains": fetch_extra_hosts()})
             continue
         if msg.get("type") != "classify":
             continue
