@@ -23,7 +23,7 @@ function warn(...a) { console.warn("[SK-DLP]", ...a); }
 
 let port = null;
 const waiters = new Map(); // requestId -> sendResponse
-const requestHosts = new Map(); // requestId -> destHost, ONLY set for requests we're willing to cache
+const requestKeys = new Map(); // requestId -> coalesce key, ONLY set for requests we're willing to cache
 
 // Cross-frame decision cache. manifest.json injects inject.js into EVERY
 // frame/iframe on the page ("all_frames": true), each with its own isolated
@@ -35,8 +35,31 @@ const requestHosts = new Map(); // requestId -> destHost, ONLY set for requests 
 // starting from a blank per-frame cache and getting classified independently.
 // background.js is the one place every frame's "classify" message already
 // converges on, so it's the correct layer for a TRUE cross-frame cache.
-const recentDecisions = new Map(); // destination host -> { decision, expiresAt }
+const recentDecisions = new Map(); // coalesce key -> { decision, expiresAt }
 const COALESCE_WINDOW_MS = 4000;
+
+// What identifies "this is the same upload" for coalescing purposes. Used to
+// be destination host alone — but chunked/resumable upload protocols
+// (Gmail, Google Drive) can split ONE file's bytes across MULTIPLE network
+// requests that go to genuinely DIFFERENT hosts/subdomains, not just
+// multiple requests to the same host. Before the real-file-capture fix in
+// inject.js, those extra requests were misclassified as generic
+// "upload.bin" with no content, so the duplication was mostly invisible;
+// now that they carry the real captured file's name+content, every one of
+// them classifies correctly (and fires its own alert) unless they're
+// recognized as the same upload. So: key on the file's own identity
+// (name+size) when we have a REAL name (not the "upload.bin" fallback) —
+// that's what's actually stable across however many requests/hosts one
+// upload produces. Falls back to destination host when there's no real
+// filename to key on, same as the original behavior for that case.
+function coalesceKeyFor(meta) {
+  const fileName = meta && meta.fileName;
+  const fileSize = meta && meta.fileSize;
+  if (fileName && fileName !== "upload.bin" && typeof fileSize === "number") {
+    return "file:" + fileName + ":" + fileSize;
+  }
+  return "host:" + ((meta && meta.host) || "");
+}
 
 // Admin-managed EXTRA cloud-upload destinations (dashboard-managed, additive
 // only — see server/app/models/cloud_upload_hosts.py). Fetched from the
@@ -77,12 +100,12 @@ function connect() {
         log("decision", msg.requestId, "->", decision.action, decision.level || "");
         // This is the ONE place a genuine native-host decision arrives, so
         // it's the only place we cache — a timeout/send-failed/disconnect
-        // fail-open never reaches here (see requestHosts.delete at each of
+        // fail-open never reaches here (see requestKeys.delete at each of
         // those sites below), so it can't poison the next real request.
-        const destHost = requestHosts.get(msg.requestId);
-        requestHosts.delete(msg.requestId);
-        if (destHost) {
-          recentDecisions.set(destHost, { decision, expiresAt: Date.now() + COALESCE_WINDOW_MS });
+        const coalesceKey = requestKeys.get(msg.requestId);
+        requestKeys.delete(msg.requestId);
+        if (coalesceKey) {
+          recentDecisions.set(coalesceKey, { decision, expiresAt: Date.now() + COALESCE_WINDOW_MS });
         }
         respond(decision);
       }
@@ -137,13 +160,14 @@ try {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.kind !== "classify") return false;
   const destHost = (message.meta && message.meta.host) || "";
-  log("classify:", (message.meta && message.meta.fileName) || "?", "→", destHost || "?");
+  const coalesceKey = coalesceKeyFor(message.meta);
+  log("classify:", (message.meta && message.meta.fileName) || "?", "→", destHost || "?", "| key:", coalesceKey);
 
-  // Reuse a recent real decision for this destination instead of hitting the
-  // native host (and re-logging an event) for every chunk of the same upload.
-  const cached = destHost && recentDecisions.get(destHost);
+  // Reuse a recent real decision for the same upload instead of hitting the
+  // native host (and re-logging an event) for every chunk/request of it.
+  const cached = recentDecisions.get(coalesceKey);
   if (cached && cached.expiresAt > Date.now()) {
-    log("reusing cached decision for", destHost, "->", cached.decision.action);
+    log("reusing cached decision for", coalesceKey, "->", cached.decision.action);
     sendResponse(cached.decision);
     return false;
   }
@@ -152,12 +176,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!port) { warn("no native host available → allow (fail-open)"); sendResponse({ action: "allow", reason: "agent-unavailable" }); return false; }
 
   waiters.set(message.requestId, sendResponse);
-  if (destHost) requestHosts.set(message.requestId, destHost); // eligible to be cached if a real decision arrives
+  requestKeys.set(message.requestId, coalesceKey); // eligible to be cached if a real decision arrives
   try {
     port.postMessage(Object.assign({ type: "classify", requestId: message.requestId }, message.meta));
   } catch (e) {
     waiters.delete(message.requestId);
-    requestHosts.delete(message.requestId);
+    requestKeys.delete(message.requestId);
     warn("postMessage to host failed:", e && e.message);
     sendResponse({ action: "allow", reason: "send-failed" });
     return false;
@@ -167,7 +191,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const respond = waiters.get(message.requestId);
     if (respond) {
       waiters.delete(message.requestId);
-      requestHosts.delete(message.requestId); // fail-open — never cache this as a real decision
+      requestKeys.delete(message.requestId); // fail-open — never cache this as a real decision
       warn("agent timeout for", message.requestId);
       respond({ action: "allow", reason: "agent-timeout" });
     }

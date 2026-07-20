@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔁 Real File Capture Fix Resurfaced Duplicate Alerts — Coalesce by File Identity, Not Host (July 20, 2026)
+
+### Summary
+
+After the real-file-capture fix (correct filename + content classification for Gmail's chunked uploads), the user reported a single file upload now firing **four** alerts instead of one.
+
+### Root cause
+
+`background.js`'s cross-frame duplicate-event coalescing cache was keyed by **destination host**. Gmail's chunked/resumable upload protocol splits one file's bytes across multiple network requests, and those requests don't necessarily all go to the same host — some can hit different subdomains. Before the file-capture fix, those extra requests were misclassified as generic `upload.bin` with no extractable content, so the duplication mostly went unnoticed (they were harmless "Public/allowed" noise). Now that every one of them carries the real captured file's name and content, each classifies correctly — including firing its own alert — unless they're recognized as the same upload.
+
+### Fixed
+
+`agents/browser-extension/src/background.js`: the coalescing cache key is now the file's own identity (`fileName:fileSize`) when a real filename is available (not the `upload.bin` fallback), instead of destination host. This is what's actually stable across however many requests/hosts one upload produces. Falls back to host-based keying when there's no real filename to key on, preserving the original behavior for that case. `requestHosts` renamed to `requestKeys` throughout to reflect the more general key.
+
+### Verification
+
+`node --check` passes. Not live-tested in this sandbox (no browser access here) — needs a real redeploy + retest. The service worker console should show `classify: ... | key: file:<name>:<size>` and, on repeat requests for the same file, `reusing cached decision for file:<name>:<size> -> <action>`.
+
+### Result
+
+A single file upload should now produce exactly one alert/event, regardless of how many underlying network requests the upload protocol splits it into or which hosts they target.
+
+---
+
 ## 💥 install.ps1 Crashed With "Unexpected token" — Em-Dash Mojibake Breaking the PowerShell Parser (July 20, 2026)
 
 ### Summary
