@@ -363,10 +363,14 @@ want browser-upload protection on it, not full endpoint monitoring), you'll
 need to register a separate identity for the extension instead. Run this
 from any machine that can reach the server:
 ```bash
-curl -k -X POST https://YOUR_SERVER_IP/api/v1/agents/ \
+curl -X POST http://YOUR_SERVER_IP/api/v1/agents/ \
   -H "Content-Type: application/json" \
   -d '{"name": "browser-ext-<this PCs hostname>", "os": "windows", "ip_address": "<this PCs IP>"}'
 ```
+(Plain `http://` on port 80 is correct here, not `https://` — nginx keeps port
+80's `/api/` path open specifically for agent traffic, same as the endpoint
+agent in Step 2 uses, so there's no self-signed certificate to worry about.)
+
 Copy the `agent_id` and `api_key` from the response — you'll pass them as
 `-AgentId`/`-AgentKey` in Step 5.4 below instead of letting it auto-discover.
 
@@ -404,9 +408,13 @@ copy dist\skdlp_host.exe "C:\Program Files\SeceoKnight\skdlp_host.exe"
 
 .\install.ps1 `
   -ExtensionId  <EXTENSION_ID_FROM_STEP_5.3> `
-  -ServerUrl    https://YOUR_SERVER_IP/api/v1 `
+  -ServerUrl    http://YOUR_SERVER_IP/api/v1 `
   -HostCommand  "C:\Program Files\SeceoKnight\skdlp_host.exe"
 ```
+> Use `http://`, not `https://`, for `-ServerUrl` — same as the endpoint
+> agent from Step 2 uses. Port 80 is deliberately left open for plain-HTTP
+> agent traffic, so there's no self-signed certificate involved at all.
+
 That's it — no `-AgentId`/`-AgentKey` needed if the endpoint agent is
 already on this PC (Step 5.1); the script finds and reuses its identity
 automatically, and you'll see a line like `Reusing endpoint agent identity
@@ -417,7 +425,7 @@ values you copied in Step 5.1 instead:
 ```powershell
 .\install.ps1 `
   -ExtensionId  <EXTENSION_ID_FROM_STEP_5.3> `
-  -ServerUrl    https://YOUR_SERVER_IP/api/v1 `
+  -ServerUrl    http://YOUR_SERVER_IP/api/v1 `
   -AgentId      <agent_id from step 5.1> `
   -AgentKey     <api_key from step 5.1> `
   -HostCommand  "C:\Program Files\SeceoKnight\skdlp_host.exe"
