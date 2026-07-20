@@ -8,6 +8,39 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🌐 Whole Dashboard (Including Login) Broke After a Routine Update — Stale Nginx Upstream IP (July 20, 2026)
+
+### Summary
+
+After a normal `docker compose pull && docker compose up -d` update (which recreated `manager`/`dashboard`/etc. with fresh container images), the entire dashboard broke — the overview page showed "Failed to load dashboard data," and login itself failed with "Invalid email or password" even with correct credentials.
+
+### Root cause
+
+`nginx/nginx.conf` used plain-hostname `proxy_pass` targets (`http://manager:55000`, `http://dashboard:3000`). Nginx resolves a plain-hostname `proxy_pass` target **once** and caches the resolved IP for the entire lifetime of the worker process. Nginx itself isn't recreated by a routine update (its image, `nginx:1.27-alpine`, doesn't change) — but `manager`, `dashboard`, and the other services *are* recreated and get a brand-new internal Docker IP every time. Nginx kept sending every request to the previous container's now-dead IP, so everything failed with `502 Bad Gateway` (confirmed via `docker compose logs nginx`: `connect() failed (111: Connection refused) ... upstream: "http://172.28.0.7:55000/..."`). The dashboard's generic error messages ("Failed to load dashboard data," "Invalid email or password") made this look like an auth or data problem, when the actual requests never reached the backend at all.
+
+### Fixed
+
+Every `proxy_pass` in `nginx.conf` now targets a `set`-declared variable (e.g. `set $upstream_manager manager:55000; proxy_pass http://$upstream_manager;`) instead of a bare hostname — this forces nginx to re-resolve through a `resolver` directive on a TTL instead of caching indefinitely. Added `resolver 127.0.0.11 valid=10s;` (Docker's embedded DNS, which resolves internal service names and transparently forwards anything else to the host's real DNS) at the top of the config, and updated the HTTPS server block's own OCSP-stapling `resolver` line to the same value (a server-context `resolver` overrides the http-context one, so both needed updating, not just one).
+
+### Verification
+
+Brace-balance and line-termination checked via a Python parse of the file (12/12 braces, every non-comment line properly terminated). No nginx binary or Docker available in this sandbox to run `nginx -t` directly — the `docker-compose.prod.yml` nginx healthcheck already runs `nginx -t` every 30s and will flip the container unhealthy immediately if there's a config problem, which is the next real checkpoint.
+
+### Result
+
+Future `docker compose pull && up -d` updates will no longer require a manual `docker compose restart nginx` afterward — nginx now re-discovers a recreated container's new IP automatically within 10 seconds.
+
+### If you're hitting this right now (before pulling this fix)
+
+Immediate relief: `docker compose -f docker-compose.prod.yml restart nginx`. To get the permanent fix onto an existing install, re-download the updated config file and reload nginx:
+```bash
+cd /opt/seceoknight
+curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/nginx/nginx.conf -o nginx/nginx.conf
+docker compose -f docker-compose.prod.yml restart nginx
+```
+
+---
+
 ## 🕐 Audit Trail Timestamp Column Showed Blank/Dot for Every Row (July 20, 2026)
 
 ### Summary
