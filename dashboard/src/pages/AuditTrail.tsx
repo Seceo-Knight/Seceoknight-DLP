@@ -87,7 +87,7 @@ export default function AuditTrail() {
               const expanded = expandedRow === i
               return (
                 <tr key={i} className="border-b border-gray-700/50">
-                  <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{log.timestamp ? formatDateTimeIST(log.timestamp) : '-'}</td>
+                  <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{log.created_at || log.timestamp ? formatDateTimeIST(log.created_at || log.timestamp) : '-'}</td>
                   <td className="px-4 py-3">{log.user_id || log.user || '-'}</td>
                   <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-medium ${color}`}>{log.action}</span></td>
                   <td className="px-4 py-3">
