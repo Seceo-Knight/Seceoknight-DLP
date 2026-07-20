@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🖼️ Per-Frame Coalescing Cache Didn't Stop Duplicate Events — Moved to the Shared Service Worker (July 20, 2026)
+
+### Summary
+
+Live-tested the coalescing fix from two entries below: still saw contradictory events 1.5 seconds apart for what should have been one upload — one correctly `Confidential`/blocked, the very next `Public`/allowed, both to `mail.google.com`.
+
+### Root cause
+
+`manifest.json` injects `inject.js` into **every frame on the page** (`"all_frames": true`). Each frame gets its own separate, isolated JS global scope — so the per-frame `recentDecisions` cache added in the previous fix only coalesced requests within a single frame. Gmail is built from multiple frames; a real content request from one frame and unrelated traffic from another frame, milliseconds apart, each started from a blank cache and got classified independently. The 4-second window was working exactly as designed — it just wasn't shared across the one boundary that mattered.
+
+### Fixed
+
+- Moved the coalescing cache from `inject.js` to `background.js` — the single shared service worker every frame's "classify" message already converges on via `chrome.runtime.sendMessage`, so a cache there is genuinely cross-frame (and cross-tab).
+- Only caches a decision when a **real** response arrives from the native host (`port.onMessage`) — timeout/send-failed/disconnect fail-opens are explicitly excluded via a `requestHosts` map that's deleted before any fail-open path responds, so a transient hiccup can never get cached and silently suppress the next real check.
+- Left the earlier per-frame cache in `inject.js` in place too — harmless, still shortcuts same-frame chunk bursts a little faster, just no longer relied on as the sole mechanism.
+
+### Verification
+
+`node --check` passes on both `background.js` and `inject.js`. Not live-tested in this sandbox — needs re-test on the real deployment.
+
+### Result
+
+A single upload that spans requests from multiple frames of the same page should now produce one decision (and one event), not one per frame.
+
+---
+
 ## 🌊 One File Upload Flooded the Dashboard With Duplicate Events (July 18, 2026)
 
 ### Summary
