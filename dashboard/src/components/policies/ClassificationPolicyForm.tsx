@@ -46,7 +46,9 @@ const FIELD_OPTIONS = [
 
 const OPERATOR_OPTIONS = [
   { value: 'equals', label: '= Equals' },
+  { value: 'not_equals', label: '≠ Not equals (exception)' },
   { value: 'in', label: '∈ In (array)' },
+  { value: 'not_in', label: '∉ Not in (exception)' },
   { value: 'contains', label: '⊃ Contains' },
   { value: '>=', label: '≥ Greater or Equal' },
   { value: '<=', label: '≤ Less or Equal' },
@@ -88,7 +90,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
 
     // Changing the field or operator away from "in" invalidates any in-flight
     // draft text for this row (it belonged to a different value shape).
-    if (field === 'field' || (field === 'operator' && value !== 'in')) {
+    if (field === 'field' || (field === 'operator' && value !== 'in' && value !== 'not_in')) {
       setInDrafts(prev => {
         if (!(index in prev)) return prev
         const next = { ...prev }
@@ -213,7 +215,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
                     <div>
                       <label className="block text-xs font-medium text-muted-foreground/70 mb-1.5">Value</label>
                       {fieldConfig?.type === 'select' ? (
-                        condition.operator === 'in' ? (
+                        (condition.operator === 'in' || condition.operator === 'not_in') ? (
                           <input
                             type="text"
                             value={

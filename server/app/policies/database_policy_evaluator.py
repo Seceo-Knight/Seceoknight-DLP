@@ -220,7 +220,7 @@ class DatabasePolicyEvaluator:
                 prefixes = value if isinstance(value, list) else [value]
                 candidate = str(event_value)
                 return any(_prefix_match(candidate, str(prefix)) for prefix in prefixes)
-            if operator == "in":
+            if operator in ("in", "not_in"):
                 if isinstance(value, list):
                     options = value
                 elif isinstance(value, str) and "," in value:
@@ -229,10 +229,23 @@ class DatabasePolicyEvaluator:
                 else:
                     options = [value]
                 if isinstance(event_value, list):
-                    return any(str(item).lower() in [str(o).lower() for o in options] for item in event_value)
-                return str(event_value).lower() in [str(opt).lower() for opt in options]
+                    is_in = any(str(item).lower() in [str(o).lower() for o in options] for item in event_value)
+                else:
+                    is_in = str(event_value).lower() in [str(opt).lower() for opt in options]
+                # not_in is what makes a policy exception expressible at all:
+                # e.g. a "Cloud upload" block policy with an added
+                # "destination_path not_in sanctioned-partner.com" condition
+                # lets that one destination through without weakening the
+                # block for everything else. Without this, there was no way
+                # to scope an exception onto an existing block policy — a
+                # separate "allow" policy can't override a matched "block"
+                # policy (see the block > quarantine > alert > allow
+                # precedence in evaluate_policy_realtime()).
+                return (not is_in) if operator == "not_in" else is_in
             if operator == "equals":
                 return str(event_value).lower() == str(value).lower()
+            if operator == "not_equals":
+                return str(event_value).lower() != str(value).lower()
             if operator == "contains":
                 return str(value).lower() in str(event_value).lower()
         except Exception as exc:

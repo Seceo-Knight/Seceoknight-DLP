@@ -8,6 +8,35 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🚧 Filename Best-Effort Recovery + Policy Exception Operators (not_equals / not_in) (July 20, 2026)
+
+### Summary
+
+Three enterprise-usability gaps raised together: (1) blocked browser-extension events still show `upload.bin` instead of the real filename, (2) no way to allow a specific destination/case while an existing block policy stays active for everything else, (3) 50-agent scale concern about the browser extension needing its own separate registered identity per machine (tracked separately — not fixed in this entry, flagged as a larger follow-up needing explicit sign-off given it touches the Windows agent's C++ registration code).
+
+### Filename (partial, honest fix)
+
+`inject.js` now tries to recover a real filename from the request URL's query string (`filename`/`fileName`/`name`/`title`/`upload_name` params) before falling back to `upload.bin`. This helps for services that pass the filename that way. It does **not** fix Gmail/Drive's specific resumable-upload pattern — the byte-content request goes to an opaque session URI with no filename anywhere in that request; the real name only exists in an earlier, separate metadata-initiation call. Correlating two distinct requests per upload safely would need to be built against real captured traffic, which isn't available in this environment — documented as a known, still-open limitation rather than guessed at blind.
+
+### Exception operators — the real fix for "how do I allow some"
+
+Checked the actual precedence logic in `evaluate_policy_realtime()`: if *any* matching policy says `block`, that wins outright, unconditionally — a separate "allow" policy can never override a matched "block" policy, regardless of priority. So exceptions have to be expressed as an exclusion condition **on the block policy itself** — but no negation operator existed anywhere (backend or dashboard), so that couldn't be expressed at all.
+
+- `database_policy_evaluator.py`: added `not_equals` and `not_in` operators (mirrors the existing `equals`/`in` case-insensitive matching, inverted).
+- `ClassificationPolicyForm.tsx`: added both to the operator dropdown, and extended the multi-value comma-separated input (from the earlier "in"-operator fix) to also apply to `not_in`.
+
+Example this unlocks: on the "Cloud upload" block policy, add `destination_path not_in sanctioned-partner.com` to let that one destination through without touching the block for everything else.
+
+### Verification
+
+`python3 -c "import ast; ast.parse(...)"` passes on the evaluator. `npx tsc --noEmit` and `npm run build` pass on the dashboard (same two pre-existing unused-import warnings as every prior dashboard change this session); `dist/` reverted after building. `node --check` passes on `inject.js`. None of this is live-tested — needs real verification once deployed.
+
+### Result
+
+Admins can now build real exceptions onto existing block policies. Filenames are more often correct for non-Google cloud destinations; Gmail/Drive's `upload.bin` limitation remains open and documented. The 50-agent registration-scaling concern is explicitly deferred, not silently dropped — see the Pending note above.
+
+---
+
 ## 🖼️ Per-Frame Coalescing Cache Didn't Stop Duplicate Events — Moved to the Shared Service Worker (July 20, 2026)
 
 ### Summary

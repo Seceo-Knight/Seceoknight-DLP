@@ -84,20 +84,45 @@
     return new File([bytes], name || "upload.bin", { type: type || "application/octet-stream" });
   }
 
-  function collectFiles(body) {
+  // Best-effort filename recovery for raw Blob/ArrayBuffer bodies, which the
+  // Fetch/XHR APIs never attach a name to (only a real File object has one —
+  // see the module-level comment in decideForBody for the full explanation).
+  // Some services put the filename in the request URL as a query parameter;
+  // this catches that case. It does NOT catch Google's resumable-upload
+  // pattern (Gmail/Drive), where the byte-content request goes to an opaque
+  // session URI with no filename anywhere in that specific request — the
+  // real name lives only in an earlier, separate metadata-initiation call.
+  // Fixing that fully would need correlating two distinct network requests
+  // per upload, which isn't safe to build without being able to inspect the
+  // actual live traffic — so for Gmail/Drive specifically, "upload.bin" is a
+  // known, documented limitation for now, not something this function fixes.
+  function guessFileNameFromUrl(url) {
+    try {
+      var params = new URL(url, location.href).searchParams;
+      var candidates = ["filename", "fileName", "name", "title", "upload_name"];
+      for (var i = 0; i < candidates.length; i++) {
+        var v = params.get(candidates[i]);
+        if (v) return decodeURIComponent(v);
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function collectFiles(body, url) {
     var files = [];
+    var urlHint = url ? guessFileNameFromUrl(url) : null;
     if (body instanceof File) files.push(body);
-    else if (body instanceof Blob) files.push(asFile(body, "upload.bin", body.type));
+    else if (body instanceof Blob) files.push(asFile(body, urlHint || "upload.bin", body.type));
     // Resumable uploads (Google Drive, etc.) send raw bytes, not File/Blob.
-    else if (body instanceof ArrayBuffer) files.push(asFile(body, "upload.bin"));
+    else if (body instanceof ArrayBuffer) files.push(asFile(body, urlHint || "upload.bin"));
     else if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(body)) {
-      files.push(asFile(body.buffer ? body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) : body, "upload.bin"));
+      files.push(asFile(body.buffer ? body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) : body, urlHint || "upload.bin"));
     }
     else if (typeof FormData !== "undefined" && body instanceof FormData) {
       try {
         body.forEach(function (v) {
           if (v instanceof File) files.push(v);
-          else if (v instanceof Blob) files.push(asFile(v, "upload.bin", v.type)); // bare Blob part (no filename)
+          else if (v instanceof Blob) files.push(asFile(v, urlHint || "upload.bin", v.type)); // bare Blob part (no filename)
         });
       } catch (e) {}
     }
@@ -129,7 +154,7 @@
       if (cached && cached.expiresAt > Date.now()) return cached.promise;
     }
 
-    var files = collectFiles(body);
+    var files = collectFiles(body, url);
     // Diagnostic (page console): shows every cloud-host request this page realm
     // sees. If a Drive upload produces NO such line, the upload ran in a worker
     // the page hook can't reach — the known limitation.
