@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🌊 One File Upload Flooded the Dashboard With Duplicate Events (July 18, 2026)
+
+### Summary
+
+First fully-working live test of the browser extension (blocking finally confirmed end to end): attaching one file in Gmail produced a large number of near-identical events in the dashboard, all named `upload.bin`.
+
+### Root cause
+
+Gmail's attachment upload isn't a single network request — like Google Drive, it uses a chunked/resumable upload protocol under the hood (an init call, one or more content chunks, progress pings, etc.). `inject.js`'s `decideForBody()` treated **every** intercepted cloud-host request carrying file-like bytes as an independent file to classify — so attaching one real file triggered several separate classify → decide → log round trips, one per underlying network request. None of those individual chunk requests are real `File` objects with a `.name` (only `Blob`/`ArrayBuffer` bodies), which is the same root cause behind the `upload.bin` filename — both symptoms trace back to the same gap: the page-level interception only sees raw bytes, not the logical "one file" the user actually attached.
+
+### Fixed
+
+- Added a short (4s) per-destination-host coalescing cache in `inject.js`: repeated requests to the same cloud host within the window reuse the most recent decision instead of re-classifying and re-logging. A `block` decision is always reused as `block` (never weakens); documented trade-off is that a genuinely different file uploaded to the same host within the 4s window would inherit the prior decision rather than being freshly classified — kept short specifically to bound that risk.
+
+### Verification
+
+`node --check` passes. Not live-tested in this sandbox (no browser available) — needs a real re-upload test to confirm the event count drops to one (or few) per file.
+
+### Result
+
+Attaching one file should now produce roughly one event instead of a flood. The `upload.bin` filename issue is a separate, still-open cosmetic gap (browsers don't expose a filename on raw `Blob`/`ArrayBuffer` upload bodies at all — fixing it fully would need protocol-specific knowledge of Gmail's/Drive's resumable-upload metadata calls, out of scope for today).
+
+---
+
 ## 🔒 Browser Extension Never Actually Worked — Silent TLS Verification Failure Against the Self-Signed Cert (July 17, 2026)
 
 ### Summary

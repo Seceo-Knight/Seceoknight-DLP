@@ -37,6 +37,24 @@
   var pending = new Map(); // requestId -> resolve()
   var seq = 0;
 
+  // Chunked/resumable upload protocols (Gmail, Google Drive, etc.) split ONE
+  // logical file the user attaches into several separate network requests
+  // (an init call, one or more byte-range chunks, progress pings, ...). Each
+  // request used to be classified and logged completely independently, which
+  // is why attaching a single file could flood the dashboard with many
+  // near-identical events, all showing the generic "upload.bin" name (none
+  // of those individual chunk requests are real File objects with a name —
+  // same underlying cause as the filename issue).
+  //
+  // Coalesce: reuse the most recent decision for a destination host for a
+  // short window instead of re-classifying + re-logging every chunk.
+  // Deliberate trade-off, not a full fix: a block decision is always reused
+  // as block (never weakens), but a genuinely different file uploaded to the
+  // SAME host within the window would inherit the earlier decision rather
+  // than being freshly classified. Kept short to bound that risk.
+  var recentDecisions = new Map(); // host -> { promise, expiresAt }
+  var COALESCE_WINDOW_MS = 4000;
+
   function isCloudUrl(url) {
     try {
       var host = new URL(url, location.href).hostname.toLowerCase();
@@ -100,6 +118,17 @@
   // Returns the strictest decision across all files in the body.
   function decideForBody(url, body) {
     if (!isCloudUrl(url) || body == null) return Promise.resolve({ action: "allow" });
+
+    var destHost;
+    try { destHost = new URL(url, location.href).hostname.toLowerCase(); } catch (e) { destHost = ""; }
+
+    // Reuse an in-flight/recent decision for this destination instead of
+    // re-classifying + re-logging every chunk of the same upload.
+    if (destHost) {
+      var cached = recentDecisions.get(destHost);
+      if (cached && cached.expiresAt > Date.now()) return cached.promise;
+    }
+
     var files = collectFiles(body);
     // Diagnostic (page console): shows every cloud-host request this page realm
     // sees. If a Drive upload produces NO such line, the upload ran in a worker
@@ -128,7 +157,15 @@
         });
       });
     });
-    return chain.then(function (blocked) { return blocked || worst; });
+    var resultPromise = chain.then(function (blocked) { return blocked || worst; });
+
+    // Only cache when we actually found file-like content to classify — an
+    // empty/metadata-only request shouldn't suppress classification of the
+    // real content request that follows it.
+    if (destHost) {
+      recentDecisions.set(destHost, { promise: resultPromise, expiresAt: Date.now() + COALESCE_WINDOW_MS });
+    }
+    return resultPromise;
   }
 
   function announceBlock(dec, fileName) {
