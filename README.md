@@ -335,6 +335,19 @@ This has two parts working together on the same PC:
 > **Do this on every Windows PC** where you want cloud-upload protection —
 > it's a per-PC setup, same as the endpoint agent in Step 2.
 
+> **This is a separate install from Step 2, even if you've already
+> installed the agent on this PC.** The endpoint agent (Step 2) and the
+> browser extension are two different programs that happen to work
+> together — installing or reinstalling one does **not** set up the other.
+> The agent only monitors things like file access, USB drives, and the
+> clipboard; it has no idea a browser extension exists, and reinstalling it
+> never touches Chrome/Edge or writes any of the files the extension needs.
+> So even right after reinstalling the agent, you still need to go through
+> Step 5 below to actually connect the browser extension — the only thing
+> that changes is that Step 5.4's `install.ps1` can now find and reuse the
+> agent's identity automatically, instead of you having to register a
+> separate one by hand.
+
 ### 5.1 — Identity: do you already have the endpoint agent on this PC?
 
 The native host needs to prove to the server who it is, the same way the
