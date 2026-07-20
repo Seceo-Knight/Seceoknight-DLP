@@ -22,8 +22,17 @@ function log(...a) { console.log("[SK-DLP]", ...a); }
 function warn(...a) { console.warn("[SK-DLP]", ...a); }
 
 let port = null;
-const waiters = new Map(); // requestId -> sendResponse
+const waiters = new Map(); // requestId -> respond (fans out to every piggybacked caller, see inFlightByKey)
 const requestKeys = new Map(); // requestId -> coalesce key, ONLY set for requests we're willing to cache
+
+// In-flight requests, keyed the same way as recentDecisions. A completed
+// decision only gets cached AFTER the native host responds — so two
+// requests for the SAME file that both arrive before the first one's round
+// trip finishes would previously both go out to the native host and both
+// fire their own alert/event, even with the file-identity coalescing key
+// above. This tracks the in-progress "leader" request per key so a second,
+// concurrent request for the same key piggybacks on it instead of racing it.
+const inFlightByKey = new Map(); // coalesce key -> { waiters: [sendResponse, ...] }
 
 // Cross-frame decision cache. manifest.json injects inject.js into EVERY
 // frame/iframe on the page ("all_frames": true), each with its own isolated
@@ -78,6 +87,13 @@ function fetchExtraHosts() {
 function failOpenAll(reason) {
   for (const [, respond] of waiters) { try { respond({ action: "allow", reason }); } catch (e) {} }
   waiters.clear();
+  requestKeys.clear();
+  // Also drop in-flight leaders — otherwise a key stuck here (its leader's
+  // waiters map entry just got wiped above, so it will never resolve) would
+  // permanently block every future request for that file from ever becoming
+  // a new leader, silently fail-closed-by-omission forever after one
+  // disconnect. Safe to drop: nothing here has a decision yet anyway.
+  inFlightByKey.clear();
 }
 
 function connect() {
@@ -106,6 +122,13 @@ function connect() {
         requestKeys.delete(msg.requestId);
         if (coalesceKey) {
           recentDecisions.set(coalesceKey, { decision, expiresAt: Date.now() + COALESCE_WINDOW_MS });
+          // Clear the leader marker now that a real decision exists — any
+          // follower that piggybacked is fanned out via respond() below
+          // (waiters.get returns the fan-out closure, not a single
+          // sendResponse, once a request has become a leader; see the
+          // classify handler). Future requests for this key are free to
+          // become a new leader (or hit recentDecisions above instead).
+          inFlightByKey.delete(coalesceKey);
         }
         respond(decision);
       }
@@ -172,18 +195,42 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  // A "leader" request for this exact file is already in flight (its
+  // round-trip to the native host hasn't completed, so recentDecisions above
+  // is still empty for it) — piggyback on the leader instead of racing it
+  // with a second independent classify call to the native host. This closes
+  // the race-condition gap the cache alone can't: recentDecisions only gets
+  // populated once the leader's decision actually arrives (see port.onMessage
+  // below), so a follower arriving BEFORE that point needs this separate
+  // in-flight registry.
+  const inFlight = inFlightByKey.get(coalesceKey);
+  if (inFlight) {
+    log("piggybacking on in-flight request for", coalesceKey);
+    inFlight.waiters.push(sendResponse);
+    return true; // async — answered when the leader's decision arrives
+  }
+
   if (!port) connect();
   if (!port) { warn("no native host available → allow (fail-open)"); sendResponse({ action: "allow", reason: "agent-unavailable" }); return false; }
 
-  waiters.set(message.requestId, sendResponse);
+  // Become the leader for this key. leaderEntry.waiters starts with just
+  // this caller, and grows if other requests for the same key piggyback
+  // before the native host responds.
+  const leaderEntry = { waiters: [sendResponse] };
+  inFlightByKey.set(coalesceKey, leaderEntry);
+  const fanOut = (decision) => {
+    for (const respond of leaderEntry.waiters) { try { respond(decision); } catch (e) {} }
+  };
+  waiters.set(message.requestId, fanOut);
   requestKeys.set(message.requestId, coalesceKey); // eligible to be cached if a real decision arrives
   try {
     port.postMessage(Object.assign({ type: "classify", requestId: message.requestId }, message.meta));
   } catch (e) {
     waiters.delete(message.requestId);
     requestKeys.delete(message.requestId);
+    inFlightByKey.delete(coalesceKey);
     warn("postMessage to host failed:", e && e.message);
-    sendResponse({ action: "allow", reason: "send-failed" });
+    fanOut({ action: "allow", reason: "send-failed" });
     return false;
   }
 
@@ -192,8 +239,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (respond) {
       waiters.delete(message.requestId);
       requestKeys.delete(message.requestId); // fail-open — never cache this as a real decision
+      inFlightByKey.delete(coalesceKey);
       warn("agent timeout for", message.requestId);
-      respond({ action: "allow", reason: "agent-timeout" });
+      respond({ action: "allow", reason: "agent-timeout" }); // fans out to every piggybacked waiter too
     }
   }, AGENT_TIMEOUT_MS);
 

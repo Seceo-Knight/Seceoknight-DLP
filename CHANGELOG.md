@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🏁 Two Events Instead of One — Piggyback In-Flight Classify Requests (July 20, 2026)
+
+### Summary
+
+After the file-identity coalescing fix below cut duplicate browser-extension alerts from four to two, the user asked for it to go all the way to one event per upload.
+
+### Root cause
+
+`recentDecisions` (the coalescing cache) is only populated **after** the native host's decision actually arrives, inside the `port.onMessage` handler. If two of Gmail's chunked upload requests for the *same* file both reach the `classify` handler before the first one's round trip to the native host completes, the second one finds nothing cached yet — the cache can't help until a decision exists — so it independently sends its own `classify` message to the native host, producing a second server-side event for one upload. The earlier file-identity fix closed the gap for requests that arrive *after* a decision is cached; it couldn't close this one, which is a pure timing race between two requests that both arrive first.
+
+### Fixed
+
+`agents/browser-extension/src/background.js`: added an `inFlightByKey` registry (keyed the same way as `recentDecisions`) that tracks the in-progress "leader" request per file. A request that finds a leader already in flight for its key piggybacks on it — it's added to the leader's waiters list and answered when the leader's real decision arrives, instead of sending its own message to the native host. The leader's `waiters` entry is now a fan-out function that resolves every piggybacked caller at once. The in-flight marker is cleared as soon as a real decision is cached, and on every fail-open path too (send failure, timeout, native-host disconnect), so a dropped leader can never permanently block future requests for that key.
+
+### Verification
+
+`node --check` passes. Not live-tested in this sandbox (no browser access here) — needs a real redeploy + retest. The service worker console should show `piggybacking on in-flight request for file:<name>:<size>` for the second request of a chunked upload instead of a second `classify:` line going out to the native host.
+
+### Result
+
+A single file upload should now produce exactly one browser-extension alert/event, even when the underlying upload protocol issues multiple concurrent requests for the same file before the first classification completes.
+
+---
+
 ## 🔁 Real File Capture Fix Resurfaced Duplicate Alerts — Coalesce by File Identity, Not Host (July 20, 2026)
 
 ### Summary
