@@ -500,8 +500,23 @@ services:
       # (encrypted archives, scanned-image PDFs, legacy .doc).
       - RELAY_BLOCK_UNEXTRACTABLE=${RELAY_BLOCK_UNEXTRACTABLE:-false}
       - RELAY_BLOCK_ON_DLP_ERROR=${RELAY_BLOCK_ON_DLP_ERROR:-false}
+      # Inbound STARTTLS. Unset (default) = plaintext listener only — fine
+      # for a LAN-only relay, but mail crossing the public internet to reach
+      # this relay (e.g. Google Workspace's outbound gateway) should not do
+      # so in cleartext. Point RELAY_TLS_CERT_FILE/RELAY_TLS_KEY_FILE at a
+      # real cert (e.g. Let's Encrypt) mounted below, then set both env vars
+      # to their in-container paths.
+      - RELAY_TLS_CERT_FILE=${RELAY_TLS_CERT_FILE:-}
+      - RELAY_TLS_KEY_FILE=${RELAY_TLS_KEY_FILE:-}
+      - RELAY_REQUIRE_STARTTLS=${RELAY_REQUIRE_STARTTLS:-false}
     ports:
       - "${RELAY_HOST_PORT:-10025}:10025"
+    volumes:
+      # Only takes effect once RELAY_TLS_CERT_DIR is set (see .env.example) —
+      # bind-mounts your host's cert directory read-only into the container
+      # at /certs, matching the paths RELAY_TLS_CERT_FILE/RELAY_TLS_KEY_FILE
+      # should point at (e.g. /certs/fullchain.pem, /certs/privkey.pem).
+      - ${RELAY_TLS_CERT_DIR:-./smtp-relay/certs}:/certs:ro
     depends_on:
       manager:
         condition: service_healthy

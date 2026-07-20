@@ -46,6 +46,37 @@ place. It's a small standalone image (no ML stack).
 | `RELAY_BLOCK_UNEXTRACTABLE` | `true` = reject mail whose attachments can't be read (encrypted zip, scanned-image PDF, legacy `.doc`). Safer, but bounces some legit mail. Default `false`. |
 | `RELAY_BLOCK_ON_DLP_ERROR` | `true` = fail **closed** if the DLP server is unreachable. Default `false` (a DLP outage must not stop company mail). |
 | `RELAY_SCAN_BODY` | Scan the message body too (default `true`). |
+| `RELAY_TLS_CERT_FILE` / `RELAY_TLS_KEY_FILE` | PEM cert + key for **inbound** STARTTLS (in-container paths, e.g. `/certs/fullchain.pem`). Unset = plaintext listener only. See [TLS](#tls-inbound-starttls) below — needed before exposing this relay to the public internet. |
+| `RELAY_REQUIRE_STARTTLS` | `true` = reject any command before STARTTLS is negotiated. Only meaningful with the cert/key above set. Default `false`. |
+
+## TLS (inbound STARTTLS)
+Whoever connects to this relay from the public internet (Google's outbound
+gateway, Microsoft's connector) should not do so in cleartext — the whole
+point of this relay is protecting sensitive mail, so the mail itself
+shouldn't cross the internet unencrypted to reach it.
+
+1. Get a certificate for the relay's public hostname. The standard free
+   option is [Let's Encrypt](https://letsencrypt.org/) via `certbot`:
+   ```bash
+   sudo certbot certonly --standalone -d relay.yourdomain.com
+   # produces /etc/letsencrypt/live/relay.yourdomain.com/{fullchain.pem,privkey.pem}
+   ```
+   `--standalone` needs port 80 reachable from the internet during issuance
+   (and renewal) — if that's not possible on your network, use certbot's
+   `--dns-<provider>` plugin (DNS-01 challenge) instead, which doesn't need
+   any inbound port open at all.
+2. Point the compose volume at that directory and set the env vars in `.env`:
+   ```
+   RELAY_TLS_CERT_DIR=/etc/letsencrypt/live/relay.yourdomain.com
+   RELAY_TLS_CERT_FILE=/certs/fullchain.pem
+   RELAY_TLS_KEY_FILE=/certs/privkey.pem
+   RELAY_REQUIRE_STARTTLS=true
+   ```
+3. `docker compose -f docker-compose.prod.yml up -d smtp-relay` and check the
+   logs for `STARTTLS enabled (cert=..., required=True)`.
+4. Let's Encrypt certs expire every 90 days — `certbot renew` (cron/systemd
+   timer) handles renewal; the relay picks up the renewed file on its next
+   restart (it doesn't hot-reload the cert while running).
 
 Add to `.env`:
 ```
@@ -61,6 +92,18 @@ Then: `docker compose up -d smtp-relay`
    *to* your relay over the internet — it needs a public DNS name/IP, the SMTP
    port open, and (strongly recommended) TLS. ⚠️ This is the main infra
    prerequisite; an internal-only host will not work.
+   - **If the server is on-prem / behind a firewall** (not a cloud VM with its
+     own public IP): you need a static public IP from your ISP (or Dynamic
+     DNS if not), a NAT/port-forward or Virtual IP rule on your firewall
+     mapping an external port to the relay container's port (`10025` by
+     default, or `RELAY_HOST_PORT`), and a firewall policy permitting that
+     inbound traffic. Google lets you specify **any port** in the Hosts
+     config below — if your ISP blocks inbound port 25 (common), forward a
+     different external port (e.g. `2525`) instead; Google will still
+     connect to it fine.
+   - Check whether port 25 inbound is actually reachable before relying on
+     it: [mxtoolbox.com/SuperTool.aspx](https://mxtoolbox.com/SuperTool.aspx)
+     (SMTP test) from outside your network, or ask your ISP directly.
 2. **Admin console** → *Apps → Google Workspace → Gmail → Hosts* → add your
    relay host (name/IP + port).
 3. *Gmail → Routing* → **Outbound gateway** (or a Routing rule scoped to

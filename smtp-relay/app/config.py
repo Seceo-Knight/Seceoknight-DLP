@@ -12,6 +12,22 @@ class Config:
     LISTEN_PORT = int(os.environ.get("RELAY_LISTEN_PORT", "10025"))
     MAX_MESSAGE_BYTES = int(os.environ.get("RELAY_MAX_MESSAGE_BYTES", str(50 * 1024 * 1024)))
 
+    # --- inbound TLS (STARTTLS), for when this relay is reachable from the
+    # public internet (e.g. Google Workspace's outbound gateway). Both unset
+    # (the default) means the listener stays plaintext-only, same as before —
+    # fine for a purely internal/LAN-only relay, but mail crossing the public
+    # internet to reach this relay should not do so in cleartext. Point these
+    # at a real cert (e.g. Let's Encrypt for the relay's public hostname);
+    # PEM format, matching what most ACME clients (certbot, etc.) produce.
+    TLS_CERT_FILE = os.environ.get("RELAY_TLS_CERT_FILE", "")
+    TLS_KEY_FILE = os.environ.get("RELAY_TLS_KEY_FILE", "")
+    # Reject any DATA/MAIL command before STARTTLS is negotiated. Only
+    # meaningful when TLS_CERT_FILE/TLS_KEY_FILE are set; otherwise there's no
+    # TLS to require. Off by default even with a cert configured, since some
+    # legitimate internal senders may not speak STARTTLS — opt in once you've
+    # confirmed Google Workspace (or your MTA) is actually using it.
+    REQUIRE_STARTTLS = _bool("RELAY_REQUIRE_STARTTLS", False)
+
     # --- where clean mail goes next (e.g. smtp-relay.gmail.com:587, or your smarthost)
     NEXT_HOP_HOST = os.environ.get("RELAY_NEXT_HOP_HOST", "")
     NEXT_HOP_PORT = int(os.environ.get("RELAY_NEXT_HOP_PORT", "25"))

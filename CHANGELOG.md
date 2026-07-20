@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔐 SMTP Relay Had No Inbound TLS — Added STARTTLS Support (July 20, 2026)
+
+### Summary
+
+Resuming the SMTP relay / Google Workspace routing setup paused earlier this session (server public reachability was unclear at the time). The README already said TLS was "strongly recommended" for exposing the relay to Google's outbound gateway over the public internet, but nothing in the code actually supported it — `main.py` constructed the `aiosmtpd` `Controller` with no `tls_context` at all, so the listener was plaintext-only regardless of configuration. Found via code inspection before telling the user to open a port to it.
+
+### Fixed
+
+- `smtp-relay/app/config.py`: new `RELAY_TLS_CERT_FILE` / `RELAY_TLS_KEY_FILE` (PEM cert+key paths) and `RELAY_REQUIRE_STARTTLS` (reject commands before STARTTLS is negotiated) settings. All unset by default — a relay with no cert configured behaves exactly as before (plaintext, e.g. for LAN-only use).
+- `smtp-relay/app/main.py`: builds an `ssl.SSLContext` from those files when both are set and passes it as `tls_context` (aiosmtpd forwards `Controller(**kwargs)` straight to the underlying `SMTP()` class, which natively supports `tls_context`/`require_starttls`).
+- `docker-compose.prod.yml`: added the new env vars plus a read-only volume mount (`RELAY_TLS_CERT_DIR`, defaults to `./smtp-relay/certs`) so a host-side cert (e.g. Let's Encrypt) can be mounted into the container.
+- `smtp-relay/README.md`: new "TLS (inbound STARTTLS)" section (cert acquisition via `certbot`, config, renewal) and a note in the Google Workspace routing section for on-prem/behind-a-firewall deployments (port-forward/VIP + firewall policy needed; Google's Hosts config accepts any port, so ISP port-25 blocking can be worked around with an alternate port).
+
+### Verification
+
+**Actually tested end-to-end in this environment** (unlike most of tonight's other changes — this one doesn't need Windows/a browser): installed the relay's real dependencies, generated a self-signed cert with `openssl`, started the relay with `RELAY_TLS_CERT_FILE`/`RELAY_TLS_KEY_FILE`/`RELAY_REQUIRE_STARTTLS=true`, and connected with `smtplib`:
+- `EHLO` correctly advertised `STARTTLS`.
+- `STARTTLS` handshake succeeded (`220 Ready to start TLS`), followed by a clean post-TLS `EHLO` and a successful message send.
+- A second connection confirmed `RELAY_REQUIRE_STARTTLS=true` actually enforces the requirement: `MAIL FROM` issued before `STARTTLS` was correctly rejected with `530 Must issue a STARTTLS command first`.
+- `docker-compose.prod.yml` validated with a YAML parser after the edit.
+
+Not yet tested: a real Let's Encrypt cert (only a self-signed test cert was used here), and the actual Google Workspace Hosts/routing configuration, which needs a real public IP/port-forward — infra the user is setting up.
+
+---
+
 ## 🔑 Agent Now Persists Its Own api_key — Browser Extension Can Reuse It (No More Per-Machine Registration) (July 20, 2026)
 
 ### Summary
