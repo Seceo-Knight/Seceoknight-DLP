@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🪪 Agent Showed "Disconnected" After Reboot — Identity Regenerated on Every Restart (July 21, 2026)
+
+### Summary
+
+After rebooting both the server and a Windows endpoint machine, the endpoint's agent kept showing "Disconnected" on the dashboard even though the process was confirmed alive and working (OCR running, heartbeats going out) — the log showed `Heartbeat response: HTTP 404`.
+
+### Root cause
+
+`C:\Program Files\SeceoKnight\agent_config.json` — confirmed by inspecting the actual file on the affected machine — has no `agent_id` key at all. It's written directly by `install-agent.ps1`'s own PowerShell (`$config | ConvertTo-Json ...`), which never included this field. `AgentConfig::LoadFromFile()` falls back to `GenerateUUID()` whenever the key is missing, but that freshly-generated id was never written back to disk (`SaveToFile()` only runs the very first time the config file is created, never again). The result: **every single agent restart — reboot, crash recovery via the scheduled task's `RestartCount`, or a manual relaunch — silently generated a brand new random identity** and re-registered as if it were a different machine. The server's `register_agent()` matches existing agents by name+OS and adopts whatever new id the client sends, orphaning the previous one. This is invisible as long as the fresh registration round-trips successfully before the next heartbeat — but any hiccup in that window (confirmed via the agent's own log: three different Agent IDs logged across three restarts on this one machine, `FD5D1175...`, `0D989F1E...`, `616EA778...`) leaves the running process heartbeating with an id the server has never seen, i.e. permanent `404 Agent not found` until the next restart happens to land cleanly.
+
+### Fixed
+
+`agents/endpoint/windows/agent.cpp`: added `AgentConfig::LoadPersistedIdentity()`, which reads the already-existing `C:\ProgramData\SeceoKnight\agent_key.json` (the file `SaveApiKeyFile()` writes to after a successful registration, and that the browser extension's `install.ps1` already reads for the same reason — ProgramData is writable at runtime by the non-elevated scheduled-task user, unlike Program Files). `LoadFromFile()` now checks this file for a previously-registered id before generating a new one, and only mints + immediately persists a brand new UUID on a machine's genuinely first-ever run. Also guarded the `api_key` extraction right after it so it doesn't clobber an `apiKey` just loaded from the ProgramData file with an empty value from `agent_config.json` (which never actually contains this key in practice).
+
+### Verification
+
+Brace/paren delta checked against the pre-edit version of the file (both added in exactly matching pairs — 5/5 braces, 33/33 parens). No C++ compiler available in this sandbox; the GitHub Actions Windows build (`build-windows-agent.yml`) auto-commits the compiled binary on push, which is the available confirmation that this compiled successfully.
+
+### Result
+
+An agent's identity is now stable across restarts — reboots, crashes, and manual relaunches all reuse the same `agent_id`/`api_key` going forward, so the "Disconnected after reboot" failure mode described here can't recur. Immediate remediation for a machine already affected: `Stop-ScheduledTask -TaskName "SeceoKnight DLP Agent"` then `Start-ScheduledTask -TaskName "SeceoKnight DLP Agent"` forces one fresh, clean re-registration; the updated binary prevents needing to do that again after future restarts.
+
+---
+
 ## 🌐 Whole Dashboard (Including Login) Broke After a Routine Update — Stale Nginx Upstream IP (July 20, 2026)
 
 ### Summary

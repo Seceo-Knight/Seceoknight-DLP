@@ -1408,15 +1408,61 @@ void Log(const std::string& level, const std::string& message) {
                 if (!extractedId.empty()) {
                     agentId = extractedId;
                 } else {
-                    agentId = GenerateUUID();
+                    // agent_config.json (Program Files) has no agent_id key at
+                    // all — true for EVERY install created by
+                    // install-agent.ps1, which writes this file directly via
+                    // PowerShell and has never included this field. Program
+                    // Files isn't writable at runtime by the non-elevated
+                    // scheduled-task user (see SaveToFile()'s comment above),
+                    // so we can't just patch the key back into THIS file.
+                    // Instead, check the ProgramData identity file
+                    // (C:\ProgramData\SeceoKnight\agent_key.json) that
+                    // SaveApiKeyFile() already writes to and IS writable at
+                    // runtime — if a previous run already generated and
+                    // registered an id, reuse it instead of minting a new one.
+                    //
+                    // Without this fallback, EVERY agent restart (reboot,
+                    // crash recovery via the scheduled task's RestartCount,
+                    // manual relaunch) silently generated a brand new random
+                    // UUID, re-registered as if it were a different machine,
+                    // and orphaned the previous id server-side. That's
+                    // harmless as long as the fresh registration round-trips
+                    // successfully before the next heartbeat — but any
+                    // hiccup in that window (server briefly unreachable
+                    // right at boot, a timing race, etc.) leaves the running
+                    // process heartbeating with an id the server has never
+                    // seen, which shows up as "Agent {id} not found" (404)
+                    // on every single heartbeat until the next restart —
+                    // exactly the "agent shows Disconnected after reboot"
+                    // symptom this was chased down from.
+                    std::string persistedId, persistedKey;
+                    if (LoadPersistedIdentity(persistedId, persistedKey)) {
+                        agentId = persistedId;
+                        apiKey = persistedKey;
+                    } else {
+                        // Truly the first run anywhere for this machine —
+                        // generate once and persist immediately, so every
+                        // future restart finds it above instead of repeating
+                        // this branch.
+                        agentId = GenerateUUID();
+                        SaveApiKeyFile("C:\\ProgramData\\SeceoKnight\\agent_key.json");
+                    }
                 }
 
                 // Extract api_key, if this config was previously saved after
                 // a successful registration (see RegisterAgent()). Empty on
                 // first run / older configs predating this — that's fine,
                 // RegisterAgent() will populate and persist it once it gets
-                // a successful response from the server.
-                apiKey = ExtractJsonValue(content, "api_key");
+                // a successful response from the server. Only overwrite
+                // apiKey if this file actually has a non-empty value —
+                // agent_config.json never actually contains this key in
+                // practice (it lives in agent_key.json instead), and an
+                // unconditional overwrite here would blow away an apiKey
+                // just loaded from LoadPersistedIdentity() above.
+                std::string extractedKey = ExtractJsonValue(content, "api_key");
+                if (!extractedKey.empty()) {
+                    apiKey = extractedKey;
+                }
 
                 // Extract heartbeat_interval
                 std::string hbInterval = ExtractJsonValue(content, "heartbeat_interval");
@@ -1548,6 +1594,29 @@ void Log(const std::string& level, const std::string& message) {
             file.close();
 
             std::cout << "Configuration saved to: " << path << std::endl;
+        }
+
+        // Reads a previously-persisted identity from the ProgramData location
+        // that SaveApiKeyFile() (below) writes to — and that the browser
+        // extension's install.ps1 also already reads to reuse this same
+        // identity. Used by LoadFromFile() as a fallback when
+        // agent_config.json itself has no agent_id — see the comment at
+        // that call site for why that's the normal case, not an edge case.
+        // Returns true and fills outId/outKey only if the file exists AND
+        // has a non-empty agent_id; false means this is genuinely the
+        // first run anywhere for this machine.
+        bool LoadPersistedIdentity(std::string& outId, std::string& outKey) {
+            std::ifstream file("C:\\ProgramData\\SeceoKnight\\agent_key.json");
+            if (!file.is_open()) return false;
+            std::string content((std::istreambuf_iterator<char>(file)),
+                                 std::istreambuf_iterator<char>());
+            file.close();
+            if (content.empty()) return false;
+            std::string id = ExtractJsonValue(content, "agent_id");
+            if (id.empty()) return false;
+            outId = id;
+            outKey = ExtractJsonValue(content, "api_key");
+            return true;
         }
 
         // Persists just {agent_id, api_key} to a small, separate file — see
