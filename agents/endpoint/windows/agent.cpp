@@ -4672,8 +4672,28 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
         int consecutiveFailures = 0;
         int heartbeatCount = 0;
         while (running) {
+            // SendHeartbeat() used to be void and swallowed every failure
+            // internally (network error, non-200 status, exception) without
+            // ever rethrowing — which meant this loop's own try/catch could
+            // never observe a failed heartbeat, consecutiveFailures could
+            // never rise above 0, and the "reinitialize a stale HTTP client"
+            // recovery below was permanently unreachable dead code. That's
+            // exactly the scenario its own comment describes handling —
+            // stale WinHTTP sessions after sleep/wake or a lock/unlock cycle
+            // — so an agent whose connection went stale after unlocking (or
+            // any other network blip) would keep silently "sending"
+            // heartbeats forever with no real chance of ever reconnecting,
+            // showing Disconnected on the dashboard until the process was
+            // fully restarted. SendHeartbeat() now returns whether it
+            // actually succeeded, so this loop can track real failures.
+            bool heartbeatOk = false;
             try {
-                SendHeartbeat();
+                heartbeatOk = SendHeartbeat();
+            } catch (...) {
+                heartbeatOk = false;
+            }
+
+            if (heartbeatOk) {
                 consecutiveFailures = 0;
                 heartbeatCount++;
 
@@ -4691,7 +4711,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                         logger.Info("===============================");
                     }
                 }
-            } catch (...) {
+            } else {
                 consecutiveFailures++;
                 logger.Error("Heartbeat error (consecutive failures: " + std::to_string(consecutiveFailures) + ")");
             }
@@ -4715,7 +4735,13 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
         }
      }
      
-     void SendHeartbeat() {
+     // Returns true only on a genuine HTTP 200 from the server. Every other
+     // outcome (unreachable, non-200 status, a thrown exception) returns
+     // false instead of just logging and returning — see the comment in
+     // HeartbeatLoop() for why that distinction is the whole point: the
+     // loop's stale-connection recovery can only trigger if failures are
+     // actually visible to it.
+     bool SendHeartbeat() {
          try {
              JsonBuilder json;
              json.AddString("timestamp", GetCurrentTimestampISO());
@@ -4723,24 +4749,29 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              if (!activePolicyVersion.empty()) {
                  json.AddString("policy_version", activePolicyVersion);
              }
-             
+
              std::pair<int, std::string> hb = GetHttpClient()->Put(
                  "/agents/" + config.agentId + "/heartbeat",
                  json.Build()
              );
              auto& [status, response] = hb;
-             
+
              if (status == 200) {
                  logger.Debug("Heartbeat sent successfully");
+                 return true;
              } else if (status == 0) {
                  logger.Debug("Cannot reach server for heartbeat");
+                 return false;
              } else {
                  logger.Debug("Heartbeat response: HTTP " + std::to_string(status));
+                 return false;
              }
          } catch (const std::exception& e) {
              logger.Debug(std::string("Heartbeat failed: ") + e.what());
+             return false;
          } catch (...) {
              logger.Debug("Heartbeat error");
+             return false;
          }
      }
      

@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 💤 Agent Stayed "Disconnected" After Unlock+Some Time — Heartbeat Failures Were Never Actually Detected (July 21, 2026)
+
+### Summary
+
+User reported the agent reconnecting fine right after unlocking a Windows machine, but going back to "Disconnected" on the dashboard some time later, despite the machine being on with a working internet connection.
+
+### Root cause
+
+`SendHeartbeat()` caught every possible failure internally — network unreachable, non-200 HTTP status, any thrown exception — and always returned normally (`void`) without ever rethrowing. `HeartbeatLoop()`'s own `try { SendHeartbeat(); consecutiveFailures = 0; } catch (...) { consecutiveFailures++; }` could therefore never observe a real failure: the `catch` block was unreachable dead code, and `consecutiveFailures` was unconditionally reset to 0 immediately after every call regardless of whether the heartbeat actually succeeded. The 3-consecutive-failures HTTP-client-reinit logic right below it — whose own comment explicitly says it exists to handle "stale WinHTTP sessions after network drops, sleep/wake, or IP address changes" — could never trigger. So if the connection went stale for any reason (exactly the sleep/lock-unlock scenario the comment describes), the agent would silently "send" a failing heartbeat every 30 seconds forever, with no working recovery path, until the process was fully restarted.
+
+### Fixed
+
+`agents/endpoint/windows/agent.cpp`: `SendHeartbeat()` now returns `bool` — `true` only on an actual HTTP 200, `false` for every other outcome (unreachable, non-200, exception) — instead of silently logging and returning. `HeartbeatLoop()` now branches on that return value instead of relying on an exception that was never thrown, so 3 real consecutive failures now correctly reinitialize the HTTP client as originally intended.
+
+### Verification
+
+Brace/paren delta checked against the pre-edit file (2/2 braces, 7/7 parens added, matched pairs). No C++ compiler available in this sandbox — relying on the Windows CI build's auto-commit as the compile check, same as the other agent.cpp changes in this session.
+
+### Result
+
+An agent whose connection goes stale (sleep/wake, lock/unlock, brief network blips, IP changes) now actually recovers on its own within about 3 heartbeat intervals (roughly 90 seconds at the default 30s interval), instead of staying silently "Disconnected" until someone notices and restarts it.
+
+---
+
 ## 🪪 Agent Showed "Disconnected" After Reboot — Identity Regenerated on Every Restart (July 21, 2026)
 
 ### Summary
