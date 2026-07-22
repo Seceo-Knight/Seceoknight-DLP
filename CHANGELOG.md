@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🏷️ Cloud Upload Events Showed Raw Agent ID Instead of the Real Agent Name (July 21, 2026)
+
+### Summary
+
+User reported that a cloud-upload (browser extension) "Blocked" event showed the agent as `Agent 0D989F1E` instead of the real name `CYBER-SEC` — while clipboard events from the exact same machine correctly showed `CYBER-SEC`.
+
+### Root cause
+
+The browser extension's native host (`skdlp_host.py`) reads its agent identity **once**, from a static snapshot file (`%ProgramData%\SeceoKnight\dlp-host.json`) written by `install.ps1` whenever it was last run, and tags every cloud-upload event it sends with that frozen `agent_id`. The main endpoint agent's own identity, by contrast, used to regenerate on every restart (see the "Agent Showed Disconnected After Reboot" entry above) — so by the time of this test, the main agent had re-registered under a newer id several times over, while the browser extension's snapshot still pointed at an old one (`0D989F1E...`) that no agent record matches anymore. The dashboard resolves an event's agent name by looking up its `agent_id` against the current agents list (`dashboard/src/lib/utils.ts`'s `formatAgentLabel()`); when that lookup fails, it falls back to showing the truncated raw id — which is exactly the `Agent 0D989F1E` text reported. Clipboard events come straight from the main agent process itself, which always tags them with whatever its *own current* id is, so that lookup always succeeds.
+
+### Fixed
+
+`agents/browser-extension/native-host/skdlp_host.py`: added `_load_live_agent_identity()`, which live-reads `C:\ProgramData\SeceoKnight\agent_key.json` — the file the main agent actually rewrites every time it (re)registers, i.e. the true current identity, as opposed to `dlp-host.json`'s one-time snapshot. `load_config()` now prefers this live value over the static snapshot whenever the file exists, so cloud-upload events automatically track the main agent's current identity without ever needing a manual `install.ps1` re-run again. Falls back to the static `dlp-host.json` value when the file doesn't exist — the standalone-identity case (a PC with no main endpoint agent installed at all, per the README's Step 5.1) is unaffected.
+
+### Verification
+
+`python3 -m py_compile` passes. Not live-tested in this sandbox (no browser/native-messaging environment here) — needs a real redeploy (rebuild the frozen `.exe` via PyInstaller if using Option A, or just redeploy the `.py` if using the plain-Python launcher) and a fresh cloud-upload test to confirm the agent name resolves correctly.
+
+### Result
+
+Cloud-upload events now show the real agent name (e.g. `CYBER-SEC`) instead of a raw id, and stay correct going forward even if the main agent's identity ever changes again — no more manual re-sync needed. Immediate fix for an already-affected machine (works without this code change too, since `install.ps1`'s own auto-discovery re-reads the current identity at run time): re-run the browser extension's `install.ps1` and fully restart the browser.
+
+---
+
 ## 💤 Agent Stayed "Disconnected" After Unlock+Some Time — Heartbeat Failures Were Never Actually Detected (July 21, 2026)
 
 ### Summary

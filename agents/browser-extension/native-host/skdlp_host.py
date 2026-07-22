@@ -16,12 +16,19 @@ For each "classify" request from the extension it:
   4. replies to the extension with {requestId, action, level, reason}.
 
 Fail-open: any error yields action=allow so a DLP hiccup never bricks uploads.
-Config (first found wins):
+Config (first found wins, per field):
   - env SKDLP_HOST_CONFIG  → path to a JSON file
   - %ProgramData%\\SeceoKnight\\dlp-host.json  (Windows)
   - /etc/seceoknightdlp/dlp-host.json             (Linux/macOS)
 JSON keys: server_url, agent_id, agent_key.  (env overrides:
   SKDLP_SERVER_URL, SKDLP_AGENT_ID, SKDLP_AGENT_KEY)
+
+agent_id/agent_key specifically prefer a LIVE read of the main endpoint
+agent's own %ProgramData%\\SeceoKnight\\agent_key.json over the
+dlp-host.json snapshot above, when that file exists — see
+_load_live_agent_identity() for why: it's what keeps cloud-upload events
+tagged with the agent's CURRENT identity instead of a stale one frozen at
+whatever moment install.ps1 last ran.
 
 This is the reference implementation. It can run as-is (Python 3.8+, requires
 `requests`) or be frozen to an .exe (PyInstaller) for managed deployment; a
@@ -65,6 +72,42 @@ def log(msg):
         pass
 
 
+def _load_live_agent_identity():
+    """Live-reads the main endpoint agent's OWN identity file, if present.
+
+    C:\\ProgramData\\SeceoKnight\\agent_key.json is rewritten by agent.cpp
+    every time the main endpoint agent (re)registers -- it's the actual,
+    current source of truth for "this machine's agent identity". dlp-host.json
+    (read below) is just a one-time snapshot install.ps1 took of that value
+    whenever it was last run, and never updates itself afterwards. Before
+    the agent_id was made stable across restarts, that snapshot could go
+    stale after any agent reinstall/reboot -- the browser extension kept
+    tagging cloud-upload events with the OLD agent_id, which no longer
+    matched any current agent record, so the dashboard couldn't resolve a
+    name for them and fell back to showing the raw id ("Agent 0D989F1E")
+    even though the same machine's clipboard/file events correctly showed
+    the real agent name. Preferring a live read here means cloud-upload
+    events automatically track whatever identity the main agent currently
+    has, without ever needing to manually re-run install.ps1 again.
+
+    Returns {} if the file doesn't exist -- e.g. this PC never had the main
+    endpoint agent installed at all (the standalone-identity path documented
+    in the README's Step 5.1), in which case the static dlp-host.json value
+    below is exactly what should be used instead.
+    """
+    path = os.path.join(os.environ.get("ProgramData", ""), "SeceoKnight", "agent_key.json")
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if data.get("agent_id") and data.get("api_key"):
+            return {"agent_id": data["agent_id"], "agent_key": data["api_key"]}
+    except Exception as e:
+        log("agent_key.json read failed %s: %s" % (path, e))
+    return {}
+
+
 def load_config():
     cfg = {}
     path = os.environ.get("SKDLP_HOST_CONFIG")
@@ -94,10 +137,16 @@ def load_config():
     else:
         verify_tls = bool(cfg.get("verify_tls", False))
 
+    # Priority: explicit env var override > the main agent's live/current
+    # identity (if this PC has one) > the static dlp-host.json snapshot
+    # (covers the standalone-identity case, where there is no main agent
+    # to read from) > a hardcoded placeholder.
+    live_identity = _load_live_agent_identity()
+
     return {
         "server_url": os.environ.get("SKDLP_SERVER_URL") or cfg.get("server_url") or "http://localhost:55000/api/v1",
-        "agent_id": os.environ.get("SKDLP_AGENT_ID") or cfg.get("agent_id") or "browser-guard",
-        "agent_key": os.environ.get("SKDLP_AGENT_KEY") or cfg.get("agent_key") or "",
+        "agent_id": os.environ.get("SKDLP_AGENT_ID") or live_identity.get("agent_id") or cfg.get("agent_id") or "browser-guard",
+        "agent_key": os.environ.get("SKDLP_AGENT_KEY") or live_identity.get("agent_key") or cfg.get("agent_key") or "",
         "verify_tls": verify_tls,
     }
 
