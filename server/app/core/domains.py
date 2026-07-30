@@ -52,6 +52,11 @@ POLICY_TYPE_DOMAIN = {
     # Access Control — device authorization (future-facing types)
     "usb_device_authorization": PolicyDomain.ACCESS_CONTROL,
     "device_access": PolicyDomain.ACCESS_CONTROL,
+    # USB device allowlist (strict default-deny by serial number) — created via
+    # the USB Devices page's enforcement toggle, ported from CyberSentinel-DLP.
+    "usb_device_control": PolicyDomain.ACCESS_CONTROL,
+    # Printer allowlist — same idea, no agent enforcement yet (see printers.py).
+    "printer_control": PolicyDomain.THREAT,
 }
 
 # Event ``event_type`` → domain, so events without a resolvable matched-policy

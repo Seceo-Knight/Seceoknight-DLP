@@ -16,6 +16,8 @@ import {
   UserCog,
   Radar,
   ClipboardList,
+  Usb,
+  Printer,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/hooks/usePermission'
@@ -46,6 +48,11 @@ const navigation: NavItem[] = [
   { name: 'Log Explorer',    to: '/log-explorer',  icon: Search,          requires: ['view_events'] },
   { name: 'Rules',           to: '/rules',         icon: List,            requires: ['create_policy', 'update_policy'] },
   { name: 'Policies',        to: '/policies',      icon: Shield,          requires: ['create_policy', 'update_policy'] },
+  // USB/printer allowlists — writes are admin-only server-side
+  // (require_role("admin")), reads are analyst-level, so any signed-in user
+  // who can view policies can reasonably see these too.
+  { name: 'USB Devices',     to: '/usb-devices',   icon: Usb,             requires: ['create_policy', 'update_policy'] },
+  { name: 'Printers',        to: '/printers',      icon: Printer,         requires: ['create_policy', 'update_policy'] },
   { name: 'Reports',         to: '/reports',       icon: BarChart2,       requires: ['view_events'] },
   { name: 'Threat Intel',    to: '/threat-intel',  icon: Radar,           requires: [], adminOnly: true },
   // /audit-logs/ is also require_role("admin") server-side (audit_logs.py) —

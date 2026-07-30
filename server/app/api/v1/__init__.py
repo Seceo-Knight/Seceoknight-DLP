@@ -33,6 +33,8 @@ from app.api.v1 import (
     threat_intel,
     taxii,
     system,
+    usb_devices,
+    printers,
 )
 
 api_router = APIRouter()
@@ -73,3 +75,5 @@ api_router.include_router(cloud_upload_hosts.router, prefix="/security", tags=["
 api_router.include_router(threat_intel.router, prefix="/threat-intel", tags=["Threat Intelligence"])
 api_router.include_router(taxii.router, tags=["TAXII"])
 api_router.include_router(system.router, prefix="/system", tags=["System"])
+api_router.include_router(usb_devices.router, prefix="/usb-devices", tags=["USB Device Control"])
+api_router.include_router(printers.router, prefix="/printers", tags=["Printer Control"])

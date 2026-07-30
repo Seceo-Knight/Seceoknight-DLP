@@ -1023,7 +1023,12 @@ std::string TryOcrClipboardImage() {
          std::lock_guard<std::mutex> lock(requestMutex);
          return SendRequest(L"DELETE", path, "");
      }
-     
+
+     std::pair<int, std::string> Get(const std::string& path) {
+         std::lock_guard<std::mutex> lock(requestMutex);
+         return SendRequest(L"GET", path, "");
+     }
+
  private:
      void ParseUrl(const std::string& url) {
          // Parse: http(s)://host[:port][/path]
@@ -2267,6 +2272,17 @@ static ClassificationResult Classify(const std::string& content,
      std::atomic<bool> hasUsbDevicePolicies{false};
      std::atomic<bool> hasUsbTransferPolicies{false};
      std::atomic<bool> allowEvents{false};
+
+     // USB device allowlist (strict default-deny by serial number), ported
+     // from CyberSentinel-DLP — see SECEOKNIGHT_VS_CYBERSENTINEL_COMPARISON.md
+     // and GET /agents/{id}/usb-allowlist in agents.py. Refreshed on the same
+     // cadence as policy sync (SyncPolicies()) and enforced locally in
+     // HandleUsbDeviceArrival() with no per-connect server round trip, so it
+     // still works if the network is briefly down.
+     std::atomic<bool> usbAllowlistEnforced{false};
+     std::string usbAllowlistMode = "off";   // "enforce" | "audit" | "off"
+     std::mutex usbAllowlistMutex;
+     std::set<std::string> sanctionedUsbSerials;
      
      std::string activePolicyVersion;
      std::string lastClipboard;
@@ -2428,68 +2444,114 @@ static ClassificationResult Classify(const std::string& content,
      }
      
      void HandleUsbDeviceArrival(const std::string& deviceName, const std::string& deviceId) {
-        if (!allowEvents || !hasUsbDevicePolicies) return;
-    
+        // Proceed if EITHER the classic monitored-event USB policies are
+        // active OR the (separate) USB device-control allowlist is enforced —
+        // an admin may have only the allowlist turned on with no
+        // usb_device_monitoring policy at all.
+        bool allowlistEnforced = usbAllowlistEnforced.load();
+        if (!allowEvents || (!hasUsbDevicePolicies && !allowlistEnforced)) return;
+
         std::string betterDeviceName = GetBetterDeviceName(deviceId);
-        
+
         std::cout << "[DEBUG] ===========================================" << std::endl;
         std::cout << "[DEBUG] HandleUsbDeviceArrival" << std::endl;
         std::cout << "[DEBUG] Device name: " << betterDeviceName << std::endl;
         std::cout << "[DEBUG] Device ID: " << deviceId << std::endl;
-        
+
         // NEW: Find the drive letter for this USB device
         std::string driveLetter = GetDriveLetterForDevice(deviceId);
         if (!driveLetter.empty()) {
             std::cout << "[DEBUG] Drive letter: " << driveLetter << std::endl;
-            
+
             // Store mapping
             {
                 std::lock_guard<std::mutex> lock(usbFilesMutex);
                 usbDriveToDeviceId[driveLetter] = deviceId;
             }
-            
+
             logger.Info("USB drive mounted at: " + driveLetter);
         }
-        
+
         std::cout << "[DEBUG] ===========================================" << std::endl;
-         // Get USB policies
+
+        // --- USB device allowlist (strict default-deny by serial number) ---
+        // Ported from CyberSentinel-DLP. Independent of the monitored-event
+        // policy loop below: an admin can enable this allowlist with or
+        // without also having a separate "block on usb_connect" policy.
+        std::string usbSerial = ExtractUsbSerialFromDeviceId(deviceId);
+        bool sanctioned = false;
+        std::string allowlistMode;
+        {
+            std::lock_guard<std::mutex> lock(usbAllowlistMutex);
+            allowlistMode = usbAllowlistMode;
+            if (!usbSerial.empty()) {
+                sanctioned = sanctionedUsbSerials.find(usbSerial) != sanctionedUsbSerials.end();
+            }
+        }
+        bool allowlistShouldBlock = false;
+        if (allowlistEnforced && !sanctioned && allowlistMode == "enforce") {
+            allowlistShouldBlock = true;
+        }
+        if (allowlistEnforced) {
+            logger.Info(std::string("USB allowlist check: serial=") + (usbSerial.empty() ? "(none)" : usbSerial) +
+                        " sanctioned=" + (sanctioned ? "true" : "false") +
+                        " mode=" + allowlistMode +
+                        " decision=" + (allowlistShouldBlock ? "block" : "allow"));
+        }
+        // Visibility event for the Events page — fire-and-forget, off this
+        // thread (it pumps Windows device-arrival messages and must not
+        // block on network I/O).
+        ReportUsbDeviceAuthorization(betterDeviceName, usbSerial, driveLetter,
+                                     allowlistShouldBlock ? "block" : "allow",
+                                     sanctioned, allowlistEnforced);
+
+         // Get USB policies (the separate, monitored-event based USB policies)
          std::vector<PolicyRule> policies;
          {
              std::lock_guard<std::mutex> lock(policiesMutex);
              policies = usbPolicies;
          }
-         
-         if (policies.empty()) return;
-         
+
          // Check if any policy monitors connect events
          std::string policyAction = "log";
          std::string matchedPolicyId;
          std::string matchedPolicyName;
          bool shouldBlock = false;
-         
+
          for (const auto& policy : policies) {
              if (!policy.enabled) continue;
-             
+
              // Check if this policy monitors usb_connect
              for (const auto& event : policy.monitoredEvents) {
                  if (event == "usb_connect" || event == "all" || event == "*") {
                      policyAction = policy.action;
                      matchedPolicyId = policy.policyId;
                      matchedPolicyName = policy.name;
-                     
+
                      if (policyAction == "block") {
                          shouldBlock = true;
                      }
                      break;
                  }
              }
-             
+
              if (shouldBlock) break;
          }
-         
+
+         // The allowlist can ALSO independently decide to block, even when no
+         // monitored-event policy matched above.
+         if (allowlistShouldBlock && !shouldBlock) {
+             shouldBlock = true;
+             matchedPolicyId = "usb_device_control_allowlist";
+             matchedPolicyName = "USB Device Control (Allowlist)";
+         }
+
+         if (!shouldBlock && policies.empty() && !allowlistShouldBlock) return;
+
 // BLOCK ACTION
-// BLOCK ACTION - only if blocking is currently active
-if (shouldBlock && usbBlockingActive.load()) {
+// BLOCK ACTION - only if blocking is currently active (classic policy path)
+// OR the allowlist itself just decided to block this specific device.
+if (shouldBlock && (usbBlockingActive.load() || allowlistShouldBlock)) {
     logger.Warning("============================================================");
     logger.Warning(" USB DEVICE BLOCKED BY POLICY!");
     logger.Warning("============================================================");
@@ -3942,8 +4004,82 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          } catch (...) {
              logger.Error("Unknown error syncing policies");
          }
+
+         // USB device allowlist has its own small, flat endpoint (not part of
+         // the general policy bundle above) — refreshed on the same cadence,
+         // isolated in its own try/catch so a failure here never blocks the
+         // policy sync above (or vice versa).
+         SyncUsbAllowlist();
      }
-     
+
+     // Pulls GET /agents/{id}/usb-allowlist and caches it locally. See the
+     // usbAllowlistEnforced/usbAllowlistMode/sanctionedUsbSerials members and
+     // HandleUsbDeviceArrival() below, which is where this is actually
+     // enforced — deliberately no per-connect server round trip, so a brief
+     // network blip can't leave a USB port unprotected or, worse, stuck open
+     // waiting on a stalled HTTP call in the same thread that pumps Windows
+     // device-arrival messages.
+     void SyncUsbAllowlist() {
+         try {
+             std::pair<int, std::string> resp = GetHttpClient()->Get(
+                 "/agents/" + config.agentId + "/usb-allowlist"
+             );
+             auto& [status, response] = resp;
+
+             if (status != 200) {
+                 if (status == 0) {
+                     logger.Debug("Cannot reach server for USB allowlist sync");
+                 } else {
+                     logger.Debug("USB allowlist sync failed: HTTP " + std::to_string(status));
+                 }
+                 return; // Keep the last-known-good allowlist rather than clearing it.
+             }
+
+             bool enforced = ExtractJsonBool(response, "enforced");
+             std::string mode = config.ExtractJsonValue(response, "mode");
+             if (mode.empty()) mode = "off";
+             std::vector<std::string> serials = ExtractJsonArray(response, "serials");
+
+             // Was this allowlist actually capable of blocking BEFORE this
+             // sync? Needed below to detect "enforcement just turned off" so
+             // we can restore USB access — mirrors ApplyPolicyBundle()'s own
+             // previousUsbBlocking/newUsbBlocking restore logic for the
+             // separate usb_device_monitoring policy path.
+             bool wasBlocking = usbAllowlistEnforced.load() && usbAllowlistMode == "enforce";
+             bool nowBlocking = enforced && mode == "enforce";
+
+             {
+                 std::lock_guard<std::mutex> lock(usbAllowlistMutex);
+                 sanctionedUsbSerials.clear();
+                 for (const auto& s : serials) {
+                     sanctionedUsbSerials.insert(NormalizeUsbSerial(s));
+                 }
+                 usbAllowlistMode = mode;
+             }
+             usbAllowlistEnforced.store(enforced);
+
+             // If the allowlist was the ONLY thing keeping USB storage
+             // blocked (no separate usb_device_monitoring block policy is
+             // active) and it just got turned off/switched to audit mode,
+             // restore access — otherwise a device blocked purely by the
+             // allowlist would stay blocked forever with no code path to
+             // undo it, since BlockUSBStorageViaRegistry()/
+             // DisableAllUSBStorageDevices() act globally, not per-serial.
+             if (wasBlocking && !nowBlocking && !usbBlockingActive.load()) {
+                 logger.Warning("USB allowlist enforcement turned off/switched to audit — restoring USB access");
+                 EnableAllUSBStorageDevices();
+                 BlockUSBStorageViaRegistry(false);
+             }
+
+             logger.Info("USB allowlist synced: enforced=" + std::string(enforced ? "true" : "false") +
+                         " mode=" + mode + " sanctioned_count=" + std::to_string(serials.size()));
+         } catch (const std::exception& e) {
+             logger.Error(std::string("Failed to sync USB allowlist: ") + e.what());
+         } catch (...) {
+             logger.Error("Unknown error syncing USB allowlist");
+         }
+     }
+
      void ApplyPolicyBundle(const std::string& bundleJson) {
          std::lock_guard<std::mutex> lock(policiesMutex);
          
@@ -5728,6 +5864,41 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
         }
     }
      
+    // Reports the USB device-allowlist connect-time decision to the server
+    // (POST /agents/{id}/device/authorize) purely for visibility on the
+    // Events page — the block/allow decision itself was already made locally
+    // in HandleUsbDeviceArrival() from the cached usb-allowlist, so this call
+    // failing or being slow must never affect enforcement. Runs on a
+    // detached thread for exactly that reason: HandleUsbDeviceArrival() runs
+    // on the same thread that pumps Windows device-arrival messages, and
+    // must return quickly.
+    void ReportUsbDeviceAuthorization(const std::string& deviceLabel, const std::string& serial,
+                                       const std::string& driveLetter, const std::string& action,
+                                       bool sanctioned, bool enforced) {
+        std::string agentId = config.agentId;
+        std::thread([this, agentId, deviceLabel, serial, driveLetter, action, sanctioned, enforced]() {
+            try {
+                JsonBuilder json;
+                if (!serial.empty()) json.AddString("serial_number", serial);
+                json.AddString("product_name", deviceLabel);
+                json.AddString("device_name", deviceLabel);
+                if (!driveLetter.empty()) json.AddString("drive_letter", driveLetter);
+                json.AddString("action", action);
+                json.AddBool("sanctioned", sanctioned);
+                json.AddBool("enforced", enforced);
+
+                std::pair<int, std::string> resp = GetHttpClient()->Post(
+                    "/agents/" + agentId + "/device/authorize", json.Build()
+                );
+                if (resp.first != 200 && resp.first != 201) {
+                    logger.Debug("USB device authorization report failed: HTTP " + std::to_string(resp.first));
+                }
+            } catch (...) {
+                logger.Debug("USB device authorization report threw an exception");
+            }
+        }).detach();
+    }
+
     void HandleUsbEvent(const std::string& deviceName, const std::string& deviceId, const std::string& eventType = "connect") {
         try {
             std::cout << "\n[DEBUG] ===========================================" << std::endl;
@@ -5873,6 +6044,12 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             json.AddString("device_id", deviceId);
             json.AddString("vendor_id", vendorId);
             json.AddString("product_id", productId);
+            // Populates the sanctioned-device "seen devices" enrolment list
+            // (GET /usb-devices/seen) with real candidate serials.
+            {
+                std::string serialForEvent = ExtractUsbSerialFromDeviceId(deviceId);
+                if (!serialForEvent.empty()) json.AddString("serial_number", serialForEvent);
+            }
             json.AddString("policy_id", matchedPolicyId);
             json.AddString("policy_name", matchedPolicyName);
             json.AddString("event_action", eventType);
@@ -7179,6 +7356,50 @@ if (shouldMonitor) {
         logger.Info("  Files scanned: " + std::to_string(filesScanned));
         logger.Info("  Baselines stored: " + std::to_string(filesStored));
         logger.Info("========================================");
+    }
+
+    // Normalizes a serial number for comparison: uppercase + trimmed. Applied
+    // both when caching the server's sanctioned list and when extracting a
+    // device's own serial, so a mismatched case (some vendors report
+    // lowercase hex) never causes a false "unsanctioned" block.
+    std::string NormalizeUsbSerial(const std::string& raw) {
+        std::string s = raw;
+        size_t start = s.find_first_not_of(" \t\r\n");
+        size_t end = s.find_last_not_of(" \t\r\n");
+        s = (start == std::string::npos) ? "" : s.substr(start, end - start + 1);
+        for (auto& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        return s;
+    }
+
+    // Extracts the USB serial number from a device interface path (the
+    // dbcc_name WM_DEVICECHANGE hands us), e.g.:
+    //   \\?\USBSTOR#Disk&Ven_Kingston&Prod_DataTraveler&Rev_1.00#E5D3F2A1&0#{GUID}
+    // The segment between the 2nd and 3rd '#' is the device's unique
+    // instance ID. For USB mass storage this is the device's real serial
+    // number when the device reports one (the common case for modern USB
+    // flash drives) — this is the same identifier Windows' own "Device
+    // Installation Restrictions" Group Policy uses for allow/deny lists, so
+    // matching on it here is consistent with how Windows itself would
+    // enforce a hardware ID allowlist. Devices that don't report a genuine
+    // serial get a synthesized ID from Windows instead (recognizable by
+    // embedded '&' separators beyond the trailing "&0"); those still work
+    // as a stable-per-port match key, just not a true hardware serial.
+    // Returns "" if deviceId isn't a recognizable USBSTOR interface path.
+    std::string ExtractUsbSerialFromDeviceId(const std::string& deviceId) {
+        size_t firstHash = deviceId.find('#');
+        if (firstHash == std::string::npos) return "";
+        size_t secondHash = deviceId.find('#', firstHash + 1);
+        if (secondHash == std::string::npos) return "";
+        size_t thirdHash = deviceId.find('#', secondHash + 1);
+        if (thirdHash == std::string::npos) return "";
+
+        std::string instanceId = deviceId.substr(secondHash + 1, thirdHash - secondHash - 1);
+        // Strip the conventional trailing "&0" interface-index suffix, if present.
+        if (instanceId.size() > 2 && instanceId.substr(instanceId.size() - 2) == "&0") {
+            instanceId = instanceId.substr(0, instanceId.size() - 2);
+        }
+        if (instanceId.empty()) return "";
+        return NormalizeUsbSerial(instanceId);
     }
 
     std::string GetBetterDeviceName(const std::string& deviceId) {

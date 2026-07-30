@@ -52,6 +52,8 @@ async def _auto_init_schema_and_admin():
     import app.models.google_drive  # noqa: F401
     import app.models.onedrive  # noqa: F401
     import app.models.classified_file  # noqa: F401
+    import app.models.sanctioned_usb_device  # noqa: F401
+    import app.models.sanctioned_printer  # noqa: F401
 
     try:
         # Check if tables already exist (avoid re-creating ENUM types which crashes asyncpg)

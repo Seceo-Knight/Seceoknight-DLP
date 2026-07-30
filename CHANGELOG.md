@@ -8,6 +8,49 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔌 USB Device Control — Sanctioned-Device Allowlist (Ported from CyberSentinel-DLP) (July 30, 2026)
+
+### Summary
+
+A comparison against the CyberSentinel-DLP reference project found three genuine gaps: Exact Data Match/fingerprinting, an ML-classifier admin page, and a sanctioned USB/printer allowlist. This ports the first (and smallest) of the three: a strict allowlist-by-serial-number for USB storage devices, plus the matching (currently management-only) allowlist for printers.
+
+### Design
+
+USB device control is **strict allowlist / default-deny**: when enforcement is on, a removable storage device is authorized only if its serial number has an enabled row in the new allowlist; every other device is blocked the moment it connects — independent of (and in addition to) the existing "block on usb_connect" monitored-event policies.
+
+- `server/app/models/sanctioned_usb_device.py`, `sanctioned_printer.py` — new tables (`serial_number`/`printer_name` as the unique match key, `is_enabled`, approval metadata).
+- `server/alembic/versions/033_sanctioned_devices.py` — idempotent `CREATE TABLE IF NOT EXISTS`, chained after `032_cloud_upload_hosts` (the prior head).
+- `server/app/api/v1/usb_devices.py`, `printers.py` — admin-write/analyst-read CRUD (`list` / `approve` / `update` / `revoke` / `seen`), plus a `POST .../enforcement` toggle that finds-or-creates the backing `usb_device_control`/`printer_control` Policy row directly (SeceoKnight's generic policy-creator UI doesn't have a form for these types yet).
+- `server/app/api/v1/agents.py` — new agent-facing `GET /agents/{id}/usb-allowlist` (the agent polls this on the same cadence as policy sync and enforces it locally — no per-connect server round trip, so it still works through a brief network blip) and `POST /agents/{id}/device/authorize` (visibility-only: logs the agent's local block/allow decision as an event).
+- `server/app/core/domains.py` — mapped `usb_device_control` (access_control) and `printer_control` (threat) for RBAC.
+
+### Agent changes (`agent.cpp`)
+
+- `HttpClient::Get()` — the client only had Post/Put/Delete; needed for the new polling endpoint.
+- `ExtractUsbSerialFromDeviceId()` / `NormalizeUsbSerial()` — parses the USB serial out of the `dbcc_name` device-interface path Windows hands the agent (the same identifier Windows' own Device Installation Restrictions GPO uses for allow/deny lists).
+- `SyncUsbAllowlist()` — pulls and caches the allowlist on the same cadence as `SyncPolicies()`; also restores USB access if the allowlist was the *only* thing blocking and enforcement gets turned off/switched to audit (mirrors `ApplyPolicyBundle()`'s existing restore-on-disable logic for the separate monitored-event path).
+- `HandleUsbDeviceArrival()` — now proceeds if *either* the classic monitored-event policies or the allowlist is active (previously required the former), checks the connecting device's serial against the cached allowlist, and can independently set `shouldBlock` even with no matching monitored-event policy.
+- `ReportUsbDeviceAuthorization()` — fires the connect-time decision to the new `/device/authorize` endpoint off a detached thread (never blocks the thread that pumps Windows device-arrival messages).
+- USB connect events now include `serial_number` so the dashboard's "seen but unsanctioned" enrollment list has real data to show.
+
+Printer control ships as **management-only** for now: SeceoKnight's agent doesn't monitor print jobs, so the allowlist and its enforcement toggle exist and are ready, but nothing is blocked by it yet (the Printers page says so explicitly).
+
+### Dashboard changes
+
+- `lib/usb-devices-api.ts`, `lib/printers-api.ts` — API clients.
+- `pages/UsbDevices.tsx`, `pages/Printers.tsx` — new pages (enforcement toggle, approve-by-serial/name form, sanctioned list, seen-but-unsanctioned enrollment list for USB).
+- `App.tsx` / `components/Sidebar.tsx` — new `/usb-devices` and `/printers` routes and nav entries.
+
+### Verification
+
+`python3 -m py_compile` passes on all new/changed server files. `npx tsc --noEmit` shows only the same 25 pre-existing, unrelated errors as before (none in any new/changed dashboard file). `npm run build` succeeds (`dist/` removed after). Brace/paren balance of every new `agent.cpp` block verified in isolation (no C++ compiler available in this sandbox). Not live-tested — no server/DB/Windows-agent access in this sandbox; the migration, new endpoints, and agent enforcement all need real deployment verification. This session's mounted copy of the repo has no `.git`, so changes were made directly in place and not committed/pushed — that needs to happen from a real checkout.
+
+### Result
+
+Admins can build a USB device allowlist and turn on strict enforcement (or audit-only) from a new USB Devices page; the Windows agent blocks any unsanctioned serial the moment it's plugged in, independent of the existing monitored-event USB policies. A parallel Printers page is ready for when print-job monitoring is added.
+
+---
+
 ## 🏷️ Cloud Upload Events Showed Raw Agent ID Instead of the Real Agent Name (July 21, 2026)
 
 ### Summary

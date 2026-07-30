@@ -990,6 +990,135 @@ async def get_cloud_upload_hosts(
     return {"domains": list(rows)}
 
 
+@router.get("/{agent_id}/usb-allowlist")
+async def get_usb_allowlist(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(verify_agent_key),
+):
+    """
+    The USB device allowlist the agent enforces locally (strict allowlist /
+    default-deny by serial number). Ported from CyberSentinel-DLP — see
+    SECEOKNIGHT_VS_CYBERSENTINEL_COMPARISON.md.
+
+    The agent polls this on the same cadence as policy sync and caches the
+    result; HandleUsbDeviceArrival() in agent.cpp then decides locally when a
+    device connects, with no per-connect server round trip (works offline,
+    no race with the ~1s Windows device-arrival window).
+
+    enforced=false or mode="audit" -> agent must NOT block on this basis
+    (audit mode still logs what it would have blocked). enforced=true and
+    mode="enforce" -> block any serial not in ``serials``.
+    Requires ``X-Agent-Key`` header — same auth as policy sync/evaluate.
+    """
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+    from app.models.sanctioned_usb_device import SanctionedUsbDevice
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "usb_device_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+    enforced = policy is not None
+    mode = ((policy.config or {}).get("mode") or "enforce").lower() if enforced else "off"
+    if mode not in ("enforce", "audit"):
+        mode = "enforce"
+
+    rows = (await db.execute(
+        _select(SanctionedUsbDevice).where(SanctionedUsbDevice.is_enabled.is_(True))
+    )).scalars().all()
+    devices = [{
+        "serial_number": d.serial_number,
+        "vendor_id": d.vendor_id,
+        "product_id": d.product_id,
+        "product_name": d.product_name,
+    } for d in rows]
+    return {
+        "enforced": enforced,
+        "mode": mode,
+        "count": len(devices),
+        "serials": [d["serial_number"] for d in devices],
+        "devices": devices,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+class DeviceAuthorizeRequest(BaseModel):
+    """Device identity the agent reports when a USB storage device connects.
+    This is a visibility/audit-trail call, logged as an event — the block/
+    allow decision itself is made locally by the agent from the cached
+    usb-allowlist response above (so it still works offline)."""
+    serial_number: Optional[str] = Field(None, description="USB serial number — the match key")
+    vendor_id: Optional[str] = None
+    product_id: Optional[str] = None
+    product_name: Optional[str] = None
+    device_name: Optional[str] = None
+    drive_letter: Optional[str] = None
+    action: str = Field("allow", description="What the agent actually did: allow | block")
+    sanctioned: bool = Field(False, description="Whether the serial matched an enabled allowlist row")
+    enforced: bool = Field(False, description="Whether device-control enforcement was active at decision time")
+
+
+@router.post("/{agent_id}/device/authorize")
+async def log_device_authorization(
+    agent_id: str,
+    request: DeviceAuthorizeRequest,
+    db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(verify_agent_key),
+):
+    """
+    Records the agent's local USB device connect/block decision as an event,
+    so the device and verdict show up on the Events page (event_subtype
+    "usb_device_authorization"). Purely for visibility — see the module note
+    on get_usb_allowlist for why the decision is made locally by the agent
+    rather than by this endpoint. Requires ``X-Agent-Key``.
+    """
+    import uuid as _uuid
+    mongo = get_mongodb()["dlp_events"]
+    now = datetime.now(timezone.utc)
+    ident = request.product_name or request.device_name or request.serial_number or "USB device"
+    if request.action == "block":
+        title, sev = f"USB device blocked (unsanctioned): {ident}", "high"
+    elif request.enforced and request.sanctioned:
+        title, sev = f"Sanctioned USB device allowed: {ident}", "low"
+    else:
+        title, sev = f"USB device connected: {ident}", "info"
+
+    doc = {
+        "event_id": f"devauth-{_uuid.uuid4()}",
+        "timestamp": now,
+        "event_type": "usb",
+        "event_subtype": "usb_device_authorization",
+        "severity": sev,
+        "agent_id": agent_id,
+        "source_type": "agent",
+        "title": title,
+        "description": title,
+        "action": request.action,
+        "blocked": request.action == "block",
+        "device_sanctioned": request.sanctioned,
+        "device_control_enforced": request.enforced,
+        "serial_number": request.serial_number,
+        "vendor_id": request.vendor_id,
+        "product_id": request.product_id,
+        "device_name": request.device_name or request.product_name,
+        "drive_letter": request.drive_letter,
+    }
+    try:
+        await mongo.insert_one(doc)
+    except Exception as e:  # noqa: BLE001 — logging must never fail the agent's call
+        logger.warning("device authorization event log failed", agent_id=agent_id, error=str(e))
+
+    logger.info(
+        "USB device authorization", agent_id=agent_id, serial=request.serial_number or None,
+        action=request.action, sanctioned=request.sanctioned, enforced=request.enforced,
+    )
+    return {"logged": True}
+
+
 class PolicyEvaluationRequest(BaseModel):
     """Request model for real-time policy evaluation"""
     file_name: Optional[str] = Field(None, description="Name of the file being transferred (omit for clipboard)")

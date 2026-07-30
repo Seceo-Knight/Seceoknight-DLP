@@ -31,6 +31,8 @@ from app.models.report import Report
 from app.models.ioc import IOC, TAXIIFeed, TAXIIShareConfig
 from app.models.ip_allowlist import IPAllowlistEntry
 from app.models.retention_config import RetentionConfig
+from app.models.sanctioned_usb_device import SanctionedUsbDevice
+from app.models.sanctioned_printer import SanctionedPrinter
 
 __all__ = [
     "Role",
@@ -68,4 +70,6 @@ __all__ = [
     "TAXIIShareConfig",
     "IPAllowlistEntry",
     "RetentionConfig",
+    "SanctionedUsbDevice",
+    "SanctionedPrinter",
 ]
