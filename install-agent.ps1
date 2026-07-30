@@ -167,6 +167,58 @@ Write-Host ""
 # Step 2: Remove old installations
 Write-ColorOutput "Step 2: Removing previous installations..." -Type "Info"
 
+# Tell the server this machine's OLD agent identity is retired, before we
+# kill the process and (later, on a real uninstall) wipe the file that
+# identity lives in. Stop-Process -Force below is a hard kill — it never
+# gives the running agent a chance to run its own graceful-shutdown /
+# unregister code, so without this the server is left with a permanently
+# stale "ghost" row every time this script re-runs on a machine that was
+# previously installed and then had ProgramData cleared (or is simply
+# being re-keyed). That ghost row never disappears from the Agents view
+# on its own (it's a normal audit-retained record, not an active-heartbeat
+# filter), so an admin ends up having to notice and delete it by hand —
+# exactly the "duplicate agent" symptom this closes.
+$existingKeyPath = Join-Path $DATA_DIR "agent_key.json"
+$oldConfigPath   = Join-Path $INSTALL_DIR $CONFIG_NAME
+if (Test-Path $existingKeyPath) {
+    try {
+        $existingKey = Get-Content -Raw -Path $existingKeyPath | ConvertFrom-Json
+        $oldAgentId  = $existingKey.agent_id
+        $oldApiKey   = $existingKey.api_key
+
+        # Unregister against whatever server the PREVIOUS install actually
+        # talked to (its own agent_config.json), not the server URL just
+        # entered above — they're usually the same, but if this run is
+        # re-pointing the machine at a different server, the old identity
+        # only exists on the old one.
+        $oldServerUrl = $serverURL
+        if (Test-Path $oldConfigPath) {
+            try {
+                $oldCfg = Get-Content -Raw -Path $oldConfigPath | ConvertFrom-Json
+                if ($oldCfg.server_url) { $oldServerUrl = $oldCfg.server_url }
+            } catch {}
+        }
+
+        if ($oldAgentId) {
+            try {
+                $headers = @{}
+                if ($oldApiKey) { $headers["X-Agent-Key"] = $oldApiKey }
+                Invoke-RestMethod -Method Delete `
+                    -Uri "$($oldServerUrl.TrimEnd('/'))/agents/$oldAgentId/unregister" `
+                    -Headers $headers -TimeoutSec 10 -ErrorAction Stop | Out-Null
+                Write-ColorOutput "  Unregistered previous agent identity ($oldAgentId) from $oldServerUrl" -Type "Success"
+            } catch {
+                # Best-effort only — server may be unreachable, already gone,
+                # or this may be the very first install on a fresh server.
+                # Never block the (re)install on this.
+                Write-ColorOutput "  Could not unregister previous agent identity (non-fatal): $($_.Exception.Message)" -Type "Warning"
+            }
+        }
+    } catch {
+        Write-ColorOutput "  Could not read $existingKeyPath (non-fatal): $($_.Exception.Message)" -Type "Warning"
+    }
+}
+
 Stop-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false -ErrorAction SilentlyContinue
 Stop-ScheduledTask -TaskName "SeceoKnightAgent" -ErrorAction SilentlyContinue
@@ -601,6 +653,11 @@ Write-Host "  Disable Auto:    Disable-ScheduledTask -TaskName '$TASK_NAME'"
 Write-Host "  Enable Auto:     Enable-ScheduledTask -TaskName '$TASK_NAME'"
 Write-Host ""
 Write-Host "Uninstall:" -ForegroundColor Yellow
+Write-Host "  # Retire this machine's agent identity server-side FIRST -- once"
+Write-Host "  # `$DATA_DIR\agent_key.json is deleted below, nothing can tell the"
+Write-Host "  # server this device is gone, and it lingers in the Agents view."
+Write-Host "  `$k = Get-Content -Raw '$DATA_DIR\agent_key.json' | ConvertFrom-Json"
+Write-Host "  Invoke-RestMethod -Method Delete -Uri '$serverURL/agents/`$(`$k.agent_id)/unregister' -Headers @{'X-Agent-Key'=`$k.api_key}"
 Write-Host "  Unregister-ScheduledTask -TaskName '$TASK_NAME' -Confirm:`$false"
 Write-Host "  Unregister-ScheduledTask -TaskName 'SeceoKnight DLP USB Block' -Confirm:`$false"
 Write-Host "  Stop-Process -Name 'seceoknight_agent' -Force"

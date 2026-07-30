@@ -8,6 +8,42 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🧹 Duplicate Agent Records + False "Offline While Idle" (July 30, 2026)
+
+### Summary
+
+User reported two enterprise-readiness issues: (1) installing the agent + browser extension on an endpoint sometimes left multiple entries for the same machine in the Agents tab that had to be removed by hand, and (2) an agent would show as offline whenever the endpoint had simply been idle for a while, even though nothing was actually wrong with it.
+
+### Root cause — duplicate agents
+
+Not a race condition and not the browser extension (it already correctly reuses the main agent's identity — confirmed in code). The actual gap was the install/uninstall lifecycle:
+
+- `install-agent.ps1`'s cleanup step, and the documented manual uninstall, both used `Stop-Process -Force` — a hard kill that never lets the agent run its own graceful-shutdown/unregister code.
+- The documented uninstall then deletes `C:\ProgramData\SeceoKnight`, wiping `agent_key.json` — the file that lets a reinstalled agent reuse its previous `agent_id`.
+- A reinstall with no persisted identity mints a new `agent_id`. If it re-registers under the *same* name (hostname) it's fine — dedup-by-name-and-os already updates the existing row in place. But if the previous record had ever been decommissioned/soft-deleted (via a prior clean self-unregister, or an admin's "Mark as Decommissioned" click), re-registering never cleared those flags, leaving a live, heartbeating agent stuck looking retired/hidden.
+
+### Root cause — false offline while idle
+
+An earlier fix (see below) already made the agent detect workstation lock/unlock (`WM_WTSSESSION_CHANGE`) and force an immediate reconnect on unlock. There was no equivalent for the OS's own idle-sleep power plan: when a machine sleeps after its configured idle timeout, the whole process is suspended, heartbeats stop, and after `AGENT_TIMEOUT_SECONDS` (5 min) the dashboard correctly shows it offline — because nothing is arriving. On wake there was nothing forcing an immediate reconnect, so it could sit "offline" for a while after the user was already back, waiting on the passive heartbeat/retry cycle.
+
+### Fixes
+
+- `install-agent.ps1` — before killing the previous process, reads the persisted `agent_key.json` (and the previous `agent_config.json`'s `server_url`) and calls the existing `DELETE /agents/{id}/unregister` endpoint to retire the old identity server-side. The printed manual "Uninstall" instructions now include the same call before removing `ProgramData`.
+- `server/app/api/v1/agents.py` (`register_agent`) — when a re-registering agent's existing record was previously decommissioned or soft-deleted, those flags are now cleared automatically. A machine that's actively heartbeating again no longer stays stuck with a stale "Decommissioned" badge or hidden from the default view.
+- `agent.cpp` — added `WM_POWERBROADCAST` handling (`RegisterSuspendResumeNotification`, mirroring the existing `WTSRegisterSessionNotification` pattern used for lock/unlock) so the agent reinitializes its HTTP client and sends a heartbeat immediately on resume from sleep, instead of waiting on the passive retry cycle. `RegisterSuspendResumeNotification`/`UnregisterSuspendResumeNotification` are Windows 8+ APIs gated out of scope by this file's `_WIN32_WINNT 0x0601` (Windows 7) target, so they're forward-declared locally rather than bumping the file-wide WINNT target (which would silently change behavior of unrelated APIs).
+
+Deliberately not done: preventing the machine from sleeping at all (`SetThreadExecutionState`). That would override the endpoint's power plan fleet-wide, which most IT teams don't want just to keep a DLP agent's heartbeat alive — the fix here is to make wake-up recovery instant instead.
+
+### Verification
+
+`python3 -m py_compile` passes on the changed server file. Brace/paren balance of every new `agent.cpp` block verified against a fresh clone of the pre-edit file (identical pre-existing imbalance in both, confirming all new braces/parens are self-balanced). No PowerShell interpreter available in this sandbox to execute `install-agent.ps1` directly; reviewed manually and brace/paren counts balance. Not live-tested — no server/DB/Windows-agent access in this sandbox.
+
+### Result
+
+Reinstalling an agent (including via a full documented uninstall) no longer leaves an orphaned duplicate row behind, and a machine coming back from a decommissioned/deleted state is automatically reactivated instead of looking stuck. A workstation waking from idle sleep reconnects within seconds instead of sitting "offline" until the next scheduled heartbeat happens to land.
+
+---
+
 ## 🔌 USB Device Control — Sanctioned-Device Allowlist (Ported from CyberSentinel-DLP) (July 30, 2026)
 
 ### Summary

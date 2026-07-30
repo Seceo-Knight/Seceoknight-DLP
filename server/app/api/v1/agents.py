@@ -423,6 +423,25 @@ async def register_agent(
         if stored_id != agent_id:
             update_fields["agent_id"] = agent_id
 
+        # This machine is clearly alive and talking to us again — if the
+        # record was previously marked decommissioned (self-unregister on a
+        # prior uninstall, or an admin action) or soft-deleted, clear those
+        # flags rather than leaving it stuck with a stale "Decommissioned"
+        # badge / hidden from the default view forever. Without this, every
+        # reinstall on a machine that was ever cleanly uninstalled (or a
+        # false-positive "Mark as Decommissioned" click) would look wrong
+        # or vanish even though it's actively heartbeating again.
+        if existing.get("decommissioned") or existing.get("is_deleted"):
+            update_fields["decommissioned"] = False
+            update_fields["decommissioned_at"] = None
+            update_fields["decommissioned_reason"] = None
+            update_fields["is_deleted"] = False
+            update_fields["deleted_at"] = None
+            logger.info(
+                "Agent re-registered after being decommissioned/deleted — reactivating",
+                agent_id=agent_id, stored_id=stored_id,
+            )
+
         await agents_collection.update_one(
             {"_id": existing["_id"]},
             {"$set": update_fields},

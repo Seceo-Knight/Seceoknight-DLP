@@ -76,7 +76,25 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
  #pragma comment(lib, "setupapi.lib")
  
  namespace fs = std::filesystem;
- 
+
+ // RegisterSuspendResumeNotification/UnregisterSuspendResumeNotification are
+ // Windows 8+ APIs, gated in the SDK's winuser.h behind
+ // _WIN32_WINNT >= _WIN32_WINNT_WIN8 (0x0602). This file deliberately targets
+ // 0x0601 (Windows 7) above for broader compatibility, so the SDK header
+ // doesn't declare them here even though every real deployment target
+ // (Windows 10/11, Server 2019+ — see install-agent.ps1) exports them from
+ // User32.dll at runtime. Declare them ourselves rather than bumping the
+ // file-wide WINNT target (which would silently change behavior/availability
+ // of unrelated APIs throughout this file). See HandlePowerBroadcast() for
+ // why this is needed: it's what lets the agent detect wake-from-sleep and
+ // reconnect immediately instead of just looking "offline" until the OS's
+ // idle-sleep nap ends and the next scheduled heartbeat happens to fire.
+ #if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0602
+ typedef PVOID HPOWERNOTIFY;
+ extern "C" WINUSERAPI HPOWERNOTIFY WINAPI RegisterSuspendResumeNotification(HANDLE hRecipient, DWORD Flags);
+ extern "C" WINUSERAPI BOOL WINAPI UnregisterSuspendResumeNotification(HPOWERNOTIFY Handle);
+ #endif
+
  // ==================== Forward Declarations ====================
  class DLPAgent;
  
@@ -2318,6 +2336,15 @@ static ClassificationResult Classify(const std::string& content,
      std::vector<std::thread> workerThreads;
      HWND usbMonitorWindow = nullptr;
      HDEVNOTIFY usbDevNotify = nullptr;
+     // Suspend/resume (sleep/wake) notification handle — see the
+     // WM_POWERBROADCAST handling in UsbWindowProc/HandlePowerBroadcast for
+     // why: without this, a machine that goes to sleep from idle (the OS's
+     // own power plan, nothing to do with lock/unlock) stops heartbeating
+     // for the whole nap, and on wake just sits waiting for the next
+     // scheduled heartbeat tick (or the slower 3-consecutive-failure WinHTTP
+     // reinit) instead of reconnecting the moment the user is back —
+     // exactly the "shows offline after being idle" symptom this fixes.
+     HPOWERNOTIFY powerNotify = nullptr;
      // USB file transfer monitoring
      std::map<std::string, std::set<std::string>> usbDriveFiles;  // drive -> set of files
      std::mutex usbFilesMutex;
@@ -2358,6 +2385,17 @@ static ClassificationResult Classify(const std::string& content,
          if (uMsg == WM_WTSSESSION_CHANGE && s_instance) {
              return s_instance->HandleSessionChange(wParam, lParam);
          }
+         // Sleep/wake: the OS's own idle-timeout power plan (not a lock,
+         // not a user action) suspends the whole process for however long
+         // the machine naps — heartbeats simply can't fire during that
+         // window. RegisterSuspendResumeNotification (registered where this
+         // window is created) delivers WM_POWERBROADCAST here with
+         // PBT_APMRESUMEAUTOMATIC/PBT_APMRESUMESUSPEND on wake; mirror the
+         // unlock handling below instead of waiting for the next scheduled
+         // heartbeat (or the passive failure-threshold reinit) to notice.
+         if (uMsg == WM_POWERBROADCAST && s_instance) {
+             return s_instance->HandlePowerBroadcast(wParam, lParam);
+         }
          return DefWindowProc(hwnd, uMsg, wParam, lParam);
      }
 
@@ -2373,6 +2411,18 @@ static ClassificationResult Classify(const std::string& content,
              logger.Info("Workstation locked");
          }
          return 0;
+     }
+
+     LRESULT HandlePowerBroadcast(WPARAM wParam, LPARAM lParam) {
+         if (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND) {
+             logger.Info("System resumed from sleep — forcing immediate reconnect");
+             // Same reasoning as the unlock case: don't block the thread
+             // that pumps USB/session/power messages on network I/O.
+             std::thread([this]() { TriggerImmediateReconnect(); }).detach();
+         } else if (wParam == PBT_APMSUSPEND) {
+             logger.Info("System entering sleep");
+         }
+         return TRUE;
      }
 
      void TriggerImmediateReconnect() {
@@ -5651,6 +5701,17 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             logger.Warning("Failed to register for session lock/unlock notifications (non-fatal)");
         }
 
+        // Register for sleep/wake notifications (WM_POWERBROADCAST, handled
+        // in UsbWindowProc / HandlePowerBroadcast) — targets this specific
+        // message-only window directly rather than relying on OS broadcast,
+        // same pattern as WTSRegisterSessionNotification above. Requires
+        // Windows 8+ (already the minimum target here).
+        powerNotify = RegisterSuspendResumeNotification(
+            (HANDLE)usbMonitorWindow, DEVICE_NOTIFY_WINDOW_HANDLE);
+        if (!powerNotify) {
+            logger.Warning("Failed to register for sleep/wake notifications (non-fatal)");
+        }
+
         // Register for device notifications
         DEV_BROADCAST_DEVICEINTERFACE_A notificationFilter;
         ZeroMemory(&notificationFilter, sizeof(notificationFilter));
@@ -5691,6 +5752,9 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
         // Cleanup
         if (usbMonitorWindow) {
             WTSUnRegisterSessionNotification(usbMonitorWindow);
+        }
+        if (powerNotify) {
+            UnregisterSuspendResumeNotification(powerNotify);
         }
         if (usbDevNotify) {
             UnregisterDeviceNotification(usbDevNotify);
