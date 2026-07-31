@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🩹 Watchdog Trigger Broke Task Registration Entirely (July 31, 2026)
+
+### Summary
+
+Live-tested the watchdog trigger below on a real endpoint (reinstall via `install-agent.ps1`). `Register-ScheduledTask` failed: `"The task XML contains a value which is incorrectly formatted or out of range. (18,42):Duration:P99999999DT23H59M59S"`. Worse, the script's `try/catch` didn't catch it — `Register-ScheduledTask` raises a non-terminating error by default, so execution fell through and printed `"Scheduled task created successfully!"` regardless. The endpoint was left with **no scheduled task at all** — a regression, worse than the bug the watchdog trigger was meant to fix.
+
+### Root cause
+
+`-RepetitionDuration ([TimeSpan]::MaxValue)` (~29,247 years) exceeds what Task Scheduler's XML schema accepts for the `Duration` element. `Register-ScheduledTask` doesn't stop the script on this failure unless explicitly told to.
+
+### Fix
+
+- Changed `-RepetitionDuration` to `(New-TimeSpan -Days 3650)` (10 years) — comfortably "indefinite" for any real deployment, well within the schema's accepted range.
+- Added `-ErrorAction Stop` to the `Register-ScheduledTask` call so a real failure is actually caught by the surrounding `try/catch` and reported honestly instead of printing a false "success."
+
+### Verification
+
+No PowerShell interpreter in this sandbox; reviewed manually, brace/paren counts balance. Not yet re-verified live — next reinstall on the test endpoint will confirm.
+
+### Result
+
+Reinstalling now registers a working scheduled task with the watchdog trigger intact, and any future registration failure will be reported truthfully instead of silently leaving no task behind.
+
+---
+
 ## 🐕 Scheduled Task Watchdog — Agent Didn't Self-Heal From a Clean Exit (July 31, 2026)
 
 ### Summary

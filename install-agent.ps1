@@ -539,9 +539,18 @@ try {
     # IgnoreNew (in $settings below) makes each tick a safe no-op while the
     # agent is already running; it only actually does anything when the
     # task has stopped for whatever reason.
+    #
+    # NOTE: [TimeSpan]::MaxValue (~29,247 years) is NOT valid here -- Task
+    # Scheduler's XML schema rejects it ("Duration:P99999999DT23H59M59S ...
+    # incorrectly formatted or out of range"), and Register-ScheduledTask
+    # raises that as a NON-terminating error, so the script sailed past it,
+    # printed "Scheduled task created successfully!", and left NO task
+    # registered at all -- worse than the bug this was meant to fix. 10
+    # years is comfortably "indefinite" for any real deployment and is
+    # well within the schema's accepted range.
     $triggerWatchdog = New-ScheduledTaskTrigger -Once -At (Get-Date) `
         -RepetitionInterval (New-TimeSpan -Minutes 10) `
-        -RepetitionDuration ([TimeSpan]::MaxValue)
+        -RepetitionDuration (New-TimeSpan -Days 3650)
 
     # Principal: run at normal user privilege (Interactive, RunLevel Limited).
     # This is essential  - clipboard hooks and keyboard/mouse event monitoring
@@ -563,6 +572,12 @@ try {
         -ExecutionTimeLimit ([System.TimeSpan]::Zero) `
         -MultipleInstances IgnoreNew
 
+    # -ErrorAction Stop is deliberate: Register-ScheduledTask raises a
+    # NON-terminating error by default (e.g. the invalid-Duration bug this
+    # comment sits next to), which a bare try/catch does NOT catch — the
+    # script would print "success" below regardless of whether the task
+    # was actually created. Forcing it terminating makes the catch block
+    # below actually mean something.
     Register-ScheduledTask `
         -TaskName $TASK_NAME `
         -Action $action `
@@ -570,7 +585,7 @@ try {
         -Principal $principal `
         -Settings $settings `
         -Description "SeceoKnight DLP Agent - Data Loss Prevention monitoring (clipboard, USB, files, screen capture)" `
-        -Force | Out-Null
+        -Force -ErrorAction Stop | Out-Null
 
     Write-ColorOutput "Scheduled task created successfully!" -Type "Success"
     Write-ColorOutput "Task Name: $TASK_NAME" -Type "Info"
