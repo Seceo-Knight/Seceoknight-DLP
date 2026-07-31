@@ -8,6 +8,34 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐕‍🦺 Watchdog Trigger Powerless Against a Hung (Not Exited) Agent Process (July 31, 2026)
+
+### Summary
+
+A real production endpoint (`CYBER-SEC`) sat "offline" for 2+ hours after a server redeploy, despite the scheduled-task watchdog trigger added earlier this session (see "Scheduled Task Watchdog" entry below) supposedly making the agent self-heal.
+
+### Diagnosis
+
+`Get-Process` showed the agent's process (PID 13508) still alive and `Responding: True`, but `C:\ProgramData\SeceoKnight\logs\seceoknight_agent.log` had stopped being written to entirely — the process had deadlocked (likely a blocking network/HTTP call on a worker thread; the message-pump thread was still alive, which is why `Responding` showed true). `Get-ScheduledTaskInfo` showed the 10-minute watchdog trigger *was* firing on schedule the whole time, but `LastTaskResult` was `2147946720` (`0x800710E0`, "the operator or administrator has refused the request") on every single attempt.
+
+Root cause: the main task's `-MultipleInstances IgnoreNew` setting treats "process still alive" as "healthy, don't touch it" — it has no way to distinguish a hung process from a working one. So the watchdog trigger fired every 10 minutes exactly as designed, and Task Scheduler correctly-by-its-own-logic refused to start a replacement each time, because as far as it's concerned the task is already running. `RestartCount`/`RestartInterval` don't help either — those only fire on a non-zero exit code, and a hung process never exits.
+
+Switching `MultipleInstances` to `StopExisting` was considered and rejected: that would force-kill and restart the agent every 10 minutes unconditionally, including when it's perfectly healthy — worse than the bug it'd fix (routine disruption to clipboard/USB/screen monitoring every 10 minutes, forever).
+
+### Fix (`install-agent.ps1`)
+
+Added a genuinely separate mechanism: a second scheduled task, "SeceoKnight DLP Watchdog", running its own PowerShell script (`watchdog.ps1`, written to the install directory) on a 5-minute cadence. It checks a real liveness signal — has the agent's log file been written to in the last 3 minutes (the agent logs at least once per 30-second heartbeat when healthy) — before ever touching the process. Only when the log has gone stale (and the task itself isn't within a 2-minute post-(re)start grace period) does it force-kill the process by name and immediately call `Start-ScheduledTask` to bring it back — a killed process is a real exit, so this doesn't fight the existing `MultipleInstances`/`RestartCount` settings, it just supplies the "has this actually hung" signal Task Scheduler itself can't provide. A healthy agent is never touched by this task.
+
+### Verification
+
+Brace/paren balance of the full `install-agent.ps1` verified identical (0/0, fully balanced in both) against a fresh clone of the pre-edit file. No PowerShell interpreter available in this sandbox to execute it directly — reviewed manually line by line, and one multi-line statement relying on implicit `-and` continuation was rewritten onto a single line to remove any doubt, since a silent parse failure here would make the watchdog a no-op on every single run without any visible error (the whole script is wrapped in `$ErrorActionPreference = "Stop"` plus a catch-all `try/catch`). Not live-tested on a real endpoint yet.
+
+### Immediate remediation given for the affected endpoint
+
+`Stop-Process` on the hung PID + `Start-ScheduledTask` to bring `CYBER-SEC` back online right away, independent of this code fix landing. A retrofit snippet was also provided to register the new watchdog task on already-installed endpoints without a full reinstall.
+
+---
+
 ## 🔌 USB Devices: Disallow List, Alias, Live Connected Status, Insertion History (July 31, 2026)
 
 ### Summary
