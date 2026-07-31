@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Usb, ShieldCheck, ShieldAlert, Plus, Trash2, Check, Ban } from 'lucide-react'
+import { Usb, ShieldCheck, ShieldAlert, Plus, Trash2, Check, Ban, History, X, Pencil } from 'lucide-react'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import {
-  listDevices, seenDevices, approveDevice, updateDevice, revokeDevice, setUsbEnforcement,
-  type SanctionedDevice, type SeenDevice,
+  listDevices, seenDevices, approveDevice, updateDevice, revokeDevice, setUsbEnforcement, deviceActivity,
+  type SanctionedDevice, type SeenDevice, type DeviceActivityEvent,
 } from '@/lib/usb-devices-api'
 
 // Ported from the CyberSentinel-DLP reference project (see
@@ -16,6 +16,11 @@ import {
 // serial number isn't approved below. Serial numbers only surface here once
 // an agent build with allowlist support has reported at least one connect
 // event — see agent.cpp's ExtractUsbSerialFromDeviceId().
+//
+// decision='deny' rows (added alongside alias/connected/history) are a
+// sticky, audited "never allow this serial" — distinct from simply never
+// approving it, since a denied serial is excluded from the Seen enrolment
+// queue instead of sitting there waiting to be (accidentally) approved.
 
 const fmt = (s?: string | null) => (s ? new Date(s).toLocaleString() : '—')
 const vidpid = (v?: string | null, p?: string | null) => (v || p ? `${v || '????'}:${p || '????'}` : '—')
@@ -24,6 +29,7 @@ export default function UsbDevices() {
   const qc = useQueryClient()
   const devicesQ = useQuery({ queryKey: ['usb-devices'], queryFn: listDevices })
   const seenQ = useQuery({ queryKey: ['usb-devices-seen'], queryFn: seenDevices })
+  const [historySerial, setHistorySerial] = useState<string | null>(null)
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['usb-devices'] })
@@ -41,6 +47,9 @@ export default function UsbDevices() {
 
   const enforced = devicesQ.data?.enforced
   const mode = devicesQ.data?.mode || 'off'
+  const allDevices = devicesQ.data?.devices || []
+  const sanctioned = allDevices.filter((d) => d.decision !== 'deny')
+  const disallowed = allDevices.filter((d) => d.decision === 'deny')
 
   return (
     <div className="space-y-6">
@@ -97,13 +106,30 @@ export default function UsbDevices() {
       <ApproveForm onDone={invalidate} />
 
       {/* Sanctioned devices */}
-      <Section title="Sanctioned devices" count={devicesQ.data?.count || 0}>
-        {(devicesQ.data?.devices.length || 0) === 0 ? (
+      <Section title="Sanctioned devices" count={sanctioned.length}>
+        {sanctioned.length === 0 ? (
           <Empty text="No devices approved yet. Approve one by serial above, or from the seen list below." />
         ) : (
-          <Table headers={['Serial', 'Label', 'Device', 'VID:PID', 'Status', 'Approved', '']}>
-            {devicesQ.data!.devices.map((d) => (
-              <SanctionedRow key={d.id} d={d} onChange={invalidate} />
+          <Table headers={['', 'Serial', 'Alias', 'Device', 'VID:PID', 'Status', 'Approved', '']}>
+            {sanctioned.map((d) => (
+              <SanctionedRow key={d.id} d={d} onChange={invalidate} onHistory={() => setHistorySerial(d.serial_number)} />
+            ))}
+          </Table>
+        )}
+      </Section>
+
+      {/* Disallowed devices */}
+      <Section
+        title="Disallowed devices"
+        count={disallowed.length}
+        subtitle="Explicitly denied serials — a sticky, audited rejection. Excluded from the Seen list below so they don't get accidentally re-approved."
+      >
+        {disallowed.length === 0 ? (
+          <Empty text="No devices disallowed. Deny one from the Seen list below, or by serial above." />
+        ) : (
+          <Table headers={['', 'Serial', 'Alias', 'Device', 'VID:PID', 'Status', 'Denied', '']}>
+            {disallowed.map((d) => (
+              <SanctionedRow key={d.id} d={d} onChange={invalidate} onHistory={() => setHistorySerial(d.serial_number)} />
             ))}
           </Table>
         )}
@@ -113,20 +139,24 @@ export default function UsbDevices() {
       <Section
         title="Seen on endpoints — not sanctioned"
         count={seenQ.data?.count || 0}
-        subtitle="Devices observed connecting to an agent that aren't on the allowlist. Approve to permit them."
+        subtitle="Devices observed connecting to an agent that aren't on the allowlist. Approve to permit them, or Disallow to reject."
       >
         {seenQ.isLoading ? (
           <LoadingSpinner />
         ) : (seenQ.data?.devices.length || 0) === 0 ? (
           <Empty text="No unsanctioned devices have been seen." />
         ) : (
-          <Table headers={['Serial', 'Device', 'VID:PID', 'Last seen', 'Agent', '']}>
+          <Table headers={['', 'Serial', 'Device', 'VID:PID', 'Last seen', 'Agent', '']}>
             {seenQ.data!.devices.map((s) => (
-              <SeenRow key={s.serial_number} s={s} onApproved={invalidate} />
+              <SeenRow key={s.serial_number} s={s} onApproved={invalidate} onHistory={() => setHistorySerial(s.serial_number)} />
             ))}
           </Table>
         )}
       </Section>
+
+      {historySerial && (
+        <HistoryModal serial={historySerial} onClose={() => setHistorySerial(null)} />
+      )}
     </div>
   )
 }
@@ -170,10 +200,57 @@ function Empty({ text }: { text: string }) {
   )
 }
 
-function SanctionedRow({ d, onChange }: { d: SanctionedDevice; onChange: () => void }) {
+function ConnectedDot({ connected }: { connected?: boolean }) {
+  return (
+    <span
+      className={`inline-block h-2.5 w-2.5 rounded-full ${connected ? 'bg-success' : 'bg-cs-muted-2'}`}
+      title={connected ? 'Currently connected' : 'Not currently connected'}
+    />
+  )
+}
+
+function AliasCell({ d, onChange }: { d: SanctionedDevice; onChange: () => void }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(d.alias || '')
+  const save = useMutation({
+    mutationFn: () => updateDevice(d.id, { alias: value.trim() || undefined }),
+    onSuccess: () => { setEditing(false); onChange() },
+    onError: (e: any) => toast.error(extractErrorDetail(e, 'Failed to update alias')),
+  })
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        className="input text-xs py-0.5 px-1.5 w-32"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => save.mutate()}
+        onKeyDown={(e) => { if (e.key === 'Enter') save.mutate(); if (e.key === 'Escape') setEditing(false) }}
+        disabled={save.isPending}
+      />
+    )
+  }
+  return (
+    <button
+      className="text-xs text-cs-ink-2 hover:text-cs-ink inline-flex items-center gap-1 group"
+      onClick={() => { setValue(d.alias || ''); setEditing(true) }}
+      title="Click to edit alias"
+    >
+      {d.alias || <span className="text-cs-muted">—</span>}
+      <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-60" />
+    </button>
+  )
+}
+
+function SanctionedRow({ d, onChange, onHistory }: { d: SanctionedDevice; onChange: () => void; onHistory: () => void }) {
   const toggle = useMutation({
     mutationFn: () => updateDevice(d.id, { is_enabled: !d.is_enabled }),
     onSuccess: () => { onChange(); toast.success(d.is_enabled ? 'Device suspended' : 'Device re-enabled') },
+    onError: (e: any) => toast.error(extractErrorDetail(e, 'Update failed')),
+  })
+  const flip = useMutation({
+    mutationFn: () => updateDevice(d.id, { decision: d.decision === 'deny' ? 'allow' : 'deny' }),
+    onSuccess: () => { onChange(); toast.success(d.decision === 'deny' ? 'Device moved to Sanctioned' : 'Device moved to Disallowed') },
     onError: (e: any) => toast.error(extractErrorDetail(e, 'Update failed')),
   })
   const revoke = useMutation({
@@ -183,8 +260,9 @@ function SanctionedRow({ d, onChange }: { d: SanctionedDevice; onChange: () => v
   })
   return (
     <tr>
+      <td><ConnectedDot connected={d.connected} /></td>
       <td className="num text-cs-ink">{d.serial_number}</td>
-      <td className="text-cs-ink-2">{d.label || '—'}</td>
+      <td><AliasCell d={d} onChange={onChange} /></td>
       <td className="text-cs-ink-2">{d.product_name || '—'}{d.manufacturer ? ` (${d.manufacturer})` : ''}</td>
       <td className="num text-cs-muted">{vidpid(d.vendor_id, d.product_id)}</td>
       <td>
@@ -194,6 +272,14 @@ function SanctionedRow({ d, onChange }: { d: SanctionedDevice; onChange: () => v
       </td>
       <td className="text-cs-muted text-xs">{fmt(d.approved_at)}</td>
       <td className="text-right whitespace-nowrap">
+        <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
+          onClick={onHistory} title="View insertion history">
+          <History className="h-3.5 w-3.5" />History
+        </button>
+        <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
+          disabled={flip.isPending} onClick={() => flip.mutate()}>
+          {d.decision === 'deny' ? <><Check className="h-3.5 w-3.5" />Allow</> : <><Ban className="h-3.5 w-3.5" />Disallow</>}
+        </button>
         <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
           disabled={toggle.isPending} onClick={() => toggle.mutate()}>
           {d.is_enabled ? <><Ban className="h-3.5 w-3.5" />Suspend</> : <><Check className="h-3.5 w-3.5" />Enable</>}
@@ -207,19 +293,21 @@ function SanctionedRow({ d, onChange }: { d: SanctionedDevice; onChange: () => v
   )
 }
 
-function SeenRow({ s, onApproved }: { s: SeenDevice; onApproved: () => void }) {
-  const approve = useMutation({
-    mutationFn: () => approveDevice({
+function SeenRow({ s, onApproved, onHistory }: { s: SeenDevice; onApproved: () => void; onHistory: () => void }) {
+  const decide = useMutation({
+    mutationFn: (decision: 'allow' | 'deny') => approveDevice({
       serial_number: s.serial_number,
       vendor_id: s.vendor_id || undefined,
       product_id: s.product_id || undefined,
       product_name: s.product_name || undefined,
+      decision,
     }),
-    onSuccess: () => { onApproved(); toast.success(`Approved ${s.serial_number}`) },
-    onError: (e: any) => toast.error(extractErrorDetail(e, 'Approve failed')),
+    onSuccess: (_r, decision) => { onApproved(); toast.success(decision === 'deny' ? `Disallowed ${s.serial_number}` : `Approved ${s.serial_number}`) },
+    onError: (e: any) => toast.error(extractErrorDetail(e, 'Failed')),
   })
   return (
     <tr>
+      <td><ConnectedDot connected={s.connected} /></td>
       <td className="num text-cs-ink">{s.serial_number}</td>
       <td className="text-cs-ink-2">{s.product_name || '—'}</td>
       <td className="num text-cs-muted">{vidpid(s.vendor_id, s.product_id)}</td>
@@ -229,13 +317,67 @@ function SeenRow({ s, onApproved }: { s: SeenDevice; onApproved: () => void }) {
           ? `${s.agent_name}${s.agent_code ? ` (#${String(s.agent_code).padStart(3, '0')})` : ''}`
           : (s.agent_id ? <span className="num">{s.agent_id}</span> : '—')}
       </td>
-      <td className="text-right">
-        <button className="btn btn-secondary inline-flex items-center gap-1"
-          disabled={approve.isPending} onClick={() => approve.mutate()}>
-          <Check className="h-3.5 w-3.5" />{approve.isPending ? 'Approving…' : 'Approve'}
+      <td className="text-right whitespace-nowrap">
+        <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
+          onClick={onHistory} title="View insertion history">
+          <History className="h-3.5 w-3.5" />History
+        </button>
+        <button className="btn btn-secondary inline-flex items-center gap-1 mr-2"
+          disabled={decide.isPending} onClick={() => decide.mutate('deny')}>
+          <Ban className="h-3.5 w-3.5" />Disallow
+        </button>
+        <button className="btn btn-primary inline-flex items-center gap-1"
+          disabled={decide.isPending} onClick={() => decide.mutate('allow')}>
+          <Check className="h-3.5 w-3.5" />{decide.isPending ? 'Working…' : 'Approve'}
         </button>
       </td>
     </tr>
+  )
+}
+
+function HistoryModal({ serial, onClose }: { serial: string; onClose: () => void }) {
+  const q = useQuery({ queryKey: ['usb-device-activity', serial], queryFn: () => deviceActivity(serial) })
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="fixed inset-0 bg-black bg-opacity-50" onClick={onClose} />
+      <div className="relative bg-card rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <div>
+            <h2 className="text-lg font-semibold text-foreground">Insertion history</h2>
+            <p className="num text-xs text-cs-muted">{serial}</p>
+          </div>
+          <button onClick={onClose} className="p-1 hover:bg-accent rounded transition-colors">
+            <X className="h-4 w-4 text-muted-foreground" />
+          </button>
+        </div>
+        <div className="px-6 py-4 overflow-y-auto text-sm">
+          {q.isLoading ? (
+            <LoadingSpinner />
+          ) : (q.data?.events.length || 0) === 0 ? (
+            <p className="text-cs-muted text-center py-6">No connect/disconnect activity recorded for this serial yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {q.data!.events.map((e: DeviceActivityEvent, i: number) => (
+                <li key={i} className="flex items-center justify-between border-b border-border/60 pb-2 last:border-0">
+                  <div className="flex items-center gap-2">
+                    <span className={`badge ${e.event === 'connect' ? 'badge-success' : 'badge-info'}`}>
+                      {e.event === 'connect' ? 'Connected' : 'Disconnected'}
+                    </span>
+                    <span className="text-cs-ink-2">
+                      {e.agent_name
+                        ? `${e.agent_name}${e.agent_code ? ` (#${String(e.agent_code).padStart(3, '0')})` : ''}`
+                        : (e.agent_id || '—')}
+                    </span>
+                    {e.drive_letter && <span className="text-xs text-cs-muted num">{e.drive_letter}</span>}
+                  </div>
+                  <span className="text-xs text-cs-muted">{fmt(e.timestamp)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 

@@ -287,6 +287,8 @@ export default function Agents() {
                 <th>Agent ID</th>
                 <th>Name</th>
                 <th>OS</th>
+                <th>User</th>
+                <th>Version</th>
                 <th>IP Address</th>
                 <th>Last Seen</th>
                 <th>Registered</th>
@@ -296,7 +298,7 @@ export default function Agents() {
             <tbody>
               {filteredAgents.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12">
+                  <td colSpan={10} className="text-center py-12">
                     <Server className="h-12 w-12 text-muted-foreground/70 mx-auto mb-3" />
                     <p className="text-muted-foreground font-medium">
                       {filter === 'all' ? 'No agents registered' : `No ${TIER_BADGE[filter].label.toLowerCase()} agents`}
@@ -365,6 +367,12 @@ export default function Agents() {
                             <span className="text-xs text-muted-foreground">{agent.os_version}</span>
                           )}
                         </div>
+                      </td>
+                      <td onClick={() => handleAgentClick(agent.agent_id)}>
+                        <span className="text-sm text-foreground/90">{agent.username || '—'}</span>
+                      </td>
+                      <td onClick={() => handleAgentClick(agent.agent_id)}>
+                        <code className="text-xs text-muted-foreground">{agent.version || '—'}</code>
                       </td>
                       <td onClick={() => handleAgentClick(agent.agent_id)}>
                         <code className="text-xs">{agent.ip_address}</code>

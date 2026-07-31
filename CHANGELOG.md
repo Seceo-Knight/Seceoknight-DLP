@@ -8,6 +8,53 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔌 USB Devices: Disallow List, Alias, Live Connected Status, Insertion History (July 31, 2026)
+
+### Summary
+
+Ported the remaining CyberSentinel-DLP USB Device Control enhancements: an explicit "Disallow" decision distinct from just never approving a device, an inline-editable friendly alias, a live connected/offline indicator, and a click-through insertion history per serial.
+
+### What changed
+
+- **Schema** — migration `034_usb_device_decision_alias.py` adds `decision` (`'allow'` or `'deny'`, default `'allow'`, CHECK-constrained) and `alias` columns to `sanctioned_usb_devices`. Idempotent (`ADD COLUMN IF NOT EXISTS`), applied automatically by `entrypoint.sh`'s `alembic upgrade head` on next deploy; the SQLAlchemy model was updated in step so a fresh install's `create_all()` also gets the columns.
+- **Disallow (deny)** — `POST /usb-devices/` and `PATCH /usb-devices/{id}` both accept `decision`. A denied serial is excluded from `GET /agents/{id}/usb-allowlist`'s allow set (same effective block outcome in enforce mode as an unlisted device) but — unlike an unlisted device — it's also excluded from the "Seen" enrolment queue (already true, since that query excludes any decided serial regardless of decision) and carries an audited paper trail. **No agent.cpp change was needed for the block behavior itself** — the agent already treats "not in the allow set" as unsanctioned; deny just means a serial never enters that set.
+- **Alias** — new `alias` field, editable inline on the dashboard, independent of the `label` set at approval time.
+- **Live connected/offline indicator** — new `_annotate_connection_state()` in `usb_devices.py` computes it from the most recent `usb_device_authorization` event per serial. This exposed a real gap: `HandleUsbEvent()` (the classic monitored-policy pipeline) silently no-ops when no classic USB policy is configured, so **disconnect events were never reported at all** for allowlist-only deployments — a device would show "connected" forever. Fixed in `agent.cpp` by having the `DBT_DEVICEREMOVECOMPLETE` handler call `ReportUsbDeviceAuthorization(..., event="disconnect")` directly, independent of classic policies (mirroring how connects were already reported independently). `ReportUsbDeviceAuthorization()` gained an `event` parameter (`"connect"`/`"disconnect"`, defaults preserve the existing connect call sites) and `log_device_authorization()` stores it as `usb_event` on the event doc.
+- **Insertion history** — new `GET /usb-devices/activity?serial_number=...` returns every connect/disconnect for a serial, most-recent first, with the resolved agent/host. Dashboard: a "History" button on both Sanctioned/Disallowed and Seen rows opens a modal built on this endpoint.
+- **Dashboard** (`UsbDevices.tsx`, `usb-devices-api.ts`): Sanctioned devices split into two sections (Sanctioned / Disallowed) by `decision`; connected/offline dot per row; inline-editable alias cell; Allow↔Disallow toggle on existing rows; Seen rows gained a "Disallow" button next to "Approve".
+
+### Known limitation (disclosed)
+
+Agents running a build older than this fix never sent a disconnect signal at all (only connects). A serial last seen on an old build will show as "connected" until it's reconnected/disconnected once on a current agent build — not a bug in the computation, just a consequence of needing the new binary to observe the event.
+
+### Verification
+
+`python3 -m py_compile` passes on all changed server files. `npx tsc --noEmit` shows the same 25 pre-existing, unrelated errors (none in the changed files). `npm run build` succeeds (`dist/` removed after). `agent.cpp` brace/paren balance verified identical to a fresh clone of the pre-edit file. Not live-tested — no server/Windows-agent/Postgres access in this sandbox; the migration itself was not executed against a real database.
+
+---
+
+## 🖥️ Agents Page: Real OS Build, Logged-In User, Agent Version (July 31, 2026)
+
+### Summary
+
+Ported CyberSentinel-DLP's agent identity precision: the Agents page already had (unused) `hostname`/`os_version` columns in its TypeScript types, but the server never populated them and the agent sent a hardcoded `"os_version": "Windows 10"` and `"version": "1.0.0"` on every registration, regardless of the actual OS or the auto-updater having since shipped a newer binary. There was also no logged-in-username reporting at all.
+
+### Root cause
+
+`RegisterAgent()` in `agent.cpp` hardcoded `os_version` and `version` as string literals. Separately, it *did* send `hostname` — but `agents.py`'s `AgentCreate`/`AgentBase` pydantic models never declared that field, so FastAPI silently dropped it on every registration; the dashboard's `agent.hostname` reference had nothing to ever display.
+
+### Fix
+
+- **`agent.cpp`**: new `GetOSVersion()` reads `ProductName`/`DisplayVersion` (falling back to `ReleaseId` on pre-2004 builds)/`CurrentBuildNumber`/`UBR` from `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`, correcting `ProductName` to "Windows 11" when `CurrentBuildNumber >= 22000` (some images still report "Windows 10" in the registry despite running 11). New `AGENT_VERSION` constant (`"2.5.0"`) replaces the hardcoded `"1.0.0"`. `RegisterAgent()` now sends real `os_version`, `username` (via the already-existing but previously-unused `GetUsername()`), and `AGENT_VERSION`. `SendHeartbeat()` now refreshes `username`/`os_version`/`version` on every heartbeat too, so a shared workstation or RDP handoff reflects the currently logged-in user rather than whoever was logged in at agent start.
+- **`agents.py`**: `AgentBase`/`AgentCreate` gained `hostname`/`os_version`/`username` fields (fixing the silent-drop bug for `hostname`); `register_agent()` persists them on both new and re-registration paths (only overwriting on re-registration when the agent actually sent a value, so an older agent build re-registering can't blank out data a newer build previously reported); `HeartbeatRequest` gained `username`/`os_version`/`version` and the heartbeat handler refreshes them.
+- **Dashboard**: `Agent` type gained `username`; `Agents.tsx` gained "User" and "Version" columns.
+
+### Verification
+
+`python3 -m py_compile` passes. `npx tsc --noEmit` shows the same 25 pre-existing, unrelated errors. `npm run build` succeeds (`dist/` removed after). `agent.cpp` brace/paren balance verified identical to a fresh clone of the pre-edit file. Not live-tested — no server/Windows-agent access in this sandbox.
+
+---
+
 ## 🏷️ USB Devices Page: Empty VID:PID + Raw Agent ID Instead of a Name (July 31, 2026)
 
 ### Summary

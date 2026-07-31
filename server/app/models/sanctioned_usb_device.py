@@ -30,6 +30,16 @@ class SanctionedUsbDevice(Base):
     # The match key. A device is authorized iff its serial matches an enabled row.
     serial_number = Column(String(255), nullable=False, unique=True)
     label = Column(String(255), nullable=True)          # e.g. "Finance dept #3"
+    # Inline-editable friendly name shown on the dashboard, separate from
+    # ``label`` (the free-text field set at approval time) so an admin can
+    # rename a device later without touching approval metadata.
+    alias = Column(String(255), nullable=True)
+    # 'allow' (default, current strict-allowlist behavior) or 'deny' — an
+    # explicit, sticky "never let this serial through" decision. A denied
+    # row is excluded from the agent-facing allowlist (get_usb_allowlist())
+    # exactly like an unlisted device, but stays out of the "Seen" enrolment
+    # queue and carries an audited paper trail, unlike simply never approving it.
+    decision = Column(String(10), nullable=False, default="allow", server_default="allow")
     # Captured for display / enrolment context; NOT used for matching.
     vendor_id = Column(String(16), nullable=True)
     product_id = Column(String(16), nullable=True)

@@ -19,7 +19,7 @@ page itself drives the one Policy row that turns enforcement on/off.
 Writes are admin-only; reads are analyst.
 """
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -45,6 +45,8 @@ class DeviceApprove(BaseModel):
     serial_number: str = Field(..., min_length=1, max_length=255,
                                description="Device serial number — the match key")
     label: Optional[str] = Field(None, max_length=255)
+    alias: Optional[str] = Field(None, max_length=255, description="Friendly display name, editable later")
+    decision: str = Field("allow", description="'allow' (default) or 'deny' — deny is a sticky, audited rejection")
     vendor_id: Optional[str] = Field(None, max_length=16)
     product_id: Optional[str] = Field(None, max_length=16)
     product_name: Optional[str] = Field(None, max_length=255)
@@ -54,6 +56,8 @@ class DeviceApprove(BaseModel):
 
 class DeviceUpdate(BaseModel):
     label: Optional[str] = Field(None, max_length=255)
+    alias: Optional[str] = Field(None, max_length=255)
+    decision: Optional[str] = Field(None, description="'allow' or 'deny' — switch a row's decision after the fact")
     notes: Optional[str] = Field(None, max_length=1000)
     is_enabled: Optional[bool] = None
 
@@ -68,6 +72,8 @@ def _device_out(d: SanctionedUsbDevice) -> dict:
         "id": str(d.id),
         "serial_number": d.serial_number,
         "label": d.label,
+        "alias": d.alias,
+        "decision": d.decision or "allow",
         "vendor_id": d.vendor_id,
         "product_id": d.product_id,
         "product_name": d.product_name,
@@ -95,21 +101,76 @@ async def _device_control_status(db: AsyncSession) -> dict:
     return {"enforced": enforced, "mode": mode}
 
 
+async def _annotate_connection_state(devices: List[dict]) -> None:
+    """Mutates ``devices`` in place, adding a live ``connected`` bool and
+    ``last_activity_at`` timestamp per serial, computed from the most recent
+    ``usb_device_authorization`` event (which carries a ``usb_event`` of
+    'connect' or 'disconnect' — see agent.cpp's ReportUsbDeviceAuthorization()
+    and agents.py's log_device_authorization()).
+
+    Devices report a connect independent of any classic USB policy being
+    configured, and — as of the agent.cpp fix that added this — a
+    disconnect too, so this works for allowlist-only deployments. Agents on
+    older builds (pre-fix) never sent a disconnect event at all; a serial
+    last seen on one of those will show as "connected" until it's
+    reconnected/disconnected again on a current agent build. That's a
+    known, disclosed limitation, not a bug in this computation.
+    """
+    serials = [d["serial_number"] for d in devices if d.get("serial_number")]
+    if not serials:
+        return
+    mongo = get_mongodb()["dlp_events"]
+    pipeline = [
+        {"$match": {
+            "event_type": "usb",
+            "event_subtype": "usb_device_authorization",
+            "serial_number": {"$in": serials},
+        }},
+        {"$sort": {"timestamp": -1}},
+        {"$group": {
+            "_id": "$serial_number",
+            "usb_event": {"$first": "$usb_event"},
+            "timestamp": {"$first": "$timestamp"},
+        }},
+    ]
+    latest: Dict[str, dict] = {}
+    async for r in mongo.aggregate(pipeline):
+        latest[r["_id"]] = r
+    for d in devices:
+        entry = latest.get(d.get("serial_number"))
+        if not entry:
+            d["connected"] = False
+            d["last_activity_at"] = None
+            continue
+        ts = entry.get("timestamp")
+        d["connected"] = (entry.get("usb_event") or "connect") == "connect"
+        d["last_activity_at"] = ts.isoformat() if hasattr(ts, "isoformat") else ts
+
+
 @router.get("/")
 async def list_devices(
     current_user: User = Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
-    """The sanctioned-device allowlist, plus whether control is being enforced."""
+    """The sanctioned-device allowlist, plus whether control is being enforced.
+
+    Returns both allow- and deny-decisioned rows in ``devices`` (each tagged
+    with its ``decision``) — the dashboard splits them into "Sanctioned" and
+    "Disallowed" sections client-side. ``allow_count``/``deny_count`` are
+    provided so the page doesn't need to recompute them from the full list.
+    """
     rows = (await db.execute(
         select(SanctionedUsbDevice).order_by(SanctionedUsbDevice.approved_at.desc())
     )).scalars().all()
     devices = [_device_out(d) for d in rows]
+    await _annotate_connection_state(devices)
     control = await _device_control_status(db)
     return {
         "devices": devices,
         "count": len(devices),
         "enabled_count": sum(1 for d in devices if d["is_enabled"]),
+        "allow_count": sum(1 for d in devices if d["decision"] == "allow"),
+        "deny_count": sum(1 for d in devices if d["decision"] == "deny"),
         **control,
     }
 
@@ -120,18 +181,24 @@ async def approve_device(
     current_user: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Approve (sanction) a device by serial number. Idempotent: re-approving an
-    existing serial updates its details and re-enables it."""
+    """Approve (allow) or disallow (deny) a device by serial number, per
+    ``body.decision``. Idempotent: re-submitting an existing serial updates
+    its details (including flipping its decision) and re-enables it."""
     serial = body.serial_number.strip()
     if not serial:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "serial_number is required")
+    decision = body.decision if body.decision in ("allow", "deny") else "allow"
 
     existing = (await db.execute(
         select(SanctionedUsbDevice).where(SanctionedUsbDevice.serial_number == serial)
     )).scalar_one_or_none()
 
+    audit_action = "security.usb_devices.reapprove" if decision == "allow" else "security.usb_devices.redeny"
+
     if existing:
         existing.label = body.label or existing.label
+        existing.alias = body.alias if body.alias is not None else existing.alias
+        existing.decision = decision
         existing.vendor_id = body.vendor_id or existing.vendor_id
         existing.product_id = body.product_id or existing.product_id
         existing.product_name = body.product_name or existing.product_name
@@ -142,12 +209,14 @@ async def approve_device(
         existing.approved_at = datetime.now(timezone.utc)
         await db.commit()
         await db.refresh(existing)
-        await audit_log(current_user.id, "security.usb_devices.reapprove", {"serial_number": serial})
+        await audit_log(current_user.id, audit_action, {"serial_number": serial, "decision": decision})
         return _device_out(existing)
 
     dev = SanctionedUsbDevice(
         serial_number=serial,
         label=body.label,
+        alias=body.alias,
+        decision=decision,
         vendor_id=body.vendor_id,
         product_id=body.product_id,
         product_name=body.product_name,
@@ -158,7 +227,8 @@ async def approve_device(
     db.add(dev)
     await db.commit()
     await db.refresh(dev)
-    await audit_log(current_user.id, "security.usb_devices.approve", {"serial_number": serial})
+    audit_action = "security.usb_devices.approve" if decision == "allow" else "security.usb_devices.deny"
+    await audit_log(current_user.id, audit_action, {"serial_number": serial, "decision": decision})
     return _device_out(dev)
 
 
@@ -169,7 +239,8 @@ async def update_device(
     current_user: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Edit a device's label/notes or suspend/resume its approval (is_enabled)."""
+    """Edit a device's label/alias/notes, flip its allow/deny decision, or
+    suspend/resume its approval (is_enabled)."""
     dev = (await db.execute(
         select(SanctionedUsbDevice).where(SanctionedUsbDevice.id == device_id)
     )).scalar_one_or_none()
@@ -177,13 +248,21 @@ async def update_device(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "device not found")
     if body.label is not None:
         dev.label = body.label
+    if body.alias is not None:
+        dev.alias = body.alias
+    if body.decision is not None:
+        if body.decision not in ("allow", "deny"):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "decision must be 'allow' or 'deny'")
+        dev.decision = body.decision
     if body.notes is not None:
         dev.notes = body.notes
     if body.is_enabled is not None:
         dev.is_enabled = body.is_enabled
     await db.commit()
     await db.refresh(dev)
-    await audit_log(current_user.id, "security.usb_devices.update", {"serial_number": dev.serial_number})
+    await audit_log(current_user.id, "security.usb_devices.update", {
+        "serial_number": dev.serial_number, "decision": dev.decision,
+    })
     return _device_out(dev)
 
 
@@ -271,7 +350,68 @@ async def seen_devices(
                 d["agent_name"] = match.get("name")
                 d["agent_code"] = match.get("agent_code")
 
+    await _annotate_connection_state(out)
+
     return {"devices": out, "count": len(out)}
+
+
+@router.get("/activity")
+async def device_activity(
+    serial_number: str,
+    limit: int = 100,
+    current_user: User = Depends(require_role("analyst")),
+):
+    """Insertion history for a single serial: every connect/disconnect the
+    agent has reported, most-recent first, with which agent (host) it was
+    seen on. Click-through view from a row on the USB Devices page — see
+    _annotate_connection_state() for how the live 'connected' dot on that
+    same page is derived from this same event stream.
+    """
+    serial = (serial_number or "").strip()
+    if not serial:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "serial_number is required")
+
+    mongo = get_mongodb()["dlp_events"]
+    cursor = mongo.find(
+        {
+            "event_type": "usb",
+            "event_subtype": "usb_device_authorization",
+            "serial_number": serial,
+        },
+        {"_id": 0, "timestamp": 1, "usb_event": 1, "action": 1, "agent_id": 1,
+         "drive_letter": 1, "device_name": 1},
+    ).sort("timestamp", -1).limit(max(1, min(limit, 500)))
+
+    rows: List[dict] = []
+    async for r in cursor:
+        ts = r.get("timestamp")
+        rows.append({
+            "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else ts,
+            "event": r.get("usb_event") or "connect",
+            "action": r.get("action"),
+            "agent_id": r.get("agent_id"),
+            "drive_letter": r.get("drive_letter"),
+            "device_name": r.get("device_name"),
+        })
+
+    agent_ids = {r["agent_id"] for r in rows if r.get("agent_id")}
+    if agent_ids:
+        agents_collection = get_mongodb()["agents"]
+        agent_info = {
+            doc["agent_id"]: doc
+            async for doc in agents_collection.find(
+                {"agent_id": {"$in": list(agent_ids)}},
+                {"_id": 0, "agent_id": 1, "name": 1, "agent_code": 1},
+            )
+            if doc.get("agent_id")
+        }
+        for r in rows:
+            match = agent_info.get(r.get("agent_id"))
+            if match:
+                r["agent_name"] = match.get("name")
+                r["agent_code"] = match.get("agent_code")
+
+    return {"serial_number": serial, "events": rows, "count": len(rows)}
 
 
 @router.post("/enforcement")

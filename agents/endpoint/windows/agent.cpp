@@ -66,6 +66,13 @@
 DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1F, 0x00, 0xC0, 0x4F, 0xB9, 0x51, 0xED);
 #define USB_STOR_REG_PATH "SYSTEM\\CurrentControlSet\\Services\\USBSTOR"
 
+// Reported to the server on registration/heartbeat so the Agents dashboard
+// can show what's actually deployed (previously hardcoded to "1.0.0"
+// everywhere, which was meaningless once auto-update started shipping real
+// binary changes — see AutoUpdateLoop()). Bump by hand on notable releases;
+// this is a display string only, not consulted by any update logic.
+#define AGENT_VERSION "2.5.0"
+
  
  #pragma comment(lib, "winhttp.lib")
  #pragma comment(lib, "wbemuuid.lib")
@@ -203,6 +210,87 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
          return std::string(buffer);
      }
      return "unknown";
+ }
+
+ // Reads the real OS build string from the registry instead of the
+ // hardcoded "Windows 10" that RegisterAgent() used to send unconditionally
+ // (meaning every endpoint -- Windows 10 or 11, any build -- reported the
+ // exact same string). ProductName + DisplayVersion + build/UBR gives
+ // something like "Windows 11 Pro 23H2 (Build 22631.3007)".
+ //
+ // Windows 11 shares the same NT 10.0 kernel version as Windows 10 and is
+ // only distinguishable by CurrentBuildNumber (>= 22000) -- some images'
+ // registry ProductName value still literally reads "Windows 10 ..." even
+ // though the OS is 11, so that's corrected below rather than trusted as-is.
+ std::string GetOSVersion() {
+     std::string productName;
+     std::string displayVersion;
+     std::string buildNumber;
+     std::string ubr;
+
+     HKEY hKey;
+     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+                        0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+         auto readString = [&hKey](const char* valueName) -> std::string {
+             char buf[256] = {0};
+             DWORD size = sizeof(buf);
+             DWORD type = 0;
+             if (RegQueryValueExA(hKey, valueName, nullptr, &type,
+                                  reinterpret_cast<LPBYTE>(buf), &size) == ERROR_SUCCESS &&
+                 (type == REG_SZ || type == REG_EXPAND_SZ)) {
+                 size_t len = (size > 0 && buf[size - 1] == '\0') ? size - 1 : size;
+                 return std::string(buf, len);
+             }
+             return "";
+         };
+
+         productName = readString("ProductName");
+         displayVersion = readString("DisplayVersion");
+         if (displayVersion.empty()) {
+             // Builds before ~2004 don't have DisplayVersion; ReleaseId was
+             // the equivalent field on those older feature updates.
+             displayVersion = readString("ReleaseId");
+         }
+         buildNumber = readString("CurrentBuildNumber");
+
+         DWORD ubrValue = 0;
+         DWORD size = sizeof(ubrValue);
+         DWORD type = 0;
+         if (RegQueryValueExA(hKey, "UBR", nullptr, &type,
+                              reinterpret_cast<LPBYTE>(&ubrValue), &size) == ERROR_SUCCESS &&
+             type == REG_DWORD) {
+             ubr = std::to_string(ubrValue);
+         }
+
+         RegCloseKey(hKey);
+     }
+
+     if (productName.empty()) {
+         productName = "Windows";
+     }
+
+     int build = 0;
+     try { build = std::stoi(buildNumber); } catch (...) {}
+     if (build >= 22000) {
+         size_t pos = productName.find("Windows 10");
+         if (pos != std::string::npos) {
+             productName.replace(pos, std::string("Windows 10").length(), "Windows 11");
+         }
+     }
+
+     std::string result = productName;
+     if (!displayVersion.empty()) {
+         result += " " + displayVersion;
+     }
+     if (!buildNumber.empty()) {
+         result += " (Build " + buildNumber;
+         if (!ubr.empty()) {
+             result += "." + ubr;
+         }
+         result += ")";
+     }
+     return result;
  }
  
  std::string GetRealIPAddress() {
@@ -2466,8 +2554,25 @@ static ClassificationResult Classify(const std::string& content,
                      
                      logger.Info("USB device disconnected: " + deviceName);
                      
-                     // Handle disconnect event
+                     // Handle disconnect event (classic monitored-event USB
+                     // policy pipeline — no-ops if no such policy is active).
                      HandleUsbEvent(deviceName, deviceId, "disconnect");
+
+                     // Independently report disconnect visibility for the
+                     // allowlist/device-control feature's live connected/
+                     // offline indicator, which must work even when no
+                     // classic USB policy exists (HandleUsbEvent() above
+                     // silently returns in that case — see its early-return
+                     // on an empty policy list). Only mass-storage devices
+                     // resolve to a serial; anything else (keyboard, mouse,
+                     // etc.) yields an empty string and is skipped.
+                     {
+                         std::string usbSerial = ExtractUsbSerialFromDeviceId(deviceId);
+                         if (!usbSerial.empty()) {
+                             ReportUsbDeviceAuthorization(deviceName, usbSerial, "", "", "",
+                                                           "disconnect", false, false, "disconnect");
+                         }
+                     }
                      {
                         std::lock_guard<std::mutex> lock(usbFilesMutex);
                         
@@ -3995,9 +4100,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              json.AddString("name", config.agentName);
              json.AddString("hostname", GetHostname());
              json.AddString("os", "windows");
-             json.AddString("os_version", "Windows 10");
+             json.AddString("os_version", GetOSVersion());
+             json.AddString("username", GetUsername());
              json.AddString("ip_address", GetRealIPAddress());
-             json.AddString("version", "1.0.0");
+             json.AddString("version", AGENT_VERSION);
              
              std::pair<int, std::string> reg = GetHttpClient()->Post("/agents", json.Build());
              auto& [status, response] = reg;
@@ -4974,6 +5080,13 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              JsonBuilder json;
              json.AddString("timestamp", GetCurrentTimestampISO());
              json.AddString("ip_address", GetRealIPAddress());
+             // Refreshed every heartbeat (not just at registration) so a
+             // shared workstation or RDP handoff shows the currently
+             // logged-in user rather than whoever was logged in when the
+             // agent last (re)started.
+             json.AddString("username", GetUsername());
+             json.AddString("os_version", GetOSVersion());
+             json.AddString("version", AGENT_VERSION);
              if (!activePolicyVersion.empty()) {
                  json.AddString("policy_version", activePolicyVersion);
              }
@@ -5981,9 +6094,10 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
     void ReportUsbDeviceAuthorization(const std::string& deviceLabel, const std::string& serial,
                                        const std::string& vendorId, const std::string& productId,
                                        const std::string& driveLetter, const std::string& action,
-                                       bool sanctioned, bool enforced) {
+                                       bool sanctioned, bool enforced,
+                                       const std::string& event = "connect") {
         std::string agentId = config.agentId;
-        std::thread([this, agentId, deviceLabel, serial, vendorId, productId, driveLetter, action, sanctioned, enforced]() {
+        std::thread([this, agentId, deviceLabel, serial, vendorId, productId, driveLetter, action, sanctioned, enforced, event]() {
             try {
                 JsonBuilder json;
                 if (!serial.empty()) json.AddString("serial_number", serial);
@@ -5999,6 +6113,16 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 json.AddString("action", action);
                 json.AddBool("sanctioned", sanctioned);
                 json.AddBool("enforced", enforced);
+                // "connect" (default) or "disconnect" — lets the server tell
+                // connects and disconnects apart for the live connected/
+                // offline indicator on the USB Devices page. Previously only
+                // connects were ever reported here; HandleUsbEvent() (the
+                // classic-policy event pipeline) is the only other place that
+                // reported disconnects, and it silently no-ops when no
+                // classic USB policy is configured — so allowlist-only
+                // deployments never saw a disconnect at all and a device
+                // would show "connected" forever.
+                json.AddString("event", event);
 
                 std::pair<int, std::string> resp = GetHttpClient()->Post(
                     "/agents/" + agentId + "/device/authorize", json.Build()

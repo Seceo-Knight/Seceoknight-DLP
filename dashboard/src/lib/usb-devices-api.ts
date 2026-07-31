@@ -13,6 +13,11 @@ export interface SanctionedDevice {
   id: string
   serial_number: string
   label?: string | null
+  /** Inline-editable friendly name, separate from ``label``. */
+  alias?: string | null
+  /** 'allow' (default) or 'deny' — a sticky, audited rejection distinct
+   *  from simply never approving the serial. */
+  decision: 'allow' | 'deny'
   vendor_id?: string | null
   product_id?: string | null
   product_name?: string | null
@@ -20,6 +25,10 @@ export interface SanctionedDevice {
   is_enabled: boolean
   notes?: string | null
   approved_at?: string | null
+  /** Live status computed server-side from the most recent connect/
+   *  disconnect event for this serial. */
+  connected?: boolean
+  last_activity_at?: string | null
 }
 
 export interface SeenDevice {
@@ -35,12 +44,16 @@ export interface SeenDevice {
   agent_code?: number | null
   last_seen?: string | null
   sanctioned: boolean
+  connected?: boolean
+  last_activity_at?: string | null
 }
 
 export interface DeviceListResponse {
   devices: SanctionedDevice[]
   count: number
   enabled_count: number
+  allow_count: number
+  deny_count: number
   enforced: boolean
   mode: 'enforce' | 'audit' | 'off'
 }
@@ -48,11 +61,24 @@ export interface DeviceListResponse {
 export interface ApproveBody {
   serial_number: string
   label?: string
+  alias?: string
+  decision?: 'allow' | 'deny'
   vendor_id?: string
   product_id?: string
   product_name?: string
   manufacturer?: string
   notes?: string
+}
+
+export interface DeviceActivityEvent {
+  timestamp: string
+  event: 'connect' | 'disconnect'
+  action?: string | null
+  agent_id?: string | null
+  agent_name?: string | null
+  agent_code?: number | null
+  drive_letter?: string | null
+  device_name?: string | null
 }
 
 export const listDevices = async (): Promise<DeviceListResponse> => {
@@ -65,6 +91,13 @@ export const seenDevices = async (): Promise<{ devices: SeenDevice[]; count: num
   return data
 }
 
+export const deviceActivity = async (
+  serialNumber: string,
+): Promise<{ serial_number: string; events: DeviceActivityEvent[]; count: number }> => {
+  const { data } = await apiClient.get('/usb-devices/activity', { params: { serial_number: serialNumber } })
+  return data
+}
+
 export const approveDevice = async (body: ApproveBody): Promise<SanctionedDevice> => {
   const { data } = await apiClient.post('/usb-devices/', body)
   return data
@@ -72,7 +105,7 @@ export const approveDevice = async (body: ApproveBody): Promise<SanctionedDevice
 
 export const updateDevice = async (
   id: string,
-  body: { label?: string; notes?: string; is_enabled?: boolean },
+  body: { label?: string; alias?: string; decision?: 'allow' | 'deny'; notes?: string; is_enabled?: boolean },
 ): Promise<SanctionedDevice> => {
   const { data } = await apiClient.patch(`/usb-devices/${id}`, body)
   return data

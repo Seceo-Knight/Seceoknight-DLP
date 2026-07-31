@@ -158,6 +158,17 @@ class AgentBase(BaseModel):
     ip_address: str = Field(..., description="Agent IP address")
     version: str = Field(default="1.0.0", description="Agent version")
     capabilities: Dict[str, bool] = Field(default_factory=dict, description="Agent capability flags")
+    # Precision fields ported from CyberSentinel-DLP (see
+    # SECEOKNIGHT_VS_CYBERSENTINEL_COMPARISON.md). The C++ agent has sent
+    # ``hostname`` in its registration payload since the beginning, but this
+    # model never declared the field so pydantic silently dropped it on
+    # every registration — the Agents page has shown an (always-empty)
+    # hostname column for that reason. ``os_version``/``username`` are new:
+    # the agent previously hardcoded "Windows 10" for os_version and never
+    # reported the logged-in user at all.
+    hostname: Optional[str] = Field(None, description="Machine hostname, as reported by the agent")
+    os_version: Optional[str] = Field(None, description="Precise OS build string, e.g. 'Windows 11 Pro 23H2 (Build 22631.3007)'")
+    username: Optional[str] = Field(None, description="Currently logged-in Windows user, refreshed every heartbeat")
 
 
 class AgentCreate(BaseModel):
@@ -167,6 +178,9 @@ class AgentCreate(BaseModel):
     os: str = Field(..., description="Operating system (windows/linux)")
     ip_address: str = Field(..., description="Agent IP address")
     version: str = Field(default="1.0.0", description="Agent version")
+    hostname: Optional[str] = Field(None, description="Machine hostname, as reported by the agent")
+    os_version: Optional[str] = Field(None, description="Precise OS build string")
+    username: Optional[str] = Field(None, description="Currently logged-in Windows user")
 
 
 class Agent(AgentBase):
@@ -420,6 +434,16 @@ async def register_agent(
             "capabilities": capabilities,
             "api_key": api_key,
         }
+        # Only overwrite when the agent actually sent a value — older agent
+        # builds predating this feature won't send these fields at all, and
+        # we don't want a re-registration from one of those to blank out
+        # data a newer build previously reported.
+        if agent.hostname:
+            update_fields["hostname"] = agent.hostname
+        if agent.os_version:
+            update_fields["os_version"] = agent.os_version
+        if agent.username:
+            update_fields["username"] = agent.username
         if stored_id != agent_id:
             update_fields["agent_id"] = agent_id
 
@@ -462,6 +486,9 @@ async def register_agent(
             "agent_code": agent_code,
             "name": agent.name,
             "os": agent.os,
+            "hostname": agent.hostname,
+            "os_version": agent.os_version,
+            "username": agent.username,
             "ip_address": agent.ip_address,
             "version": agent.version,
             "last_seen": now,
@@ -528,6 +555,9 @@ class HeartbeatRequest(BaseModel):
     policy_sync_status: Optional[str] = Field(None, description="Most recent policy sync status")
     policy_last_synced_at: Optional[str] = Field(None, description="ISO timestamp for last policy sync")
     policy_sync_error: Optional[str] = Field(None, description="Error details from last policy sync")
+    username: Optional[str] = Field(None, description="Currently logged-in Windows user, refreshed every heartbeat")
+    os_version: Optional[str] = Field(None, description="Precise OS build string, refreshed every heartbeat")
+    version: Optional[str] = Field(None, description="Agent binary version, refreshed every heartbeat (post-auto-update)")
 
 
 @router.put("/{agent_id}/heartbeat")
@@ -589,6 +619,12 @@ async def agent_heartbeat(
         update_data["policy_last_synced_at"] = heartbeat.policy_last_synced_at
     if heartbeat and heartbeat.policy_sync_error is not None:
         update_data["policy_sync_error"] = heartbeat.policy_sync_error
+    if heartbeat and heartbeat.username:
+        update_data["username"] = heartbeat.username
+    if heartbeat and heartbeat.os_version:
+        update_data["os_version"] = heartbeat.os_version
+    if heartbeat and heartbeat.version:
+        update_data["version"] = heartbeat.version
 
     result = await agents_collection.update_one(
         {"agent_id": agent_id},
@@ -1046,8 +1082,16 @@ async def get_usb_allowlist(
     if mode not in ("enforce", "audit"):
         mode = "enforce"
 
+    # decision='deny' rows are deliberately excluded here (not just
+    # is_enabled=False ones): a denied serial is never part of the agent's
+    # allow set, same effect as it being unlisted in enforce mode, but it's
+    # a distinct, audited "no" rather than "never decided" — see
+    # SanctionedUsbDevice.decision and migration 034.
     rows = (await db.execute(
-        _select(SanctionedUsbDevice).where(SanctionedUsbDevice.is_enabled.is_(True))
+        _select(SanctionedUsbDevice).where(
+            SanctionedUsbDevice.is_enabled.is_(True),
+            SanctionedUsbDevice.decision == "allow",
+        )
     )).scalars().all()
     devices = [{
         "serial_number": d.serial_number,
@@ -1076,9 +1120,10 @@ class DeviceAuthorizeRequest(BaseModel):
     product_name: Optional[str] = None
     device_name: Optional[str] = None
     drive_letter: Optional[str] = None
-    action: str = Field("allow", description="What the agent actually did: allow | block")
+    action: str = Field("allow", description="What the agent actually did: allow | block | disconnect")
     sanctioned: bool = Field(False, description="Whether the serial matched an enabled allowlist row")
     enforced: bool = Field(False, description="Whether device-control enforcement was active at decision time")
+    event: str = Field("connect", description="'connect' or 'disconnect' — lets the live connected/offline indicator on the USB Devices page tell the two apart")
 
 
 @router.post("/{agent_id}/device/authorize")
@@ -1099,7 +1144,10 @@ async def log_device_authorization(
     mongo = get_mongodb()["dlp_events"]
     now = datetime.now(timezone.utc)
     ident = request.product_name or request.device_name or request.serial_number or "USB device"
-    if request.action == "block":
+    usb_event = request.event if request.event in ("connect", "disconnect") else "connect"
+    if usb_event == "disconnect":
+        title, sev = f"USB device disconnected: {ident}", "info"
+    elif request.action == "block":
         title, sev = f"USB device blocked (unsanctioned): {ident}", "high"
     elif request.enforced and request.sanctioned:
         title, sev = f"Sanctioned USB device allowed: {ident}", "low"
@@ -1125,6 +1173,10 @@ async def log_device_authorization(
         "product_id": request.product_id,
         "device_name": request.device_name or request.product_name,
         "drive_letter": request.drive_letter,
+        # 'connect' or 'disconnect' — the live connected/offline indicator
+        # and insertion-history view on the USB Devices page both key off
+        # this (most recent event per serial: connect => still plugged in).
+        "usb_event": usb_event,
     }
     try:
         await mongo.insert_one(doc)

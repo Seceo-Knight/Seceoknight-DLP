@@ -209,6 +209,8 @@ export type Agent = {
   version?: string
   hostname?: string
   os_version?: string
+  /** Currently logged-in Windows user, refreshed every heartbeat. */
+  username?: string
   capabilities?: Record<string, boolean>
   /** Legacy boolean — true if heartbeat within ``AGENT_TIMEOUT_SECONDS`` (5s).
    *  Prefer ``lifecycle_status`` for new UI code. */
