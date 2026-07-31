@@ -2542,11 +2542,22 @@ static ClassificationResult Classify(const std::string& content,
         if (allowlistEnforced && !sanctioned && allowlistMode == "enforce") {
             allowlistShouldBlock = true;
         }
+        // An explicitly-approved device is an administrative override: it
+        // should be let through regardless of a separate, blanket
+        // "block all USB" monitored-event policy also being active.
+        // Without this, approving a device here had no effect whenever any
+        // such classic block policy existed, since that policy alone was
+        // sufficient to set shouldBlock=true below — approval could never
+        // un-set it. Applies in either allowlist mode (enforce or audit):
+        // an approval is an explicit "this one's fine" from an admin, not
+        // something that should depend on the allowlist's own audit/enforce
+        // sub-mode (that distinction only governs UNSANCTIONED devices).
+        bool allowlistExempt = allowlistEnforced && sanctioned;
         if (allowlistEnforced) {
             logger.Info(std::string("USB allowlist check: serial=") + (usbSerial.empty() ? "(none)" : usbSerial) +
                         " sanctioned=" + (sanctioned ? "true" : "false") +
                         " mode=" + allowlistMode +
-                        " decision=" + (allowlistShouldBlock ? "block" : "allow"));
+                        " decision=" + (allowlistShouldBlock ? "block" : (allowlistExempt ? "allow (exempt)" : "allow")));
         }
         // Visibility event for the Events page — fire-and-forget, off this
         // thread (it pumps Windows device-arrival messages and must not
@@ -2578,7 +2589,10 @@ static ClassificationResult Classify(const std::string& content,
                      matchedPolicyId = policy.policyId;
                      matchedPolicyName = policy.name;
 
-                     if (policyAction == "block") {
+                     // allowlistExempt: see comment above — an approved
+                     // device doesn't get blocked by this even though the
+                     // policy matched (still recorded above for logging).
+                     if (policyAction == "block" && !allowlistExempt) {
                          shouldBlock = true;
                      }
                      break;
@@ -2586,6 +2600,25 @@ static ClassificationResult Classify(const std::string& content,
              }
 
              if (shouldBlock) break;
+         }
+
+         if (allowlistExempt && !matchedPolicyId.empty() && policyAction == "block") {
+             logger.Info("USB device " + betterDeviceName + " (serial=" + usbSerial +
+                         ") exempted from block policy '" + matchedPolicyName +
+                         "' — approved on the USB device-control allowlist");
+             // The classic block primitives (registry USBSTOR disable /
+             // per-instance device disable) are class-wide, not per-serial
+             // — if an earlier, unapproved device already tripped them,
+             // they'd still be in effect and would keep this approved
+             // device from mounting even though shouldBlock is now false
+             // for it. Proactively restore access. Deliberately does NOT
+             // touch usbBlockingActive — that flag reflects whether the
+             // classic block policy is still configured active and must
+             // keep governing the NEXT unapproved device's connect event;
+             // this is a one-time "let this specific device through," not
+             // a change to the standing policy state.
+             EnableAllUSBStorageDevices();
+             BlockUSBStorageViaRegistry(false);
          }
 
          // The allowlist can ALSO independently decide to block, even when no

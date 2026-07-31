@@ -8,6 +8,42 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔓 Approved USB Devices Ignored by an Active Block Policy (July 31, 2026)
+
+### Summary
+
+User set a classic "Block" USB policy AND approved a specific pendrive in the new USB Devices allowlist, expecting the approved drive to be let through. It kept getting blocked on every reinsertion.
+
+### Root cause
+
+Two independent mechanisms, only one of which could ever win. The classic "block on usb_connect" policy sets `shouldBlock = true` unconditionally whenever it matches — the allowlist could only *add* a block decision (`allowlistShouldBlock`) when no classic policy had already decided to block, never remove one. So with a blanket block policy active, it alone was sufficient to block everything, and approving a device in the allowlist had no effect at all.
+
+There's a second layer to this: the classic block's actual mechanism (`BlockUSBStorageViaRegistry` + `DisableAllUSBStorageDevices`) disables the USB mass-storage driver class system-wide — it has no concept of "except this serial," it's a blanket kill switch (the code's own comment already called this out: "act globally, not per-serial"). So even exempting one device from *triggering* a new block wouldn't help if an earlier unapproved device had already tripped it — the driver would still be globally disabled.
+
+### Fix (`agent.cpp`, `HandleUsbDeviceArrival`)
+
+An approved device (`allowlistEnforced && sanctioned`) is now treated as an explicit administrative override:
+
+- It no longer sets `shouldBlock = true` even when a classic block policy matches (the match is still recorded for logging/event data).
+- It proactively calls `EnableAllUSBStorageDevices()` + `BlockUSBStorageViaRegistry(false)` to restore access, covering the case where an earlier unapproved device already tripped the global kill switch.
+- Deliberately does **not** touch `usbBlockingActive` — that flag reflects whether the classic block policy is still configured active and must keep governing the *next* unapproved device's connect event. This is a one-time "let this specific device through," not a change to the standing policy.
+
+Applies in either allowlist sub-mode (enforce or audit) — an approval is an explicit "this one's fine," not something that should depend on the allowlist's own audit/enforce distinction (that only governs *unsanctioned* devices).
+
+### Known limitation (accepted)
+
+Because the block primitive is class-wide rather than per-device, briefly restoring access for an approved device could transiently also let a *different*, unapproved device that happens to be plugged in at the same moment slip through — until the next unapproved connect event re-trips the block. True per-device isolation while blocking would need a different Windows mechanism (e.g. Device Installation Restriction group policy with per-hardware-ID allow/deny lists), which is a substantially larger change. Discussed with the user, who accepted this tradeoff.
+
+### Verification
+
+Brace/paren balance verified against a fresh clone of the pre-edit file (identical pre-existing imbalance in both, confirming all new braces/parens are self-balanced). Not live-tested — no server/Windows-agent access in this sandbox.
+
+### Result
+
+A device approved in the USB Devices allowlist is now let through even when a separate blanket "block all USB" policy is active, instead of the approval being silently ignored.
+
+---
+
 ## 📊 Dashboard "Active Agents" Tile Disagreed With the Agents Page (July 31, 2026)
 
 ### Summary
