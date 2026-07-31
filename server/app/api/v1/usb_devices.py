@@ -248,6 +248,29 @@ async def seen_devices(
             "last_seen": ls.isoformat() if hasattr(ls, "isoformat") else ls,
             "sanctioned": False,
         })
+
+    # Resolve agent_id -> a real agent name/code, same batch-lookup pattern
+    # as events.py's _attach_agent_info(): events and agents both live in
+    # MongoDB, so there's no SQL join to lean on. Without this the "Agent"
+    # column just showed the raw agent_id UUID, which looks like a random
+    # string to anyone reading the page.
+    agent_ids = {d["agent_id"] for d in out if d.get("agent_id")}
+    if agent_ids:
+        agents_collection = get_mongodb()["agents"]
+        agent_info = {
+            doc["agent_id"]: doc
+            async for doc in agents_collection.find(
+                {"agent_id": {"$in": list(agent_ids)}},
+                {"_id": 0, "agent_id": 1, "name": 1, "agent_code": 1},
+            )
+            if doc.get("agent_id")
+        }
+        for d in out:
+            match = agent_info.get(d.get("agent_id"))
+            if match:
+                d["agent_name"] = match.get("name")
+                d["agent_code"] = match.get("agent_code")
+
     return {"devices": out, "count": len(out)}
 
 

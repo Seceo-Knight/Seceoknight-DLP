@@ -8,6 +8,36 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🏷️ USB Devices Page: Empty VID:PID + Raw Agent ID Instead of a Name (July 31, 2026)
+
+### Summary
+
+Two display bugs on the USB Devices page: the VID:PID column always showed "—" for both Seen and Sanctioned devices, and the "Agent" column in the Seen table showed a raw agent_id (a UUID-looking string) instead of the real agent name.
+
+### Root cause — VID:PID always empty
+
+Two stacked problems. First, `ReportUsbDeviceAuthorization()` in `agent.cpp` — the function that reports every USB connect/block decision to the server for the Seen/Sanctioned lists — never sent `vendor_id`/`product_id` at all; the server-side model already had fields for them, but the agent simply never populated them. Second, even fixing that naively wouldn't have helped: a USBSTOR device *interface* path (what `WM_DEVICECHANGE` hands the agent, e.g. `\\?\USBSTOR#Disk&Ven_Kingston&Prod_DataTraveler&Rev_1.00#serial#{GUID}`) never contains a numeric `VID_xxxx&PID_yyyy` — only `Ven_`/`Prod_` text strings. The real numeric vendor/product ID only exists on the *parent* USB device node one level up in the device tree (e.g. `USB\VID_0781&PID_5567&REV_0100\...`).
+
+### Root cause — raw agent ID instead of a name
+
+`usb_devices.py`'s `seen_devices()` endpoint returned the raw `agent_id` from the matching event with no lookup against the `agents` collection — the same class of bug already fixed once this session on the Events page's cloud-upload display (`events.py`'s `_attach_agent_info`), just never applied to this newer USB allowlist feature.
+
+### Fix
+
+- `agent.cpp`: new `GetUsbStorageVidPid()` converts the device interface path to a device instance ID, calls `CM_Locate_DevNode` → `CM_Get_Parent` → `CM_Get_Device_ID` (all already available via the already-included/linked `cfgmgr32.h`/`cfgmgr32.lib`, no new build dependency) to read the parent USB node's hardware ID, then parses the real `VID_`/`PID_` out of *that*. `ReportUsbDeviceAuthorization()` now accepts and sends these values.
+- `usb_devices.py`'s `seen_devices()`: batch-resolves `agent_id` → `name`/`agent_code` against the `agents` collection, same pattern as `events.py`'s `_attach_agent_info`.
+- `usb-devices-api.ts` / `UsbDevices.tsx`: `SeenDevice` gained `agent_name`/`agent_code`; the Agent column now renders the resolved name (with `#code`), falling back to the raw ID only if the agent record can't be found at all.
+
+### Verification
+
+`python3 -m py_compile` passes. `npx tsc --noEmit` shows the same 25 pre-existing, unrelated errors (none in the changed files). `npm run build` succeeds (`dist/` removed after). Brace/paren balance of every new `agent.cpp` block verified against a fresh clone of the pre-edit file (identical pre-existing imbalance in both). Not live-tested — no server/Windows-agent access in this sandbox.
+
+### Result
+
+The USB Devices page now shows real vendor/product IDs and a real agent name instead of "—" and a raw UUID.
+
+---
+
 ## 🔓 Approved USB Devices Ignored by an Active Block Policy (July 31, 2026)
 
 ### Summary

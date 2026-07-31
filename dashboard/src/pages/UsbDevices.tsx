@@ -224,7 +224,11 @@ function SeenRow({ s, onApproved }: { s: SeenDevice; onApproved: () => void }) {
       <td className="text-cs-ink-2">{s.product_name || '—'}</td>
       <td className="num text-cs-muted">{vidpid(s.vendor_id, s.product_id)}</td>
       <td className="text-cs-muted text-xs">{fmt(s.last_seen)}</td>
-      <td className="text-cs-muted text-xs num">{s.agent_id || '—'}</td>
+      <td className="text-cs-muted text-xs">
+        {s.agent_name
+          ? `${s.agent_name}${s.agent_code ? ` (#${String(s.agent_code).padStart(3, '0')})` : ''}`
+          : (s.agent_id ? <span className="num">{s.agent_id}</span> : '—')}
+      </td>
       <td className="text-right">
         <button className="btn btn-secondary inline-flex items-center gap-1"
           disabled={approve.isPending} onClick={() => approve.mutate()}>

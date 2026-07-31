@@ -28,6 +28,11 @@ export interface SeenDevice {
   product_id?: string | null
   product_name?: string | null
   agent_id?: string | null
+  // Resolved server-side (batch lookup against the agents collection,
+  // same pattern as events.py's _attach_agent_info) — falls back to
+  // agent_id itself only if the agent record can't be found (e.g. deleted).
+  agent_name?: string | null
+  agent_code?: number | null
   last_seen?: string | null
   sanctioned: boolean
 }

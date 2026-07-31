@@ -2529,6 +2529,15 @@ static ClassificationResult Classify(const std::string& content,
         // policy loop below: an admin can enable this allowlist with or
         // without also having a separate "block on usb_connect" policy.
         std::string usbSerial = ExtractUsbSerialFromDeviceId(deviceId);
+        // USBSTOR interface paths (\\?\USBSTOR#Disk&Ven_X&Prod_Y&Rev_Z#serial#{GUID})
+        // never contain a numeric "VID_xxxx&PID_yyyy" — that only exists on
+        // the PARENT USB device node (e.g. USB\VID_0781&PID_5567\...), one
+        // level up in the device tree. Without walking up to it, the USB
+        // Devices dashboard page's VID:PID column is always empty for every
+        // mass-storage device, even though Seen/Sanctioned otherwise show
+        // the right serial and device name.
+        std::string usbVendorId, usbProductId;
+        GetUsbStorageVidPid(deviceId, usbVendorId, usbProductId);
         bool sanctioned = false;
         std::string allowlistMode;
         {
@@ -2562,7 +2571,7 @@ static ClassificationResult Classify(const std::string& content,
         // Visibility event for the Events page — fire-and-forget, off this
         // thread (it pumps Windows device-arrival messages and must not
         // block on network I/O).
-        ReportUsbDeviceAuthorization(betterDeviceName, usbSerial, driveLetter,
+        ReportUsbDeviceAuthorization(betterDeviceName, usbSerial, usbVendorId, usbProductId, driveLetter,
                                      allowlistShouldBlock ? "block" : "allow",
                                      sanctioned, allowlistEnforced);
 
@@ -5970,15 +5979,22 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
     // on the same thread that pumps Windows device-arrival messages, and
     // must return quickly.
     void ReportUsbDeviceAuthorization(const std::string& deviceLabel, const std::string& serial,
+                                       const std::string& vendorId, const std::string& productId,
                                        const std::string& driveLetter, const std::string& action,
                                        bool sanctioned, bool enforced) {
         std::string agentId = config.agentId;
-        std::thread([this, agentId, deviceLabel, serial, driveLetter, action, sanctioned, enforced]() {
+        std::thread([this, agentId, deviceLabel, serial, vendorId, productId, driveLetter, action, sanctioned, enforced]() {
             try {
                 JsonBuilder json;
                 if (!serial.empty()) json.AddString("serial_number", serial);
                 json.AddString("product_name", deviceLabel);
                 json.AddString("device_name", deviceLabel);
+                // vendor_id/product_id previously were never sent from here at
+                // all (this function simply didn't have them) — the USB
+                // Devices page's VID:PID column showed "—" for every device
+                // as a result. See GetUsbStorageVidPid().
+                if (!vendorId.empty()) json.AddString("vendor_id", vendorId);
+                if (!productId.empty()) json.AddString("product_id", productId);
                 if (!driveLetter.empty()) json.AddString("drive_letter", driveLetter);
                 json.AddString("action", action);
                 json.AddBool("sanctioned", sanctioned);
@@ -7497,6 +7513,64 @@ if (shouldMonitor) {
         }
         if (instanceId.empty()) return "";
         return NormalizeUsbSerial(instanceId);
+    }
+
+    // Converts a device INTERFACE path (what WM_DEVICECHANGE/dbcc_name
+    // hands us, e.g. \\?\USBSTOR#Disk&Ven_X&Prod_Y&Rev_Z#serial&0#{GUID})
+    // into a device INSTANCE ID (USBSTOR\Disk&Ven_X&Prod_Y&Rev_Z\serial&0)
+    // — the format CM_Locate_DevNode expects. Strips the leading "\\?\",
+    // drops the trailing "#{interface-class-GUID}" segment, then replaces
+    // the remaining '#' separators with '\'.
+    std::string DeviceInterfacePathToInstanceId(const std::string& deviceId) {
+        std::string s = deviceId;
+        const std::string prefix = "\\\\?\\";
+        if (s.rfind(prefix, 0) == 0) s = s.substr(prefix.size());
+        size_t lastHash = s.rfind('#');
+        if (lastHash == std::string::npos) return "";
+        s = s.substr(0, lastHash);
+        for (auto& c : s) if (c == '#') c = '\\';
+        return s;
+    }
+
+    // A USBSTOR device interface path never contains a numeric
+    // "VID_xxxx&PID_yyyy" — only Ven_/Prod_ TEXT strings (see
+    // ExtractUsbSerialFromDeviceId's comment above). The real numeric
+    // vendor/product ID lives on the PARENT USB device node one level up
+    // in the device tree (e.g. USB\VID_0781&PID_5567&REV_0100\...).
+    // Without this walk, the USB Devices dashboard page's VID:PID column
+    // is empty for every mass-storage device. Returns false (leaving
+    // outVid/outPid empty) if the device has already been removed by the
+    // time this runs, or the lookup otherwise fails — callers already
+    // treat empty VID/PID as "unknown", same as before this existed.
+    bool GetUsbStorageVidPid(const std::string& deviceId, std::string& outVid, std::string& outPid) {
+        outVid.clear();
+        outPid.clear();
+        std::string instanceId = DeviceInterfacePathToInstanceId(deviceId);
+        if (instanceId.empty()) return false;
+
+        DEVINST devInst = 0;
+        if (CM_Locate_DevNodeA(&devInst, const_cast<DEVINSTID_A>(instanceId.c_str()),
+                                CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS) {
+            return false;
+        }
+        DEVINST parentInst = 0;
+        if (CM_Get_Parent(&parentInst, devInst, 0) != CR_SUCCESS) {
+            return false;
+        }
+        char parentId[MAX_DEVICE_ID_LEN];
+        if (CM_Get_Device_IDA(parentInst, parentId, MAX_DEVICE_ID_LEN, 0) != CR_SUCCESS) {
+            return false;
+        }
+        std::string parent(parentId);
+        size_t vidPos = parent.find("VID_");
+        if (vidPos != std::string::npos && vidPos + 8 <= parent.length()) {
+            outVid = parent.substr(vidPos + 4, 4);
+        }
+        size_t pidPos = parent.find("PID_");
+        if (pidPos != std::string::npos && pidPos + 8 <= parent.length()) {
+            outPid = parent.substr(pidPos + 4, 4);
+        }
+        return !outVid.empty() || !outPid.empty();
     }
 
     std::string GetBetterDeviceName(const std::string& deviceId) {
