@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🪟 Watchdog Task Flashed a Console Window Every 5 Minutes (July 31, 2026)
+
+### Summary
+
+After deploying the hang-detection watchdog (previous entry below), a user reported a command-window flash on the endpoint at regular intervals.
+
+### Root cause
+
+The watchdog task's principal was `LogonType Interactive` — same as the main agent task. That runs `powershell.exe` inside the visible desktop session every 5 minutes to perform its check, and `-WindowStyle Hidden` is a best-effort hint, not a guarantee: PowerShell can still briefly create a visible console window before the hidden style applies. The main agent task genuinely needs `Interactive` (clipboard/keyboard hooks require running in the desktop session), but the watchdog script only calls `Get-Process`/`Stop-Process`/`Start-ScheduledTask` — none of which need desktop access at all.
+
+### Fix (`install-agent.ps1`)
+
+Changed the watchdog task's principal to `LogonType S4U`. S4U runs the task outside the interactive session entirely, so there's no window to flash in the first place — a root-cause fix rather than a hidden-window workaround. S4U doesn't require storing a password (unlike `LogonType Password`), so no credential prompt or config change is needed. The main agent task is untouched and stays `Interactive`.
+
+### Verification
+
+Brace/paren balance of `install-agent.ps1` verified identical (0/0) against a fresh clone of the pre-edit file. No PowerShell interpreter in this sandbox to execute it directly. Not live-tested on a real endpoint yet — a retrofit `Set-ScheduledTask` snippet was given for the one endpoint already running the old `Interactive` version, changing only the principal without touching the script or trigger.
+
+---
+
 ## 🐕‍🦺 Watchdog Trigger Powerless Against a Hung (Not Exited) Agent Process (July 31, 2026)
 
 ### Summary

@@ -690,7 +690,18 @@ try {
         -RepetitionInterval (New-TimeSpan -Minutes 5) `
         -RepetitionDuration (New-TimeSpan -Days 3650)
 
-    $watchdogPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+    # LogonType S4U (not Interactive, unlike the main agent task below). The
+    # main agent needs Interactive because clipboard/keyboard hooks require
+    # running in the same session as the desktop -- but this watchdog script
+    # only ever calls Get-Process/Stop-Process/Start-ScheduledTask, none of
+    # which need desktop access. Running it Interactive meant every 5-minute
+    # check spawned powershell.exe IN the visible desktop session, and
+    # -WindowStyle Hidden isn't reliable at suppressing that initial console
+    # window -- users reported a periodic console flash. S4U runs the task
+    # outside the interactive session entirely, so there's no window to
+    # flash in the first place (root-cause fix, not a hidden-window trick).
+    # S4U doesn't require storing a password, unlike LogonType Password.
+    $watchdogPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Limited
 
     $watchdogSettings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
