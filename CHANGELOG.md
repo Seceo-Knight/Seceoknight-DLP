@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐕 Scheduled Task Watchdog — Agent Didn't Self-Heal From a Clean Exit (July 31, 2026)
+
+### Summary
+
+Live-tested the duplicate-agent/reactivation fixes below on a real endpoint. Confirmed the reactivation logic works correctly — but surfaced a separate, real gap: after the agent process exited cleanly (a manual Ctrl+C during testing), the scheduled task sat in "Ready" state indefinitely and never came back on its own. Had to manually run `Start-ScheduledTask`. Not viable across a fleet.
+
+### Root cause
+
+`install-agent.ps1`'s scheduled task only had `AtLogOn` and `AtStartup` triggers, plus `RestartCount 999` / `RestartInterval 1 minute`. That restart setting only applies when Task Scheduler considers the task *failed* (non-zero exit code) — a graceful/clean exit (Ctrl+C, someone running `Stop-ScheduledTask`, a shutdown handshake that returns 0) is not a "failure," so nothing brings the task back except the next logon or reboot.
+
+### Fix
+
+Added a third trigger: a repeating "watchdog" that re-fires every 10 minutes, indefinitely (`-RepetitionInterval`/`-RepetitionDuration`). `MultipleInstances IgnoreNew` (already set) makes each tick a safe no-op while the agent is already running — it only actually does anything when the task has stopped for any reason. This closes the gap regardless of *why* the agent stopped, rather than trying to special-case exit codes.
+
+### Verification
+
+No PowerShell interpreter in this sandbox; reviewed manually, brace/paren counts balance. Confirmed on the live endpoint used for testing: `Start-ScheduledTask` brought the agent back and the dashboard showed it active again.
+
+### Result
+
+An agent that stops for any reason short of an intentional uninstall (which now properly unregisters, see below) comes back within 10 minutes on its own — no one has to notice and manually restart it on any given endpoint.
+
+---
+
 ## 🧹 Duplicate Agent Records + False "Offline While Idle" (July 30, 2026)
 
 ### Summary

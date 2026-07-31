@@ -527,6 +527,22 @@ try {
     $triggerStartup = New-ScheduledTaskTrigger -AtStartup
     $triggerStartup.Delay = "PT30S"
 
+    # Watchdog trigger: re-fires every 10 minutes, indefinitely. This is
+    # what makes the agent self-heal from a CLEAN exit -- Task Scheduler's
+    # RestartCount/RestartInterval below only apply when the task *fails*
+    # (non-zero exit code). A graceful stop -- Ctrl+C during manual testing,
+    # someone running Stop-ScheduledTask, a shutdown handshake that returns
+    # 0 -- is not a "failure" to Task Scheduler, so it leaves the task
+    # sitting in "Ready" state forever with nothing to bring it back except
+    # a logon or reboot. That's exactly the "shows offline, had to manually
+    # Start-ScheduledTask" symptom on a real endpoint. MultipleInstances
+    # IgnoreNew (in $settings below) makes each tick a safe no-op while the
+    # agent is already running; it only actually does anything when the
+    # task has stopped for whatever reason.
+    $triggerWatchdog = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+        -RepetitionInterval (New-TimeSpan -Minutes 10) `
+        -RepetitionDuration ([TimeSpan]::MaxValue)
+
     # Principal: run at normal user privilege (Interactive, RunLevel Limited).
     # This is essential  - clipboard hooks and keyboard/mouse event monitoring
     # require the process to run in the same security context as the desktop.
@@ -550,7 +566,7 @@ try {
     Register-ScheduledTask `
         -TaskName $TASK_NAME `
         -Action $action `
-        -Trigger @($triggerLogon, $triggerStartup) `
+        -Trigger @($triggerLogon, $triggerStartup, $triggerWatchdog) `
         -Principal $principal `
         -Settings $settings `
         -Description "SeceoKnight DLP Agent - Data Loss Prevention monitoring (clipboard, USB, files, screen capture)" `
