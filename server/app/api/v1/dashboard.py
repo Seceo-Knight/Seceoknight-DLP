@@ -46,8 +46,18 @@ async def get_dashboard_overview(
     # Total agents
     total_agents = await agents_collection.count_documents({})
 
-    # Active agents (agents with heartbeat within last 60 seconds)
-    AGENT_TIMEOUT_SECONDS = 60
+    # Active agents (agents with a recent heartbeat). Reuses agents.py's
+    # AGENT_TIMEOUT_SECONDS (5 min, sized for the default 30s heartbeat
+    # interval plus room for network jitter / brief drops) rather than a
+    # locally-hardcoded value. This tile used to define "active" as
+    # last_seen within 60 SECONDS -- a completely different, much tighter
+    # threshold than the Agents page (which uses the 5-minute window
+    # everywhere: the default agent list, lifecycle_status, etc). With a
+    # 30s heartbeat interval, 60s leaves almost no slack, so this tile
+    # could show 0 active agents while the Agents page correctly showed
+    # the same agent as online -- two different definitions of "active"
+    # disagreeing with each other on the same dashboard.
+    from app.api.v1.agents import AGENT_TIMEOUT_SECONDS
     cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
     cutoff_naive = datetime.utcnow() - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
 

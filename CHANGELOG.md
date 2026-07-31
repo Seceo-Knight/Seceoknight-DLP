@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📊 Dashboard "Active Agents" Tile Disagreed With the Agents Page (July 31, 2026)
+
+### Summary
+
+After reinstalling and confirming the agent showed online on the Agents page, the Dashboard overview's "Active Agents" tile showed 0 for the same machine.
+
+### Root cause
+
+`server/app/api/v1/dashboard.py`'s `get_dashboard_overview` defined its own local `AGENT_TIMEOUT_SECONDS = 60` for the active-agents count — a completely different, much tighter threshold than the 300-second (5-minute) window `agents.py` uses everywhere else (the default agent list, `lifecycle_status`, etc). With the default 30-second heartbeat interval, a 60-second cutoff leaves almost no slack — any normal network jitter or an unlucky poll timing and the count drops to 0, even though the same agent is clearly fine by every other measure on the same dashboard.
+
+### Fix
+
+Removed the locally-hardcoded constant; `dashboard.py` now imports and reuses `AGENT_TIMEOUT_SECONDS` from `agents.py` so there's a single definition of "active" instead of two silently drifting ones.
+
+### Verification
+
+`python3 -m py_compile` passes. No circular import (checked `agents.py`'s own imports first). Not yet re-verified live against the running server.
+
+### Result
+
+The "Active Agents" KPI tile and the Agents page now agree with each other.
+
+---
+
 ## 🩹 Watchdog Trigger Broke Task Registration Entirely (July 31, 2026)
 
 ### Summary
