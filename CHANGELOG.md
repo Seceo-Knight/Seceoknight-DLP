@@ -8,6 +8,33 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 👤 Event & Alert User Attribution Surfaced in the Dashboard (August 3, 2026)
+
+### Summary
+
+Following CyberSentinel-DLP's newer "event-level user attribution" feature, audited SeceoKnight's own pipeline end-to-end. The underlying data was already there — the Windows agent has attached `user_email` (`GetUsername() + "@" + GetHostname()`) to nearly every event since long before this change, and `events.py` already stores/searches/ABAC-resolves it. The actual gaps were entirely on the display side, plus one real backend bug in the Alerts API.
+
+### Root cause
+
+1. **Events list view** (`Events.tsx`): `user_email` was only rendered inside the per-event detail modal, not the compact list row analysts scan first.
+2. **Alerts API** (`alerts.py`): the `alert_service.py` → `action_executor.py` path already writes `user_email` into both the PostgreSQL `Alert` row and the MongoDB `alerts` document that actually powers `GET /alerts/`. But the endpoint's Pydantic `Alert` response model didn't declare a `user_email` field, so Pydantic silently dropped it from every response — a real bug, not just a missing display. The event-fallback path (used before any alert has been materialized) never read `user_email` off the source event at all.
+3. **Alerts UI** (`Alerts.tsx`, `AlertDetailsModal.tsx`): no user attribution shown anywhere, list or detail.
+
+### Fix
+
+- `alerts.py`: added `user_email: Optional[str]` to the `Alert` response model; populated it in both the list and single-alert event-fallback branches from `event_doc.get("user_email")`.
+- `Events.tsx`: added a "User: {email}" chip to the list-row summary line (Agent / User / timestamp / event ID), suppressed for the `agent@system` placeholder.
+- `Alerts.tsx`: added the same "User:" chip to the list row, and included `user_email` in the search-box matching.
+- `AlertDetailsModal.tsx`: added a "User:" row to the Alert Summary section, preferring the live event's `user_email` over the alert's stored copy.
+
+No agent.cpp changes were needed — the Windows agent was already sending everything required.
+
+### Verification
+
+`python3 -m py_compile server/app/api/v1/alerts.py` clean. `npx tsc --noEmit` clean for `Events.tsx`, `Alerts.tsx`, `AlertDetailsModal.tsx` (remaining tsc errors in the full run are pre-existing, unrelated to `policies`/`rules` files).
+
+---
+
 ## 🪟 Watchdog Console Flash, Take 2: LogonType Alone Wasn't Enough (August 1, 2026)
 
 ### Summary

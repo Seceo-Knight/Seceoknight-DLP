@@ -77,6 +77,7 @@ export default function Alerts() {
         alert.title?.toLowerCase().includes(query) ||
         alert.description?.toLowerCase().includes(query) ||
         alert.agent_id?.toLowerCase().includes(query) ||
+        alert.user_email?.toLowerCase().includes(query) ||
         alert.event_id?.toLowerCase().includes(query) ||
         alert.severity?.toLowerCase().includes(query)
       )
@@ -219,6 +220,12 @@ export default function Alerts() {
 
                     <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
                       <span>Agent: {alert.agent_id}</span>
+                      {alert.user_email && alert.user_email !== 'agent@system' && (
+                        <>
+                          <span>•</span>
+                          <span>User: {alert.user_email}</span>
+                        </>
+                      )}
                       <span>•</span>
                       <span>{formatRelativeTime(alert.created_at)}</span>
                       <span>•</span>

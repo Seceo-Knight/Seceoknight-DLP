@@ -997,6 +997,15 @@ export default function Events() {
                         <span className="text-muted-foreground/70">Agent:</span>{' '}
                         <span className="font-medium text-foreground" title={event.agent_id}>{getEventAgentLabel(event)}</span>
                       </span>
+                      {event.user_email && event.user_email !== 'agent@system' && (
+                        <>
+                          <span className="text-muted-foreground/40">•</span>
+                          <span>
+                            <span className="text-muted-foreground/70">User:</span>{' '}
+                            <span className="font-medium text-foreground">{event.user_email}</span>
+                          </span>
+                        </>
+                      )}
                       <span className="text-muted-foreground/40">•</span>
                       <span>{formatDate(event.timestamp, 'PPpp')}</span>
                       <span className="text-muted-foreground/40">•</span>

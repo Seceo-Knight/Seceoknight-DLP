@@ -118,6 +118,13 @@ export default function AlertDetailsModal({ alert, isOpen, onClose }: AlertDetai
                     )}
                   </span>
                 </div>
+                {(eventData?.user_email || alert.user_email) &&
+                  (eventData?.user_email || alert.user_email) !== 'agent@system' && (
+                  <div>
+                    <span className="font-medium text-muted-foreground">User:</span>
+                    <span className="ml-2">{eventData?.user_email || alert.user_email}</span>
+                  </div>
+                )}
                 <div>
                   <span className="font-medium text-muted-foreground">Event ID:</span>
                   <span className="ml-2 font-mono text-xs">{alert.event_id}</span>

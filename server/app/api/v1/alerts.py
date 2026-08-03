@@ -28,6 +28,7 @@ class Alert(BaseModel):
     status: str
     event_id: str
     agent_id: Optional[str] = None
+    user_email: Optional[str] = None
     created_at: Optional[datetime] = None
     classification_category: Optional[str] = None
     classification_level: Optional[str] = None
@@ -192,6 +193,7 @@ async def get_alerts(
                     status=alert_status,
                     event_id=alert_id,
                     agent_id=event_doc.get("agent_id"),
+                    user_email=event_doc.get("user_email"),
                     created_at=ts,
                     classification_category=event_doc.get("classification_category") or event_doc.get("classification_level"),
                     classification_level=event_doc.get("classification_level"),
@@ -384,6 +386,7 @@ async def get_alert(
             "status": "new",
             "event_id": alert_id,
             "agent_id": event_doc.get("agent_id"),
+            "user_email": event_doc.get("user_email"),
             "created_at": ts.isoformat(),
         }
 
