@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 Linux Agent CI: Fixed False-Failure on Missing `file` Command (August 3, 2026)
+
+### Summary
+
+The first two real runs of `build-linux-agent.yml` both failed -- but the actual build succeeded both times (a working 6.6MB binary, confirmed in the logs).
+
+### Root cause
+
+`python:3.9-slim-bullseye` doesn't ship the `file` command by default (it's a minimal image). The build step's last line, `file dist/seceoknight_linux_agent`, was purely informational, but with no `|| true` its "command not found" (exit 127) failed the entire step -- and every step after it (the smoke test, checksum generation, and committing the binary back to the repo) never even ran.
+
+### Fix
+
+Added `file` to the container's installed packages, and `|| true` on the diagnostic line itself as a second line of defense against this exact class of failure recurring.
+
+### Verification
+
+YAML parses clean. Not yet confirmed green on GitHub Actions -- this push itself will be the first real test of the smoke-test/checksum/commit-back steps, since the previous two runs never reached them.
+
+---
+
 ## 📋 Linux Agent: Clipboard Monitoring (X11 + Wayland) (August 3, 2026)
 
 ### Summary

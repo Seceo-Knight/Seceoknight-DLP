@@ -46,7 +46,7 @@ jobs:
           # try/except ImportError in usb_monitor.py only helps once
           # pyudev is already importable; it can't make a failed build succeed).
           apt-get install -y --no-install-recommends \
-            build-essential libudev-dev pkg-config git ca-certificates
+            build-essential libudev-dev pkg-config git ca-certificates file
           echo "=== glibc version this binary will be built/linked against ==="
           ldd --version | head -1
 
@@ -79,7 +79,14 @@ jobs:
 
           echo "=== Binary built ==="
           ls -lh dist/seceoknight_linux_agent
-          file dist/seceoknight_linux_agent
+          # Purely informational -- must never fail the build if the `file`
+          # tool is unexpectedly unavailable in this container image again
+          # (it wasn't on the first two runs: python:3.9-slim-bullseye
+          # doesn't ship it by default, and this line's "command not found"
+          # exit 127 failed the whole job even though the binary above had
+          # already built successfully. Now installed explicitly in the
+          # previous step, but `|| true` here too as a second line of defense).
+          file dist/seceoknight_linux_agent || true
 
       - name: Smoke-test the binary actually starts
         working-directory: agents/endpoint/linux
