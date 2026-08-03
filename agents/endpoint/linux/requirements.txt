@@ -2,3 +2,4 @@
 requests==2.31.0
 watchdog==3.0.0
 python-dateutil==2.8.2
+pyudev==0.24.3

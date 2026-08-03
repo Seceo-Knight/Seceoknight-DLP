@@ -6,6 +6,8 @@ Enterprise endpoint DLP agent for Linux systems.
 
 - ✅ **File System Monitoring** - Real-time inotify-based monitoring
 - ✅ **Automatic Classification** - Pattern-based sensitive data detection
+- ✅ **Print Job Monitoring** - CUPS print jobs classified and blocked/logged, matching the Windows agent
+- ✅ **USB Storage Monitoring** - udev-based connect/disconnect detection with allowlist enforcement (unmount), same allowlist as Windows
 - ✅ **Real-time Reporting** - Sends events to central server
 - ✅ **Systemd Integration** - Runs as system service
 - ✅ **Low Resource Usage** - Optimized for servers
@@ -15,6 +17,8 @@ Enterprise endpoint DLP agent for Linux systems.
 - Ubuntu 20.04+ / CentOS 8+ / Debian 11+
 - Python 3.8+
 - Root privileges (for installation)
+- `libudev` (present on essentially every modern Linux install already) for USB storage monitoring
+- `cups-client` (`lpstat`/`cancel`) for print job monitoring -- both features degrade to a logged no-op if their system dependency is missing, rather than blocking agent startup
 
 ## Quick Installation
 
@@ -110,6 +114,8 @@ sudo tail -f /var/log/seceoknight_agent.log
 | **File Created** | New file created in monitored directories |
 | **File Modified** | File content changed |
 | **File Moved** | File moved or renamed |
+| **Print Job** | Document sent to a CUPS printer -- classified by filename, blocked (job cancelled) if Restricted |
+| **USB Connect/Disconnect** | USB storage device attached/removed -- checked against the same allowlist as the Windows agent; non-allowlisted devices are unmounted when enforcement is on |
 
 ## Sensitive Data Detection
 

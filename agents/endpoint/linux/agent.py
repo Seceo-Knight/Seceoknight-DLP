@@ -21,9 +21,24 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 import pwd
+import subprocess
 import requests
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
+
+try:
+    # Sibling module, installed alongside agent.py as of install.sh's
+    # /opt/seceoknight/agent/ layout fix. Import defensively so an agent
+    # dropped in without it (e.g. a hand-copied agent.py only) still runs
+    # with file monitoring even though print monitoring won't be available.
+    from print_monitor import PrintMonitor
+except ImportError:
+    PrintMonitor = None
+
+try:
+    from usb_monitor import UsbMonitor
+except ImportError:
+    UsbMonitor = None
 
 def _resolve_log_path() -> str:
     """Resolve the agent's log file path.
@@ -256,6 +271,23 @@ class DLPAgent:
         self.dedup_window_seconds = 5  # Ignore duplicate events within 5 seconds (increased from 2)
         self.dedup_lock = threading.Lock()  # Lock for thread-safe deduplication
 
+        # Print-job monitoring (CUPS via lpstat). Unconditional, like the
+        # Windows agent's PrintMonitor -- there's no server-side "print
+        # monitoring" policy category to gate on (only file_system_monitoring
+        # / file_transfer_monitoring exist), so print detection always runs
+        # once the agent starts, same as Windows.
+        self.print_monitor = PrintMonitor(callback=self._handle_print_event) if PrintMonitor else None
+
+        # USB storage monitoring (udev-based). Detection runs unconditionally
+        # once started -- same rationale as print monitoring, plus visibility
+        # is useful even with no allowlist configured. Enforcement (unmount)
+        # only happens once fetch_usb_allowlist() has confirmed a
+        # usb_device_control policy exists in "enforce" mode.
+        self.usb_monitor = UsbMonitor(callback=self._handle_usb_event) if UsbMonitor else None
+        self.usb_allowlist_serials: set = set()
+        self.usb_enforced: bool = False
+        self.usb_mode: str = "off"
+
         logger.info(f"Agent initialized: {self.agent_id}")
 
     def start(self):
@@ -266,12 +298,21 @@ class DLPAgent:
         # Register agent with server
         self.register_agent()
         self.sync_policies(initial=True)
+        self.fetch_usb_allowlist()
         if self.policy_sync_interval:
             threading.Thread(target=self.policy_sync_loop, daemon=True).start()
 
         # Start file system monitoring
         if self.config.get("monitoring", {}).get("file_system", True) and self.has_file_policies:
             self.start_file_monitoring()
+
+        # Start print-job monitoring (unconditional -- see __init__ note)
+        if self.print_monitor:
+            self.print_monitor.start()
+
+        # Start USB storage monitoring (unconditional -- see __init__ note)
+        if self.usb_monitor:
+            self.usb_monitor.start()
 
         # Start heartbeat
         threading.Thread(target=self.heartbeat_loop, daemon=True).start()
@@ -306,10 +347,18 @@ class DLPAgent:
             return  # Already stopped
         
         self.running = False
-        
+
+        # Stop print monitoring
+        if self.print_monitor:
+            self.print_monitor.stop()
+
+        # Stop USB monitoring
+        if self.usb_monitor:
+            self.usb_monitor.stop()
+
         # Unregister from server
         self.unregister_agent()
-        
+
         # Stop file observers
         for observer in self.observers:
             observer.stop()
@@ -358,6 +407,80 @@ class DLPAgent:
                 self.sync_policies()
             except Exception as exc:
                 logger.debug(f"Policy sync loop error: {exc}")
+            try:
+                self.fetch_usb_allowlist()
+            except Exception as exc:
+                logger.debug(f"USB allowlist sync error: {exc}")
+
+    def fetch_usb_allowlist(self):
+        """Fetch and cache the USB device allowlist (same endpoint the
+        Windows agent polls), so enforcement decisions on connect are made
+        locally with no per-device round trip -- works offline, no race
+        with udev's own hotplug timing."""
+        try:
+            response = requests.get(
+                f"{self.server_url}/agents/{self.agent_id}/usb-allowlist",
+                timeout=10,
+            )
+            if response.status_code != 200:
+                logger.warning(f"USB allowlist fetch failed: {response.status_code}")
+                return
+            data = response.json()
+            self.usb_enforced = bool(data.get("enforced", False))
+            self.usb_mode = data.get("mode", "off")
+            self.usb_allowlist_serials = set(data.get("serials", []) or [])
+            logger.info(
+                f"USB allowlist synced: enforced={self.usb_enforced} mode={self.usb_mode} "
+                f"count={len(self.usb_allowlist_serials)}"
+            )
+        except Exception as exc:
+            logger.debug(f"Failed to fetch USB allowlist: {exc}")
+
+    def _handle_usb_event(self, usb_event: Dict[str, Any]):
+        """Callback for UsbMonitor -- decide sanctioned/enforced against the
+        cached allowlist, optionally unmount, and report via the same
+        /device/authorize endpoint (and field names) the Windows agent uses,
+        so both platforms' USB history shows up in the same Events/USB
+        Devices UI."""
+        try:
+            serial = usb_event.get("serial_number", "")
+            event = usb_event.get("event", "connect")
+            sanctioned = bool(serial) and serial in self.usb_allowlist_serials
+
+            action = "allow"
+            if event == "disconnect":
+                action = "disconnect"
+            elif self.usb_enforced and self.usb_mode == "enforce" and not sanctioned:
+                unmounted = False
+                if self.usb_monitor and usb_event.get("device_node"):
+                    unmounted = self.usb_monitor.unmount_device(usb_event["device_node"])
+                action = "block" if unmounted else "allow"
+                if not unmounted:
+                    logger.warning(
+                        f"USB device not on allowlist but could not be unmounted "
+                        f"(serial={serial}): {usb_event.get('device_name')}"
+                    )
+
+            payload = {
+                "serial_number": serial or None,
+                "vendor_id": usb_event.get("vendor_id") or None,
+                "product_id": usb_event.get("product_id") or None,
+                "product_name": usb_event.get("device_name"),
+                "device_name": usb_event.get("device_name"),
+                "action": action,
+                "sanctioned": sanctioned,
+                "enforced": self.usb_enforced and self.usb_mode == "enforce",
+                "event": event,
+            }
+            response = requests.post(
+                f"{self.server_url}/agents/{self.agent_id}/device/authorize",
+                json=payload,
+                timeout=10,
+            )
+            if response.status_code not in (200, 201):
+                logger.debug(f"USB device authorization report failed: {response.status_code}")
+        except Exception as exc:
+            logger.error(f"Error handling USB event: {exc}")
 
     def sync_policies(self, initial: bool = False):
         try:
@@ -905,6 +1028,88 @@ class DLPAgent:
         except Exception as e:
             logger.error(f"Error handling transfer destination event: {e}")
 
+    # Keyword lists mirrored from the Windows agent's printClassifier
+    # (agent.cpp) so a document named e.g. "Q3 Payroll.pdf" gets the same
+    # Restricted/Internal/Public classification regardless of which
+    # platform's agent monitored the print job.
+    _PRINT_RESTRICTED_KEYWORDS = [
+        "restricted", "confidential", "secret", "classified", "sensitive",
+        "employee", "salary", "payroll", "ssn", "aadhaar", "pan",
+        "credit card", "bank", "account", "password", "private",
+    ]
+    _PRINT_INTERNAL_KEYWORDS = [
+        "internal", "draft", "budget", "financial", "revenue",
+    ]
+
+    def _classify_print_document(self, document_name: str) -> str:
+        """Classify a print job by document filename, matching the Windows
+        agent's keyword-based printClassifier exactly (see agent.cpp)."""
+        lower = (document_name or "").lower()
+        if any(kw in lower for kw in self._PRINT_RESTRICTED_KEYWORDS):
+            return "Restricted"
+        if any(kw in lower for kw in self._PRINT_INTERNAL_KEYWORDS):
+            return "Internal"
+        return "Public"
+
+    def _cancel_print_job(self, job_id: str) -> bool:
+        """Best-effort cancel of a pending CUPS job via the `cancel` CLI.
+        Only works while the job is still queued -- same window the
+        polling-based detection itself depends on (lpstat -o only lists
+        jobs CUPS hasn't finished spooling to the printer yet)."""
+        try:
+            result = subprocess.run(
+                ["cancel", job_id], capture_output=True, text=True, timeout=5
+            )
+            return result.returncode == 0
+        except Exception as exc:
+            logger.warning(f"Failed to cancel print job {job_id}: {exc}")
+            return False
+
+    def _handle_print_event(self, print_event: Dict[str, Any]):
+        """Callback for PrintMonitor -- classify, optionally block, and
+        report a print job in the same event shape the Windows agent's
+        PrintMonitor sends (event_type=print, event_subtype=print_job)."""
+        try:
+            document_name = print_event.get("document", "Unknown Document")
+            job_id = print_event.get("job_id", "")
+            owner = print_event.get("owner", "unknown")
+
+            classification_level = self._classify_print_document(document_name)
+            should_block = classification_level == "Restricted"
+
+            blocked = False
+            if should_block and job_id:
+                blocked = self._cancel_print_job(job_id)
+                if blocked:
+                    logger.warning(f"Blocked print job {job_id}: {document_name}")
+                else:
+                    logger.warning(f"Wanted to block print job {job_id} but cancel failed: {document_name}")
+
+            event_data = {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "print",
+                "event_subtype": "print_job",
+                "agent_id": self.agent_id,
+                "source_type": "agent",
+                "user_email": f"{owner}@{socket.gethostname()}",
+                "username": owner,
+                "description": (
+                    f"PRINT JOB BLOCKED: {document_name} — {classification_level} data"
+                    if blocked else f"Print job: {document_name}"
+                ),
+                "severity": "high" if blocked else "low",
+                "action": "blocked" if blocked else "allowed",
+                "classification_level": classification_level,
+                "blocked": blocked,
+                "file_path": document_name,
+                "printer": print_event.get("printer", "unknown"),
+                "timestamp": print_event.get("timestamp") or datetime.utcnow().isoformat(),
+            }
+
+            self.send_event(event_data)
+        except Exception as e:
+            logger.error(f"Error handling print event: {e}")
+
     def _classify_content(self, content: str) -> Dict[str, Any]:
         """Classify content for sensitive data"""
         import re
@@ -965,10 +1170,18 @@ class DLPAgent:
             return ""
 
     def send_event(self, event_data: Dict[str, Any]) -> bool:
-        """Send event to server. Returns True if server says block."""
+        """Send event to server. Returns True if server says block.
+
+        allow_events only gates "file" events, since that flag reflects
+        whether file_system_monitoring/file_transfer_monitoring policies
+        are currently synced from the server -- it says nothing about
+        print (or any future non-file event type), which has no server
+        policy category to gate on and, like the Windows agent's
+        PrintMonitor, always detects and reports once the agent is running.
+        """
         try:
-            if not self.allow_events:
-                logger.debug("Dropping event because no active policies")
+            if event_data.get("event_type") == "file" and not self.allow_events:
+                logger.debug("Dropping file event because no active file policies")
                 return False
             if self.active_policy_version and "policy_version" not in event_data:
                 event_data["policy_version"] = self.active_policy_version

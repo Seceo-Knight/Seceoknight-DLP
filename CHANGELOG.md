@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🖨️🔌 Linux Agent: Print Job Monitoring + USB Storage Monitoring (August 3, 2026)
+
+### Summary
+
+Following the Linux agent bugfix pass below, added the two biggest CyberSentinel-adjacent capability gaps: print job monitoring (the module already existed as `print_monitor.py` but was never imported into `agent.py`) and USB storage device monitoring (new — nothing on Linux detected USB connect/disconnect before this).
+
+### What's new
+
+**Print monitoring** (`agent.py` + existing `print_monitor.py`): CUPS print jobs are now polled via `lpstat -o`, classified by filename using the exact same restricted/internal keyword lists as the Windows agent's `printClassifier` (so "Q3_Payroll.pdf" gets the same verdict on either platform), and reported to `/events` in the same shape the Windows agent uses (`event_type=print`, `event_subtype=print_job`). Restricted documents are blocked by best-effort `cancel <job_id>` while the job is still queued in CUPS.
+
+**USB storage monitoring** (new `usb_monitor.py`): uses `pyudev` to watch the kernel's own hotplug mechanism (there's no Linux equivalent of Windows' `WM_DEVICECHANGE`; udev monitoring is the standard approach) for USB block devices. Extracts vendor_id/product_id/serial_number the same way Windows' USBSTOR registry path does — from the USB device descriptor — so a physical device's identity matches across platforms and an allowlist built from Windows connection history works unmodified for Linux. Fetches the same `/agents/{id}/usb-allowlist` endpoint the Windows agent polls, and reports connect/disconnect via the same `/agents/{id}/device/authorize` endpoint with identical field names, so both platforms' USB history lands in the same Events/USB Devices UI. Enforcement (when a `usb_device_control` policy is active in `enforce` mode) unmounts any partition on a non-allowlisted device — a weaker guarantee than Windows' USBSTOR registry block (a user could remount manually afterward), but the same class of mitigation CyberSentinel's Linux agent uses; a true kernel-level block would need a udev rule or blacklisting `usb-storage` entirely, a larger and more invasive change.
+
+Both features degrade gracefully (log a clear message, no crash) if their system dependency (`cups-client`/`lpstat` or `libudev`/`pyudev`) isn't present — matching the "additive, never blocks core file monitoring" design already used for quarantine-folder-missing and similar edge cases elsewhere in this agent.
+
+### Verification
+
+`python3 -m py_compile agent.py usb_monitor.py print_monitor.py policy_cache.py` clean. `pyudev` installed and exercised directly against the sandbox's real udev database (not just a syntax check) — `UsbMonitor` correctly walked existing block devices and extracted vendor_id/product_id/serial_number from a live device, confirming the udev property names used are correct. Not live-tested against real CUPS print jobs or physical USB hardware — do that before relying on it in production.
+
+---
+
 ## 🐧 Linux Agent: Fixed Startup Path Mismatch, Wrong Log Path, Root-Only User Attribution (August 3, 2026)
 
 ### Summary
