@@ -36,12 +36,13 @@ sudo ./install.sh
 sudo apt-get install python3 python3-pip
 pip3 install -r requirements.txt
 
-# Create directories
-sudo mkdir -p /opt/seceoknight
+# Create directories (seceoknight-agent.service expects agent.py under
+# /opt/seceoknight/agent/, not directly in /opt/seceoknight/)
+sudo mkdir -p /opt/seceoknight/agent
 sudo mkdir -p /etc/seceoknight
 
 # Copy files
-sudo cp agent.py /opt/seceoknight/
+sudo cp agent.py policy_cache.py print_monitor.py /opt/seceoknight/agent/
 sudo cp agent_config.json /etc/seceoknight/
 sudo cp seceoknight-agent.service /etc/systemd/system/
 

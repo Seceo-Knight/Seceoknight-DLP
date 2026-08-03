@@ -20,12 +20,36 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
+import pwd
 import requests
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
+def _resolve_log_path() -> str:
+    """Resolve the agent's log file path.
+
+    Prefers /var/log/seceoknight_agent.log -- the path README.md and
+    install.sh's own "Useful Commands" output both document -- so that
+    `sudo tail -f /var/log/seceoknight_agent.log` actually works when the
+    agent runs as root via systemd (which it always does per
+    seceoknight-agent.service's User=root). The previous
+    os.path.expanduser('~/...') resolved to /root/seceoknight_agent.log
+    under systemd, silently diverging from every path documented for
+    operators to check. Falls back to the invoking user's home directory
+    only if /var/log isn't writable (e.g. running manually, unprivileged,
+    for local testing).
+    """
+    primary = "/var/log/seceoknight_agent.log"
+    try:
+        with open(primary, "a"):
+            pass
+        return primary
+    except Exception:
+        return os.path.expanduser("~/seceoknight_agent.log")
+
+
 # Configure logging
-log_file = os.path.expanduser('~/seceoknight_agent.log')
+log_file = _resolve_log_path()
 os.makedirs(os.path.dirname(log_file), exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
@@ -301,10 +325,6 @@ class DLPAgent:
     def register_agent(self):
         """Register agent with server"""
         try:
-            # Get current user
-            import pwd
-            current_user = pwd.getpwuid(os.getuid()).pw_name
-
             data = {
                 "agent_id": self.agent_id,
                 "name": self.config.get("agent_name"),
@@ -743,9 +763,8 @@ class DLPAgent:
             elif policy_action == "alert":
                 event_action = "alert"
 
-            # Get current user
-            import pwd
-            current_user = pwd.getpwuid(os.getuid()).pw_name
+            # Attribute to the file's owning user, not the (always-root) agent process
+            current_user = self._get_file_owner_username(file_path)
 
             # Send event to server
             event_data = {
@@ -835,9 +854,9 @@ class DLPAgent:
                 blocked = self.block_file_transfer(dest_path)
                 event_action = "blocked" if blocked else "logged"
 
-            # Get current user
-            import pwd
-            current_user = pwd.getpwuid(os.getuid()).pw_name
+            # Attribute to the destination file's owning user (the one who
+            # actually performed the copy/move), not the (always-root) agent process
+            current_user = self._get_file_owner_username(dest_path)
 
             event_data = {
                 "event_id": str(uuid.uuid4()),
@@ -1023,6 +1042,33 @@ class DLPAgent:
         if self.last_policy_sync_error:
             data["policy_sync_error"] = self.last_policy_sync_error
         return data
+
+    def _get_file_owner_username(self, file_path: str) -> str:
+        """Best-effort resolution of the user who actually owns a file on disk.
+
+        The agent process itself always runs as root (systemd service runs
+        User=root, required for cross-user file monitoring), so
+        pwd.getpwuid(os.getuid()) only ever resolves to "root" -- using
+        that for per-event user attribution would make every single Linux
+        event show up as "root@hostname", regardless of who actually
+        touched the file. That's the same problem the Windows agent's
+        event-level user attribution work was about avoiding.
+
+        The file's own owning UID is a much better proxy for "who actually
+        did this" on Linux: normal cp/mv/write operations preserve the
+        invoking (non-root) user as the file's owner. Falls back to the
+        agent process's own user only if the stat itself fails (e.g. file
+        already gone by the time we look).
+        """
+        try:
+            stat_info = os.stat(file_path)
+            return pwd.getpwuid(stat_info.st_uid).pw_name
+        except Exception:
+            pass
+        try:
+            return pwd.getpwuid(os.getuid()).pw_name
+        except Exception:
+            return "unknown"
 
     def _get_real_ip_address(self) -> str:
         """Get the primary IPv4 address of the Linux machine.

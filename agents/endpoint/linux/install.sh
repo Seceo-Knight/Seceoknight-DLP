@@ -21,16 +21,21 @@ apt-get install -y python3 python3-pip -qq
 pip3 install -r requirements.txt -q
 
 # Create installation directory
+# NOTE: seceoknight-agent.service's WorkingDirectory/ExecStart point at
+# /opt/seceoknight/agent/agent.py (a subdirectory), not /opt/seceoknight/agent.py
+# directly -- this used to be a mismatch that would leave the systemd unit
+# failing at startup with "No such file or directory" no matter how clean
+# the install otherwise looked. Layout below matches the service file.
 echo "[2/5] Creating installation directory..."
-mkdir -p /opt/seceoknight
+mkdir -p /opt/seceoknight/agent
 mkdir -p /etc/seceoknight
 mkdir -p /var/log
 
 # Copy files
 echo "[3/5] Installing agent..."
-cp agent.py /opt/seceoknight/
+cp agent.py policy_cache.py print_monitor.py /opt/seceoknight/agent/
 cp agent_config.json /etc/seceoknight/
-chmod +x /opt/seceoknight/agent.py
+chmod +x /opt/seceoknight/agent/agent.py
 
 # Install systemd service
 echo "[4/5] Installing systemd service..."

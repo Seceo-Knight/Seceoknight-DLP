@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐧 Linux Agent: Fixed Startup Path Mismatch, Wrong Log Path, Root-Only User Attribution (August 3, 2026)
+
+### Summary
+
+Started scoping a CyberSentinel-DLP-style Linux agent effort and found SeceoKnight already has one (`agents/endpoint/linux/`, present since the initial release, with two prior bugfix commits) — file system monitoring, classification, quarantine/block, non-USB transfer detection, policy sync, heartbeat, all wired into the same server APIs as the Windows agent. While reviewing it end-to-end before deciding what (if anything) to add, found three real bugs.
+
+### Root cause
+
+1. **`install.sh`/README copied `agent.py` to `/opt/seceoknight/agent.py`, but `seceoknight-agent.service`'s `ExecStart` points at `/opt/seceoknight/agent/agent.py`** (a subdirectory). Following the documented install steps exactly would leave the systemd unit failing to start with "No such file or directory" — the installer prints "✓ Installation complete!" regardless, since it doesn't check `systemctl start` actually succeeded.
+2. **`agent.py` logged to `os.path.expanduser('~/seceoknight_agent.log')`**, which resolves to `/root/seceoknight_agent.log` under the systemd service (`User=root`) — but both `README.md` and `install.sh`'s own "Useful Commands" output tell operators to check `/var/log/seceoknight_agent.log`, a path the agent never actually wrote to. Same class of bug as the Windows agent's Logger-default-path fix from earlier testing.
+3. **Every event's `user_email`/`username` was derived from `pwd.getpwuid(os.getuid())`** — the agent process's own UID. Since the systemd service always runs as root, every single Linux DLP event would attribute to `root@hostname` regardless of which user actually created/modified/copied the file — defeating the point of per-event user attribution (the same gap the Windows agent's event-attribution work just fixed, reintroduced here for a different reason).
+
+### Fix
+
+- `install.sh` / `README.md`: install `agent.py` (plus `policy_cache.py`/`print_monitor.py`, previously written but never copied by the installer at all) into `/opt/seceoknight/agent/`, matching the service file.
+- `agent.py`: added `_resolve_log_path()` — prefers `/var/log/seceoknight_agent.log` (the documented path), falls back to the home-directory path only if `/var/log` isn't writable (e.g. running unprivileged for local testing).
+- `agent.py`: added `_get_file_owner_username(file_path)` — resolves the actual file's owning UID via `os.stat()` instead of the agent process's UID, for both file-system events and file-transfer events. Falls back to the process user only if the stat itself fails.
+
+### Verification
+
+`python3 -m py_compile agent.py` clean, `bash -n install.sh` clean. Diffed against a fresh clone of pre-edit HEAD to confirm no unintended changes.
+
+---
+
 ## 👤 Event & Alert User Attribution Surfaced in the Dashboard (August 3, 2026)
 
 ### Summary
