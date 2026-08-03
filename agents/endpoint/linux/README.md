@@ -14,13 +14,15 @@ Enterprise endpoint DLP agent for Linux systems.
 
 ## Requirements
 
-- Ubuntu 20.04+ / CentOS 8+ / Debian 11+
-- Python 3.8+
+- Ubuntu 20.04+ / CentOS 8+ / Debian 11+ (frozen binary needs glibc 2.31+, i.e. anything Debian 11/bullseye or newer)
 - Root privileges (for installation)
 - `libudev` (present on essentially every modern Linux install already) for USB storage monitoring
 - `cups-client` (`lpstat`/`cancel`) for print job monitoring -- both features degrade to a logged no-op if their system dependency is missing, rather than blocking agent startup
+- Python 3.8+ is **only** needed for `--from-source` installs (see below) -- the default install downloads a self-contained binary with everything already bundled in, no Python toolchain required on the target machine
 
 ## Quick Installation
+
+Default install downloads the pre-built binary (see `.github/workflows/build-linux-agent.yml`) -- no python3/pip needed on the target machine:
 
 ```bash
 # Clone or download agent files
@@ -33,7 +35,30 @@ chmod +x install.sh
 sudo ./install.sh
 ```
 
+Prefer installing from the local `.py` source instead (e.g. for local development, or a target with no network access to GitHub)?
+
+```bash
+sudo ./install.sh --from-source
+```
+
 ## Manual Installation
+
+Binary (recommended, no python3/pip needed on the target):
+
+```bash
+sudo mkdir -p /opt/seceoknight/agent /etc/seceoknight
+curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/agents/endpoint/linux/seceoknight_linux_agent \
+  -o /opt/seceoknight/agent/seceoknight_linux_agent
+sudo chmod +x /opt/seceoknight/agent/seceoknight_linux_agent
+sudo cp agent_config.json /etc/seceoknight/
+# Edit ExecStart in seceoknight-agent.service to point at the binary path
+# above (see the comment in that file), then:
+sudo cp seceoknight-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now seceoknight-agent
+```
+
+From source (requires python3/pip on the target machine):
 
 ```bash
 # Install dependencies
@@ -46,9 +71,10 @@ sudo mkdir -p /opt/seceoknight/agent
 sudo mkdir -p /etc/seceoknight
 
 # Copy files
-sudo cp agent.py policy_cache.py print_monitor.py /opt/seceoknight/agent/
+sudo cp agent.py policy_cache.py print_monitor.py usb_monitor.py /opt/seceoknight/agent/
 sudo cp agent_config.json /etc/seceoknight/
 sudo cp seceoknight-agent.service /etc/systemd/system/
+# seceoknight-agent.service defaults to the python3 agent.py ExecStart already
 
 # Start service
 sudo systemctl daemon-reload
@@ -151,7 +177,7 @@ curl http://YOUR-SERVER-IP:8000/health
 ```bash
 # Ensure proper permissions
 sudo chown -R root:root /opt/seceoknight
-sudo chmod +x /opt/seceoknight/agent.py
+sudo chmod +x /opt/seceoknight/agent/seceoknight_linux_agent /opt/seceoknight/agent/agent.py 2>/dev/null
 ```
 
 ### High CPU usage

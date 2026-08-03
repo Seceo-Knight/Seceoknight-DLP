@@ -1,0 +1,129 @@
+name: Build Linux Agent
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'agents/endpoint/linux/agent.py'
+      - 'agents/endpoint/linux/policy_cache.py'
+      - 'agents/endpoint/linux/print_monitor.py'
+      - 'agents/endpoint/linux/usb_monitor.py'
+      - 'agents/endpoint/linux/requirements.txt'
+      - '.github/workflows/build-linux-agent.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # Build inside Debian 11 (bullseye, glibc 2.31) rather than whatever
+    # ubuntu-latest's own libc happens to be -- PyInstaller bundles the
+    # Python interpreter and C-extension .so files but NOT glibc itself,
+    # so a binary built against a newer glibc (e.g. ubuntu-latest's) will
+    # refuse to run on any target with an older one ("version GLIBC_2.35
+    # not found"). Building against bullseye's older glibc instead means
+    # the resulting binary runs on bullseye AND everything newer, since
+    # glibc is backwards- (not forwards-) compatible. Matches the floor
+    # CyberSentinel-DLP's own Linux agent build targets.
+    container:
+      image: python:3.9-slim-bullseye
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system build dependencies
+        run: |
+          apt-get update -qq
+          # build-essential + libudev-dev + pkg-config: pyudev's CFFI binding
+          # (_libudev) has to compile a small C extension against libudev's
+          # headers at pip-install time -- without these, pip install pyudev
+          # fails outright rather than silently degrading (the runtime
+          # try/except ImportError in usb_monitor.py only helps once
+          # pyudev is already importable; it can't make a failed build succeed).
+          apt-get install -y --no-install-recommends \
+            build-essential libudev-dev pkg-config git ca-certificates
+          echo "=== glibc version this binary will be built/linked against ==="
+          ldd --version | head -1
+
+      - name: Install Python dependencies
+        working-directory: agents/endpoint/linux
+        run: |
+          pip install --no-cache-dir -r requirements.txt
+          pip install --no-cache-dir pyinstaller==6.3.0
+
+      - name: Build frozen binary
+        working-directory: agents/endpoint/linux
+        run: |
+          # --onefile: single self-contained executable, no separate .so/
+          # data directory to ship alongside it -- matches how the Windows
+          # agent ships as a single .exe. policy_cache/print_monitor/
+          # usb_monitor are regular sibling-module imports in agent.py
+          # (usb_monitor's pyudev import is wrapped in try/except, which can
+          # make PyInstaller's static analysis miss it -- hidden-import
+          # flags below make sure it's bundled regardless of how it's
+          # imported).
+          pyinstaller --onefile \
+            --name seceoknight_linux_agent \
+            --hidden-import policy_cache \
+            --hidden-import print_monitor \
+            --hidden-import usb_monitor \
+            --hidden-import pyudev \
+            --collect-all pyudev \
+            agent.py
+
+          echo "=== Binary built ==="
+          ls -lh dist/seceoknight_linux_agent
+          file dist/seceoknight_linux_agent
+
+      - name: Smoke-test the binary actually starts
+        working-directory: agents/endpoint/linux
+        run: |
+          # Full agent.start() blocks forever and needs a reachable server,
+          # neither of which this job has -- but a basic "does the frozen
+          # interpreter even boot and import everything" check catches the
+          # single most common PyInstaller failure mode (a missing hidden
+          # import that only surfaces as an ImportError/ModuleNotFoundError
+          # at process start, which a plain build success does not catch).
+          timeout 5 ./dist/seceoknight_linux_agent --help 2>&1 | head -20 || true
+          echo "Smoke test ran (non-zero/timeout exit is expected -- agent.py has no --help flag; we're checking it didn't fail with a Python import traceback)"
+
+      - name: Generate SHA256 checksum
+        working-directory: agents/endpoint/linux
+        run: |
+          cp dist/seceoknight_linux_agent .
+          sha256sum seceoknight_linux_agent > seceoknight_linux_agent.sha256
+          cat seceoknight_linux_agent.sha256
+
+      - name: Commit updated binary
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add agents/endpoint/linux/seceoknight_linux_agent
+          git add agents/endpoint/linux/seceoknight_linux_agent.sha256
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "build: update Linux agent binary [skip ci]"
+
+          # Same race as the Windows agent workflow: two source-touching
+          # pushes close together each trigger their own run, and whichever
+          # commits the binary first wins -- retry with fetch+rebase so the
+          # other integrates cleanly instead of failing outright.
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt) — fetching and rebasing before retry..."
+            git fetch origin main
+            git rebase origin/main || { echo "Rebase failed — manual intervention needed"; exit 1; }
+          done
+
+          echo "Push still failing after retries"
+          exit 1

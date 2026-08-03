@@ -6,6 +6,12 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/opt/seceoknight/agent
+# NOTE: install.sh generates this file itself and picks the right
+# ExecStart for you -- this checked-in copy is only a reference for
+# --from-source / fully manual installs. Default install.sh runs the
+# pre-built binary directly:
+#   ExecStart=/opt/seceoknight/agent/seceoknight_linux_agent
+# This line (python3 agent.py) is what --from-source installs use instead.
 ExecStart=/usr/bin/python3 /opt/seceoknight/agent/agent.py
 Restart=always
 RestartSec=10

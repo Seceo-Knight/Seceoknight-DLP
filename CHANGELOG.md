@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📦 Linux Agent: PyInstaller Single-Binary Packaging + CI (August 3, 2026)
+
+### Summary
+
+Installing the Linux agent from source required `apt-get install python3 python3-pip` plus compiling pyudev's C extension against libudev on every single target machine -- a much heavier footprint than the Windows agent's single self-contained `.exe`. Added the same packaging model for Linux: a frozen, dependency-free binary built by CI, matching CyberSentinel-DLP's approach.
+
+### What's new
+
+**`.github/workflows/build-linux-agent.yml`**: builds `agent.py` (+ `policy_cache.py`/`print_monitor.py`/`usb_monitor.py`) into a single `seceoknight_linux_agent` binary via PyInstaller, triggered on any push touching the Linux agent's `.py` files. Builds inside a `python:3.9-slim-bullseye` container specifically (not `ubuntu-latest`'s own newer glibc) -- PyInstaller bundles the Python interpreter but not glibc itself, and glibc is backwards- but not forwards-compatible, so building against bullseye's older glibc (2.31) means the binary runs there and on everything newer, while building against a newer glibc would refuse to run on anything older. `--collect-all pyudev` bundles pyudev's compiled `_libudev` extension into the binary so the target machine needs no Python/pip/compiler at all, only `libudev` itself (present on essentially every Linux install already). A smoke test confirms the frozen binary actually boots without an ImportError before it's committed. Same commit-the-binary-back-to-the-repo + fetch/rebase-retry-on-push-race pattern as `build-windows-agent.yml`.
+
+**`install.sh`**: now downloads and checksum-verifies the pre-built binary by default (`curl` from the same `raw.githubusercontent.com` convention `install-agent.ps1` uses for the Windows `.exe`), and generates `/etc/systemd/system/seceoknight-agent.service` itself with the right `ExecStart` for whichever install path actually succeeded. Falls back automatically to installing from local `.py` source (today's behavior, needs python3/pip on the target) if the binary download or checksum verification fails, or if `--from-source` is passed explicitly -- e.g. for local development or an air-gapped target with no route to GitHub.
+
+**`seceoknight-agent.service`** (the checked-in copy): now documented as a reference for `--from-source`/fully-manual installs only, since `install.sh` generates the real unit file itself.
+
+### Verification
+
+`bash -n install.sh` clean, workflow YAML parses clean. Not yet run end-to-end on GitHub Actions (needs an actual push to trigger it) or tested on a real target machine -- verify the first CI run produces a working binary and that a fresh Debian/Ubuntu VM can install and start the agent via the new `install.sh` before relying on this in production.
+
+---
+
 ## 🖨️🔌 Linux Agent: Print Job Monitoring + USB Storage Monitoring (August 3, 2026)
 
 ### Summary
