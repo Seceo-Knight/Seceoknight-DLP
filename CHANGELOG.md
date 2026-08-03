@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🪟 Watchdog Console Flash, Take 2: LogonType Alone Wasn't Enough (August 1, 2026)
+
+### Summary
+
+The previous fix (switching the watchdog task's principal to `LogonType S4U`) didn't fully eliminate the periodic console flash — a user confirmed it was still happening after that change.
+
+### Root cause
+
+`LogonType S4U` changes whether the scheduled task needs a stored password or the user to be logged on — it does not guarantee the launched process is barred from the interactive window station when the user *is* actively logged in. Combined with `-WindowStyle Hidden` being a hint the console host applies only after the window briefly exists (not a guarantee enforced before anything is drawn), a flash could still slip through.
+
+### Fix (`install-agent.ps1`)
+
+Replaced the direct `powershell.exe -WindowStyle Hidden` invocation with the standard, long-established zero-flash technique: a tiny VBScript wrapper (`watchdog_launcher.vbs`, written to the install directory) that calls `WScript.Shell.Run(command, 0, True)`. The `0` there is a real `SW_HIDE` flag applied at process-creation time, not a post-hoc hint, and `wscript.exe` itself is a GUI-subsystem host with no console of its own to flash in the first place. The scheduled task's action now runs `wscript.exe watchdog_launcher.vbs`, which in turn launches the actual `watchdog.ps1` fully hidden. `LogonType S4U` is kept as defense in depth, not as the sole fix this time.
+
+### Verification
+
+Brace/paren balance of `install-agent.ps1` verified identical (0/0) against a fresh clone of the pre-edit file. No PowerShell/VBScript interpreter in this sandbox to execute either script directly — reviewed manually, paying particular attention to the doubled-quote escaping needed to embed the file path inside the VBScript string literal. Not live-tested on a real endpoint yet. A retrofit snippet was given for the one endpoint already running the S4U-only version, writing the new `.vbs` wrapper and updating just the task's Action (not its trigger, settings, or principal).
+
+---
+
 ## 🪟 Watchdog Task Flashed a Console Window Every 5 Minutes (July 31, 2026)
 
 ### Summary

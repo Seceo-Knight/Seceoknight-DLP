@@ -678,13 +678,34 @@ try {
 '@
     Set-Content -Path $watchdogScriptPath -Value $watchdogScriptContent -Encoding UTF8 -Force
 
+    # Launch via a VBScript wrapper instead of invoking powershell.exe
+    # directly. This turned out to matter: LogonType S4U (still set below)
+    # was tried first on its own and DIDN'T fully stop the flash -- S4U only
+    # changes whether the task needs a stored password / a logged-on user,
+    # it doesn't guarantee the launched process can't touch the interactive
+    # window station when the user IS actively logged in, and
+    # -WindowStyle Hidden is a hint the console host applies only AFTER the
+    # window briefly exists, not a guarantee. WScript.Shell.Run's third
+    # argument (0 = SW_HIDE) is a real CreateProcess-level hidden-window
+    # flag applied before anything is ever drawn, and wscript.exe itself is
+    # a GUI subsystem host with no console of its own to flash in the first
+    # place. This is the standard, long-established technique for a
+    # genuinely silent scheduled-task launch -- belt-and-suspenders with the
+    # S4U logon type below, not a replacement for it.
+    $watchdogLauncherPath = Join-Path $INSTALL_DIR "watchdog_launcher.vbs"
+    $watchdogLauncherContent = @"
+Set objShell = CreateObject("WScript.Shell")
+objShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""$watchdogScriptPath""", 0, True
+"@
+    Set-Content -Path $watchdogLauncherPath -Value $watchdogLauncherContent -Encoding ASCII -Force
+
     $existingWatchdog = Get-ScheduledTask -TaskName $watchdogTaskName -ErrorAction SilentlyContinue
     if ($existingWatchdog) {
         Unregister-ScheduledTask -TaskName $watchdogTaskName -Confirm:$false
     }
 
-    $watchdogAction = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$watchdogScriptPath`""
+    $watchdogAction = New-ScheduledTaskAction -Execute "wscript.exe" `
+        -Argument "`"$watchdogLauncherPath`""
 
     $watchdogTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
         -RepetitionInterval (New-TimeSpan -Minutes 5) `
@@ -694,13 +715,9 @@ try {
     # main agent needs Interactive because clipboard/keyboard hooks require
     # running in the same session as the desktop -- but this watchdog script
     # only ever calls Get-Process/Stop-Process/Start-ScheduledTask, none of
-    # which need desktop access. Running it Interactive meant every 5-minute
-    # check spawned powershell.exe IN the visible desktop session, and
-    # -WindowStyle Hidden isn't reliable at suppressing that initial console
-    # window -- users reported a periodic console flash. S4U runs the task
-    # outside the interactive session entirely, so there's no window to
-    # flash in the first place (root-cause fix, not a hidden-window trick).
-    # S4U doesn't require storing a password, unlike LogonType Password.
+    # which need desktop access, so there's no reason to run it inside the
+    # interactive session at all. Kept alongside the VBScript wrapper above
+    # as defense in depth, not as the sole fix for the window flash.
     $watchdogPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Limited
 
     $watchdogSettings = New-ScheduledTaskSettingsSet `
