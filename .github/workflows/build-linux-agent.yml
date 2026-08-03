@@ -8,6 +8,7 @@ on:
       - 'agents/endpoint/linux/policy_cache.py'
       - 'agents/endpoint/linux/print_monitor.py'
       - 'agents/endpoint/linux/usb_monitor.py'
+      - 'agents/endpoint/linux/clipboard_monitor.py'
       - 'agents/endpoint/linux/requirements.txt'
       - '.github/workflows/build-linux-agent.yml'
   workflow_dispatch:
@@ -71,6 +72,7 @@ jobs:
             --hidden-import policy_cache \
             --hidden-import print_monitor \
             --hidden-import usb_monitor \
+            --hidden-import clipboard_monitor \
             --hidden-import pyudev \
             --collect-all pyudev \
             agent.py

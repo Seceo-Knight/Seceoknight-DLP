@@ -50,13 +50,13 @@ mkdir -p /var/log
 # every Linux install already (it's how the kernel/systemd itself does
 # hotplug) and is bundled into the frozen binary at build time via
 # --collect-all pyudev, so it needs no separate install step here.
-echo "[2/5] Installing system dependencies (cups-client, for print monitoring)..."
+echo "[2/5] Installing system dependencies (cups-client for print monitoring, xclip/wl-clipboard for clipboard monitoring)..."
 if command -v apt-get >/dev/null 2>&1; then
     apt-get update -qq
-    apt-get install -y --no-install-recommends cups-client -qq || \
-        echo "  Warning: could not install cups-client -- print monitoring will log a no-op instead of failing agent startup"
+    apt-get install -y --no-install-recommends cups-client xclip wl-clipboard sudo -qq || \
+        echo "  Warning: could not install one or more of cups-client/xclip/wl-clipboard -- the corresponding monitor will log a no-op instead of failing agent startup"
 else
-    echo "  Skipping (no apt-get found) -- install your distro's CUPS client package manually for print monitoring"
+    echo "  Skipping (no apt-get found) -- install your distro's CUPS client and xclip/wl-clipboard packages manually for print/clipboard monitoring"
 fi
 
 install_binary() {
@@ -97,7 +97,7 @@ install_from_source() {
         apt-get install -y python3 python3-pip -qq || true
     fi
     pip3 install -r requirements.txt -q
-    cp agent.py policy_cache.py print_monitor.py usb_monitor.py /opt/seceoknight/agent/
+    cp agent.py policy_cache.py print_monitor.py usb_monitor.py clipboard_monitor.py /opt/seceoknight/agent/
     chmod +x /opt/seceoknight/agent/agent.py
     INSTALLED_FROM_SOURCE=true
 }

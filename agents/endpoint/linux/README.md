@@ -8,6 +8,7 @@ Enterprise endpoint DLP agent for Linux systems.
 - ✅ **Automatic Classification** - Pattern-based sensitive data detection
 - ✅ **Print Job Monitoring** - CUPS print jobs classified and blocked/logged, matching the Windows agent
 - ✅ **USB Storage Monitoring** - udev-based connect/disconnect detection with allowlist enforcement (unmount), same allowlist as Windows
+- ✅ **Clipboard Monitoring** - X11 (xclip) and Wayland (wl-clipboard) content classified and reported, same content rules as Windows
 - ✅ **Real-time Reporting** - Sends events to central server
 - ✅ **Systemd Integration** - Runs as system service
 - ✅ **Low Resource Usage** - Optimized for servers
@@ -17,7 +18,9 @@ Enterprise endpoint DLP agent for Linux systems.
 - Ubuntu 20.04+ / CentOS 8+ / Debian 11+ (frozen binary needs glibc 2.31+, i.e. anything Debian 11/bullseye or newer)
 - Root privileges (for installation)
 - `libudev` (present on essentially every modern Linux install already) for USB storage monitoring
-- `cups-client` (`lpstat`/`cancel`) for print job monitoring -- both features degrade to a logged no-op if their system dependency is missing, rather than blocking agent startup
+- `cups-client` (`lpstat`/`cancel`) for print job monitoring
+- `xclip` (X11) and/or `wl-clipboard` (Wayland) for clipboard monitoring -- reads the logged-in user's clipboard by re-executing as that user via `sudo -u`, since the agent itself runs as root and root has no session of its own to read a clipboard from
+- All three of the above degrade to a logged no-op if their system dependency is missing, rather than blocking agent startup
 - Python 3.8+ is **only** needed for `--from-source` installs (see below) -- the default install downloads a self-contained binary with everything already bundled in, no Python toolchain required on the target machine
 
 ## Quick Installation
@@ -142,6 +145,7 @@ sudo tail -f /var/log/seceoknight_agent.log
 | **File Moved** | File moved or renamed |
 | **Print Job** | Document sent to a CUPS printer -- classified by filename, blocked (job cancelled) if Restricted |
 | **USB Connect/Disconnect** | USB storage device attached/removed -- checked against the same allowlist as the Windows agent; non-allowlisted devices are unmounted when enforcement is on |
+| **Clipboard Copy** | Clipboard content changed for the active graphical session's user -- classified with the same rules as file content; reported only, not cleared (see clipboard_monitor.py for why) |
 
 ## Sensitive Data Detection
 

@@ -8,6 +8,35 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📋 Linux Agent: Clipboard Monitoring (X11 + Wayland) (August 3, 2026)
+
+### Summary
+
+Last piece of the Linux DLP feature-parity pass: clipboard monitoring, the one capability with no existing Linux code to build on at all. The hard part wasn't reading the clipboard -- it's *whose*.
+
+### The root architectural problem
+
+`seceoknight-agent.service` runs as root (required for cross-user file/USB monitoring), but the clipboard is a property of a specific logged-in user's X11 or Wayland session. Root has no `$DISPLAY`/`$WAYLAND_DISPLAY` of its own, and X11 in particular generally refuses a connection from a different UID than the one that owns the session. This is the same "who's actually logged in" problem CyberSentinel's Linux agent solves for file-owner attribution via `who`/`loginctl` -- solved here the same way, applied to clipboard access instead: find the active graphical session's owning user via `loginctl`, then read the clipboard *as that user* (`sudo -u` with that session's `DISPLAY`/`WAYLAND_DISPLAY`/`XAUTHORITY`/`XDG_RUNTIME_DIR` set), rather than trying to access it as root directly.
+
+### What's new
+
+New `clipboard_monitor.py`, wired into `agent.py` the same unconditional way print/USB monitoring are (no server policy category exists to gate any of these three on):
+
+- **Session discovery**: `find_active_graphical_session()` parses `loginctl list-sessions`/`show-session` for the active, local (non-SSH), X11-or-Wayland session and its owning user -- re-checked every 30s so a user switch or new login is picked up without an agent restart.
+- **X11**: polls `xclip -selection clipboard -o` (there's no blocking-read primitive for X11 selections short of a native X11 event-loop client, too heavy a dependency for this). Content is hashed and compared to the last read so unchanged clipboard state doesn't spam events.
+- **Wayland**: uses `wl-paste --watch cat`, which blocks and emits on each actual clipboard change where the compositor supports it (most do, via wlr-data-control) -- genuinely event-driven, no polling needed.
+- Classified with the exact same `_classify_content()` rules file events already use, reported in the same shape the Windows agent's clipboard pipeline sends (`event_type=clipboard`, `event_subtype=clipboard_copy`).
+- Deliberately **does not** clear/block clipboard content on a match -- detect-and-report only for this first pass, matching how the Windows agent's own clipboard handling in this codebase already works (it doesn't clear the clipboard either). Clearing risks surprising a user after they've already pasted, for no actual DLP benefit once the paste has happened.
+- Degrades to a logged no-op (not a crash) if `xclip`/`wl-clipboard` aren't installed, or no active graphical session is found (e.g. a headless server) -- same posture as print/USB monitoring.
+
+`install.sh` now also installs `xclip`/`wl-clipboard`/`sudo` as system dependencies, and the CI build (`build-linux-agent.yml`) bundles the new module into the frozen binary.
+
+### Verification
+
+`python3 -m py_compile` clean on all agent modules. Directly exercised in the sandbox (not just syntax-checked): constructed a full `DLPAgent` with all three new monitors (print/USB/clipboard) wired in and no import errors; `ClipboardMonitor.start()`/`stop()` cycled cleanly with a graceful "no active graphical session" result (expected -- this sandbox is headless). Not live-tested against a real X11 or Wayland desktop session -- do that (both a real copy-to-clipboard on each display server, and a fast user switch to confirm session re-detection) before relying on this in production.
+
+---
+
 ## 📦 Linux Agent: PyInstaller Single-Binary Packaging + CI (August 3, 2026)
 
 ### Summary

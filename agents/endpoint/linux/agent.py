@@ -40,6 +40,11 @@ try:
 except ImportError:
     UsbMonitor = None
 
+try:
+    from clipboard_monitor import ClipboardMonitor
+except ImportError:
+    ClipboardMonitor = None
+
 def _resolve_log_path() -> str:
     """Resolve the agent's log file path.
 
@@ -288,6 +293,13 @@ class DLPAgent:
         self.usb_enforced: bool = False
         self.usb_mode: str = "off"
 
+        # Clipboard monitoring (X11/Wayland via the active graphical
+        # session's user -- see clipboard_monitor.py's module docstring
+        # for why this can't just run as root directly). Unconditional
+        # once started, same rationale as print/USB; no server policy
+        # category exists to gate on for clipboard on Linux either.
+        self.clipboard_monitor = ClipboardMonitor(callback=self._handle_clipboard_event) if ClipboardMonitor else None
+
         logger.info(f"Agent initialized: {self.agent_id}")
 
     def start(self):
@@ -313,6 +325,10 @@ class DLPAgent:
         # Start USB storage monitoring (unconditional -- see __init__ note)
         if self.usb_monitor:
             self.usb_monitor.start()
+
+        # Start clipboard monitoring (unconditional -- see __init__ note)
+        if self.clipboard_monitor:
+            self.clipboard_monitor.start()
 
         # Start heartbeat
         threading.Thread(target=self.heartbeat_loop, daemon=True).start()
@@ -355,6 +371,10 @@ class DLPAgent:
         # Stop USB monitoring
         if self.usb_monitor:
             self.usb_monitor.stop()
+
+        # Stop clipboard monitoring
+        if self.clipboard_monitor:
+            self.clipboard_monitor.stop()
 
         # Unregister from server
         self.unregister_agent()
@@ -1109,6 +1129,48 @@ class DLPAgent:
             self.send_event(event_data)
         except Exception as e:
             logger.error(f"Error handling print event: {e}")
+
+    def _handle_clipboard_event(self, content: str, username: str):
+        """Callback for ClipboardMonitor -- classify clipboard content and
+        report in the same event shape the Windows agent's clipboard
+        pipeline uses (event_type=clipboard, event_subtype=clipboard_copy).
+
+        Unlike file/USB/print events, this deliberately never takes a
+        destructive action (e.g. clearing the clipboard) -- classification
+        + reporting only, for this first MVP. Clipboard clearing races the
+        user's next paste in a way that's easy to get wrong (clearing a
+        moment after they've already pasted accomplishes nothing but
+        surprising them), and Windows' own clipboard handling in this
+        codebase is itself detect-and-report rather than block.
+        """
+        try:
+            classification = self._classify_content(content)
+            has_sensitive = bool(classification.get("labels"))
+
+            event_data = {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "clipboard",
+                "event_subtype": "clipboard_copy",
+                "agent_id": self.agent_id,
+                "source_type": "agent",
+                "user_email": f"{username}@{socket.gethostname()}",
+                "username": username,
+                "description": (
+                    "Clipboard content - sensitive data detected"
+                    if has_sensitive else "Clipboard content - no sensitive data detected"
+                ),
+                "severity": classification.get("severity", "low"),
+                "action": "alert" if has_sensitive else "allowed",
+                "content": content[:5000],
+                "classification_level": "Restricted" if has_sensitive else "Public",
+                "classification_score": classification.get("score", 0.0),
+                "classification_labels": classification.get("labels", []),
+                "blocked": False,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            self.send_event(event_data)
+        except Exception as e:
+            logger.error(f"Error handling clipboard event: {e}")
 
     def _classify_content(self, content: str) -> Dict[str, Any]:
         """Classify content for sensitive data"""
