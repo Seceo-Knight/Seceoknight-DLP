@@ -2466,6 +2466,23 @@ static ClassificationResult Classify(const std::string& content,
      std::mutex usbFilesMutex;
      std::map<std::string, std::string> usbDriveToDeviceId;  // drive letter -> device ID
 
+     // Debounce for the dashboard-visibility report in HandleUsbDeviceArrival()
+     // (see its call site below). Cheap/generic pendrives without a genuine
+     // hardware serial get a Windows-synthesized one from
+     // ExtractUsbSerialFromDeviceId(), and a single physical insertion can
+     // trigger several genuine DBT_DEVICEARRIVAL notifications in quick
+     // succession -- a known USB/hub power-negotiation re-enumeration quirk
+     // on flaky ports/cheap drives -- each producing a DIFFERENT synthesized
+     // serial, since it's derived from that notification's own interface
+     // path. Since the server keys USB device identity on serial_number
+     // alone, one physical insertion could turn into up to 5 separate
+     // "not sanctioned" rows on the USB Devices dashboard page, with no way
+     // for an admin to tell which one to approve. Keyed on VID:PID, which
+     // (unlike the serial) stays stable across re-enumeration of the same
+     // physical device.
+     std::map<std::string, std::chrono::steady_clock::time_point> recentUsbArrivals;
+     std::mutex usbArrivalMutex;
+
      // USB File Transfer Monitoring
     std::map<std::string, FileMetadata> monitoredFiles;  // Key: relative path
     std::map<std::string, ShadowEntry> shadowCopies;     // For BLOCK mode
@@ -2701,12 +2718,43 @@ static ClassificationResult Classify(const std::string& content,
                         " mode=" + allowlistMode +
                         " decision=" + (allowlistShouldBlock ? "block" : (allowlistExempt ? "allow (exempt)" : "allow")));
         }
+        // Debounce the dashboard-visibility report only -- see
+        // recentUsbArrivals' member comment for why. This does NOT affect
+        // the allowlist decision above or the block/allow enforcement
+        // below, which run on every arrival exactly as before; it only
+        // suppresses redundant "not sanctioned" rows on the USB Devices
+        // page when the same physical device (same VID:PID) re-enumerates
+        // several times within a few seconds of its first arrival. A
+        // genuinely new insertion of the same drive minutes later is still
+        // reported normally. Devices where VID:PID couldn't be determined
+        // (empty) skip the debounce entirely rather than risk suppressing
+        // a real device with no identity to key on.
+        bool isDuplicateArrival = false;
+        if (!usbVendorId.empty() && !usbProductId.empty()) {
+            std::string vidPidKey = usbVendorId + ":" + usbProductId;
+            auto now = std::chrono::steady_clock::now();
+            std::lock_guard<std::mutex> lock(usbArrivalMutex);
+            auto it = recentUsbArrivals.find(vidPidKey);
+            if (it != recentUsbArrivals.end()) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count();
+                if (elapsed < 8) {
+                    isDuplicateArrival = true;
+                }
+            }
+            recentUsbArrivals[vidPidKey] = now;
+        }
+
         // Visibility event for the Events page — fire-and-forget, off this
         // thread (it pumps Windows device-arrival messages and must not
         // block on network I/O).
-        ReportUsbDeviceAuthorization(betterDeviceName, usbSerial, usbVendorId, usbProductId, driveLetter,
-                                     allowlistShouldBlock ? "block" : "allow",
-                                     sanctioned, allowlistEnforced);
+        if (!isDuplicateArrival) {
+            ReportUsbDeviceAuthorization(betterDeviceName, usbSerial, usbVendorId, usbProductId, driveLetter,
+                                         allowlistShouldBlock ? "block" : "allow",
+                                         sanctioned, allowlistEnforced);
+        } else {
+            logger.Debug("Suppressed duplicate USB arrival report (re-enumeration of VID:" +
+                         usbVendorId + " PID:" + usbProductId + " within debounce window)");
+        }
 
          // Get USB policies (the separate, monitored-event based USB policies)
          std::vector<PolicyRule> policies;

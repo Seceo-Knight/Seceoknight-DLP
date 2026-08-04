@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔌 Fix: One USB Pendrive Insertion Showed as 5 Separate "Not Sanctioned" Devices (August 4, 2026)
+
+### Summary
+
+A user plugged in a single physical USB pendrive and the USB Devices dashboard page showed 5 separate "not sanctioned" rows for it, with no way to tell which one was the real device to approve.
+
+### Root cause
+
+Windows device identity for a mass-storage device includes a serial number pulled from the interface path (`ExtractUsbSerialFromDeviceId()`). Devices with a genuine hardware serial report the same one every time. Cheap/generic pendrives without one get a serial *synthesized* by Windows instead — and a single physical insertion of such a drive can trigger several genuine `DBT_DEVICEARRIVAL` notifications in quick succession (a known USB/hub power-negotiation re-enumeration quirk, especially on flaky ports or hubs), each carrying a **different** synthesized serial since it's derived from that specific notification's own interface path. The server's USB device identity (`SanctionedUsbDevice` model, `/usb_devices/seen` endpoint) is keyed purely on `serial_number` — correctly, since that's the only way to distinguish two genuinely different physical devices — but with no per-insertion coalescing on the agent side, each of those re-enumeration attempts reported itself as a distinct "device," turning one physical pendrive into up to 5 dashboard rows.
+
+Confirmed this wasn't the more common cause (Windows firing one callback per device-interface class — USB, Disk, Volume): the agent only registers for `GUID_DEVINTERFACE_USB_DEVICE`, so `HandleUsbDeviceArrival()` already fires once per genuine arrival notification, not once per interface class.
+
+### Fix
+
+Added a debounce keyed on VID:PID (unlike the serial, this stays stable across re-enumeration of the same physical device) in `HandleUsbDeviceArrival()`: if the same VID:PID reports another arrival within 8 seconds of the last one, the dashboard-visibility report (`ReportUsbDeviceAuthorization`) is suppressed as a duplicate. Deliberately scoped narrowly -- the allowlist block/allow decision and drive-letter mapping used for actual enforcement run on every single arrival exactly as before, unaffected; only the redundant dashboard report is debounced, so file-transfer blocking behavior is unchanged. A device with no determinable VID:PID skips the debounce entirely rather than risk suppressing a real, distinct device. A genuine re-insertion of the same drive minutes later is still reported normally (8-second window, not a permanent per-boot suppression).
+
+### Verification
+
+Brace-balance check (character-by-character walk skipping string/char literals and comments, same script used throughout this project) against a fresh clone of the pre-change file confirms identical depth (-5, the known pre-existing baseline unrelated to this change) -- no new imbalance introduced. No C++ compiler available in this sandbox to build and test against real hardware. **Not yet verified against a real flaky pendrive** -- worth re-testing the exact device that surfaced this (unplug/replug it a few times) to confirm it now produces one dashboard row instead of five.
+
+---
+
 ## 🎯 Reduce False Positives: Phone-Number Matches Now Context-Weighted (August 4, 2026)
 
 ### Summary
