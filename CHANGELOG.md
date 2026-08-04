@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🧊 Critical Fix: Windows Agent Self-Deadlock Froze Entire Process on Log Rotation (August 4, 2026)
+
+### Summary
+
+After deploying the baseline-scan-backgrounding fix above, the agent would, after running for a while, go completely silent -- no heartbeats, no USB events, no clipboard events, no filesystem events, nothing -- and the dashboard would show the endpoint as "Offline and Disconnected" even though the process was still alive (visible in `Get-Process`, still consuming CPU). This is very likely the same underlying bug behind an earlier, less clear-cut hang seen during testing this session: agent alive with high accumulated CPU, scheduled task showing "Running," but the log file frozen at 0 bytes.
+
+### Root cause
+
+A genuine, pre-existing self-deadlock in `Logger::Log()` in `agent.cpp`. `Log()` acquires `logMutex` via `std::lock_guard`, writes the line, and then calls `CheckAndRotateLog()` **while still holding that lock**. `CheckAndRotateLog()` only does anything once every 30 minutes, and only actually rotates once the log file exceeds 10MB -- but when it does rotate, it announced the rotation by calling `Info("Log rotated...")` and `Info("Log file size was...")`. Both of those call back into `Log()`, which tries to acquire `logMutex` again **on the same thread that's already holding it**. `std::mutex` is non-recursive, so this doesn't queue or error -- it blocks forever. Since `logMutex` is never released, every other thread in the agent (heartbeat, USB monitor, clipboard monitor, filesystem monitor -- all of them log constantly) then blocks the instant it tries to log anything, freezing the entire process at once, permanently, with no crash and no error to indicate why.
+
+This bug pre-dates this session's changes, but the baseline-scan-backgrounding fix (see below) made it far more likely to actually trigger in practice: running the baseline scan as a background thread means its heavy per-file "Stored baseline for existing file: ..." logging now runs continuously for as long as the scan takes, instead of as one blocking burst before other monitoring even started -- pushing the log past the 10MB rotation threshold much sooner than before.
+
+### Fix
+
+Extracted a new lock-free `Logger::WriteLine(level, message)` private method containing the actual timestamp-formatting, console-output, and file-write logic (previously inline in `Log()`). `Log()` now: acquires `logMutex`, calls `WriteLine(...)`, then calls `CheckAndRotateLog()` -- unchanged in structure. `CheckAndRotateLog()`'s two rotation-announcement lines now call `WriteLine("INFO", ...)` directly instead of `Info(...)`, so they write the same log lines without re-entering `Log()` or re-acquiring `logMutex`. Visible log output is identical; the reentrant-lock path is gone entirely.
+
+### Verification
+
+Brace-balance check (same script used throughout this project) against a fresh clone of the pre-change file confirms identical depth (paren=-2, brace=-5, bracket=-1, the known pre-existing baseline) -- no new imbalance introduced by the edit. No C++ compiler available in this sandbox to build and run. **Not yet live-tested** -- next step is rebuilding the Windows agent binary (via the existing CI pipeline or a local Windows build) and confirming a real log rotation (or a forced low `MAX_LOG_SIZE` test build) no longer freezes the process.
+
+---
+
 ## 🔌 Fix: One USB Pendrive Insertion Showed as 5 Separate "Not Sanctioned" Devices (August 4, 2026)
 
 ### Summary

@@ -1323,69 +1323,95 @@ std::string TryOcrClipboardImage() {
         void CheckAndRotateLog() {
             auto now = std::chrono::system_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::minutes>(now - lastRotationCheck);
-            
+
             // Check every 30 minutes
             if (elapsed.count() < 30) {
                 return;
             }
-            
+
             lastRotationCheck = now;
-            
+
             try {
                 // Check file size
                 if (fs::exists(logFilePath)) {
                     size_t fileSize = fs::file_size(logFilePath);
-                    
+
                     if (fileSize > MAX_LOG_SIZE) {
                         // Rotate log
                         if (logFile.is_open()) {
                             logFile.close();
                         }
-                        
+
                         // Create rotated filename with timestamp
                         auto time_t_now = std::chrono::system_clock::to_time_t(now);
                         std::tm tm_now;
                         localtime_s(&tm_now, &time_t_now);
-                        
+
                         char timestamp[32];
                         strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &tm_now);
-                        
+
                         std::string rotatedPath = logFilePath + "." + timestamp;
-                        
+
                         // Rename current log
                         fs::rename(logFilePath, rotatedPath);
-                        
+
                         // Open new log file
                         OpenLogFile();
-                        
-                        Info("Log rotated: Previous log saved to " + rotatedPath);
-                        Info("Log file size was: " + std::to_string(fileSize) + " bytes");
+
+                        // WriteLine(), NOT Info()/Log() -- see WriteLine's
+                        // comment. CheckAndRotateLog() is only ever called
+                        // from inside Log() while it still holds logMutex;
+                        // Info() would call back into Log(), which would try
+                        // to re-acquire that same non-recursive mutex on the
+                        // same thread and deadlock forever.
+                        WriteLine("INFO", "Log rotated: Previous log saved to " + rotatedPath);
+                        WriteLine("INFO", "Log file size was: " + std::to_string(fileSize) + " bytes");
                     }
                 }
             } catch (const std::exception& e) {
                 std::cerr << "Log rotation error: " << e.what() << std::endl;
             }
         }
-        
+
+        // Formats one line and writes it to the console (if visible) and
+        // the log file. Does NOT acquire logMutex -- every caller must
+        // already hold it. Split out of Log() specifically so
+        // CheckAndRotateLog() can announce a rotation without re-entering
+        // the mutex it's already inside (see its call site above). Before
+        // this split, CheckAndRotateLog() called Info() -> Log() -> tried
+        // to lock logMutex a second time on the same thread -- a
+        // non-recursive std::mutex doesn't allow that: the thread blocks on
+        // a lock it already holds and never wakes up. logMutex is then
+        // never released, so EVERY other thread in the agent that calls
+        // logger.Info/Warning/Debug/Error() (all of them) blocks forever
+        // too -- the whole agent freezes at once (no heartbeat, no USB
+        // events, no clipboard events, nothing), not just logging. This was
+        // a real, hit-in-production bug: once the log file crosses 10MB and
+        // 30 minutes have passed since the last rotation check, the very
+        // next log call rotates and silently deadlocks the entire process.
+        void WriteLine(const std::string& level, const std::string& message) {
+            std::string timestamp = GetCurrentTimestampLocalIST();
+            std::string logMsg = timestamp + " - SeceoKnightAgent - " + level + " - " + message;
+
+            // Only output to console if window is visible (not in background mode)
+            HWND consoleWindow = GetConsoleWindow();
+            if (consoleWindow != NULL && IsWindowVisible(consoleWindow)) {
+                std::cout << logMsg << std::endl;
+            }
+
+            if (logFile.is_open()) {
+                logFile << logMsg << std::endl;
+                logFile.flush();
+            }
+        }
+
 void Log(const std::string& level, const std::string& message) {
     std::lock_guard<std::mutex> lock(logMutex);
 
     // Log timestamps use Asia/Kolkata (IST). Event payloads sent to the
     // server continue to use UTC via GetCurrentTimestampISO().
-    std::string timestamp = GetCurrentTimestampLocalIST();
-    std::string logMsg = timestamp + " - SeceoKnightAgent - " + level + " - " + message;
-    
-    // Only output to console if window is visible (not in background mode)
-    HWND consoleWindow = GetConsoleWindow();
-    if (consoleWindow != NULL && IsWindowVisible(consoleWindow)) {
-        std::cout << logMsg << std::endl;
-    }
-    
-    if (logFile.is_open()) {
-        logFile << logMsg << std::endl;
-        logFile.flush();
-    }
-    
+    WriteLine(level, message);
+
     // Check if log rotation is needed
     CheckAndRotateLog();
 }
