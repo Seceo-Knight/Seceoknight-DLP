@@ -51,6 +51,20 @@ class EventCreate(BaseModel):
     # Optional ABAC overrides — if absent, server derives from user_email / defaults.
     department: Optional[str] = Field(None, description="ABAC department (frozen at ingest)")
     required_clearance: Optional[int] = Field(None, description="ABAC required clearance level")
+    # NOTE: these three fields were already being sent by the Windows/Linux
+    # agents (file_hash on file/USB/transfer events since the original
+    # release; username/printer on the newer Linux print/clipboard events)
+    # but were never declared here. Pydantic silently strips any field not
+    # explicitly declared on a model with no `extra = "allow"`, so all three
+    # were being dropped before create_event() ever saw them -- same class
+    # of bug as the user_email omission fixed earlier in alerts.py. Declaring
+    # them now, plus threading file_hash through to the stored event_doc
+    # below, so IOC matching (ioc_service.py), SIEM export (siem/base.py),
+    # and decision.py's file_hash lookups -- which already read
+    # event.get("file_hash") off the raw Mongo doc -- actually get data.
+    file_hash: Optional[str] = Field(None, description="SHA-256 hash (hex) of the file/document involved, if computed by the agent")
+    username: Optional[str] = Field(None, description="Bare OS username (no @host), alongside user_email")
+    printer: Optional[str] = Field(None, description="Printer name (print events)")
 
 
 class DLPEvent(BaseModel):
@@ -214,6 +228,7 @@ async def create_event(
         "action_taken": event.action or "logged",
         "file_path": event.file_path,
         "source_path": event.source_path or event.file_path,
+        "file_hash": event.file_hash,
         "destination": event.destination,
         "destination_type": event.destination_type,
         "clipboard_content": event.content if event.event_type.lower() == "clipboard" else None,
@@ -235,6 +250,10 @@ async def create_event(
         event_doc["event_subtype"] = event.event_subtype
     if event.description:
         event_doc["description"] = event.description
+    if event.username:
+        event_doc["username"] = event.username
+    if event.printer:
+        event_doc["printer"] = event.printer
 
     # ── Step 2: Atomic upsert into MongoDB (fast, <5ms) ────────────────
     result = await events_collection.update_one(
@@ -565,6 +584,9 @@ def _build_processor_payload(event: EventCreate) -> Dict[str, Any]:
 
     if event.file_path:
         payload.setdefault("file", {})["path"] = event.file_path
+    if event.file_hash:
+        payload["file_hash"] = event.file_hash
+        payload.setdefault("file", {})["hash"] = event.file_hash
     if event.source_path or event.file_path:
         source_path = event.source_path or event.file_path
         payload["source_path"] = source_path

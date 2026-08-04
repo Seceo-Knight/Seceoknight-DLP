@@ -1123,6 +1123,7 @@ class DLPAgent:
                 "blocked": blocked,
                 "file_path": document_name,
                 "printer": print_event.get("printer", "unknown"),
+                "file_hash": print_event.get("file_hash"),
                 "timestamp": print_event.get("timestamp") or datetime.utcnow().isoformat(),
             }
 

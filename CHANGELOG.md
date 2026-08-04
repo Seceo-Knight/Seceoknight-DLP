@@ -8,6 +8,34 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔒 CyberSentinel Parity: Print-Job File Hashing + Fixed Silent Event-Field Drops (August 4, 2026)
+
+### Summary
+
+First of a batch of CyberSentinel-parity features. Both agents now compute a SHA-256 hash of the actual spooled print document (not just its filename) and send it with the print event, so printed documents can eventually be matched against the same hash-based denylists used for file transfers (Task #78, next up). Along the way, found and fixed a real pre-existing bug: the server was silently dropping `file_hash` (and two smaller fields, `username`/`printer`) off every event agents sent, for events of every type -- not just print.
+
+### Root cause (the bigger fix)
+
+`server/app/api/v1/events.py`'s `EventCreate` -- the Pydantic model FastAPI validates every `POST /events` body against -- never declared `file_hash`, even though the Windows agent has been sending it on file-system, USB-transfer, and file-block events since early in the project (`json.AddString("file_hash", fileHash)` appears at four separate call sites in `agent.cpp`). Pydantic models with no `class Config: extra = "allow"` silently strip any JSON field that isn't explicitly declared -- FastAPI never errors, the agent never errors, the field just vanishes before `create_event()`'s handler body ever sees it. This is the exact same class of bug found and fixed in `alerts.py`'s `user_email` field earlier in this project. Concretely, this meant `ioc_service.py`'s `event.get("file_hash")` IOC matching, `siem/base.py`'s SIEM export hash field, and `decision.py`'s file-hash lookups have all been silently getting `None` for these fields this whole time, regardless of what the agent actually sent.
+
+### Fix
+
+- `EventCreate` now declares `file_hash`, `username`, and `printer` (the latter two were already being sent by the Linux agent's print/clipboard events, same silent-drop problem on a smaller scale).
+- `create_event()`'s `event_doc` construction (the dict actually written to MongoDB) now includes all three, so `ioc_service.py`/`event_mapper.py`/`siem/base.py`/`decision.py` -- which all read these fields straight off the stored document -- actually receive them.
+- `_build_processor_payload()` also threads `file_hash` into the policy-evaluator payload (`payload["file_hash"]` and `payload["file"]["hash"]`), ahead of Task #78's file-identity denylist work, which will need to match on it.
+
+### What's new (the print-hashing feature itself)
+
+- **Linux** (`print_monitor.py`): new `_hash_job_file()` resolves the CUPS spool file for a job (`/var/spool/cups/d<NNNNN>-<NNN>`, where `<NNNNN>` is the numeric CUPS job ID zero-padded to 5 digits) and SHA-256-hashes it. Computed *before* the print event is handed to `agent.py`'s callback, which is what may cancel (and thus delete) the job's spool file if it classifies as Restricted -- hashing first means blocked jobs, the case this matters most for, still get a hash instead of silently missing one.
+- **Windows** (`print_monitor.h/.cpp`, `agent.cpp`): `PrintMonitor` gained an injected `HashCallback` (same pattern as its existing `ClassifyCallback`) so it can reuse `agent.cpp`'s existing `CalculateFileHash()` (CryptoAPI SHA-256) without duplicating a second hash implementation. New `GetPrintSpoolFilePath()` resolves the job's spool file at `%SystemRoot%\System32\spool\PRINTERS\FP<jobid>.SPL` (the Windows spooler's default naming/location). Hashing is invoked in `MonitorLoop()` immediately after the job ID is read -- before the `CancelPrintJob()` enforcement call -- for the same before-cancellation-deletes-it reason as Linux.
+- Both platforms degrade gracefully: if the spool file can't be found or read (custom spool directory, already purged, permissions), the print event is still sent with no `file_hash` field, exactly as before this change -- hashing is additive, never blocking.
+
+### Verification
+
+`python3 -m py_compile` clean on `print_monitor.py`/`agent.py`. `python3 -c "import ast; ast.parse(...)"` clean on `events.py`. C++ changes checked with a comment/string-aware brace-depth walker across `print_monitor.h`/`print_monitor.cpp` (both balance to 0) and confirmed the pre-existing (unrelated, baseline) imbalance in the much larger `agent.cpp` is identical before and after this change, by diffing against a fresh clone of the currently-pushed `main` -- i.e. these edits introduced no new imbalance. Not yet live-tested against a real CUPS or Windows print spooler -- the spool file naming/location assumptions (especially Windows' default spool directory, which admins occasionally relocate) should be confirmed on a real print job before relying on this for compliance/audit purposes.
+
+---
+
 ## 🔧 Linux Agent CI: Fixed False-Failure on Missing `file` Command (August 3, 2026)
 
 ### Summary

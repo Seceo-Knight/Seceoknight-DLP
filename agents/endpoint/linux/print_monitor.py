@@ -8,6 +8,7 @@ import time
 import threading
 import logging
 import subprocess
+import hashlib
 from datetime import datetime
 
 logger = logging.getLogger("dlp-agent.print")
@@ -76,6 +77,15 @@ class PrintMonitor:
                         # Get job details
                         printer = job_id.split("-")[0] if "-" in job_id else "unknown"
                         document = self._get_job_document(job_id)
+                        # Hash the physical spool file BEFORE returning to
+                        # the callback -- the caller (agent.py) may cancel
+                        # (delete) this same job right after handling this
+                        # event if it classifies as Restricted, and CUPS
+                        # purges completed/cancelled jobs' spool files
+                        # promptly. Hashing here, ahead of that, means the
+                        # highest-value case (a blocked print job) still
+                        # gets a hash instead of silently missing one.
+                        file_hash = self._hash_job_file(job_id)
 
                         event = {
                             "event_type": "print",
@@ -84,6 +94,7 @@ class PrintMonitor:
                             "owner": owner,
                             "size": size,
                             "job_id": job_id,
+                            "file_hash": file_hash,
                             "timestamp": datetime.utcnow().isoformat(),
                         }
 
@@ -98,6 +109,43 @@ class PrintMonitor:
             logger.debug("lpstat not available - CUPS not installed")
         except subprocess.TimeoutExpired:
             logger.warning("lpstat timed out")
+
+    def _hash_job_file(self, job_id):
+        """Best-effort SHA-256 of the spooled CUPS document data file.
+
+        CUPS stores each job's data under /var/spool/cups/d<NNNNN>-<NNN>,
+        where <NNNNN> is the job's numeric CUPS ID (the part after the last
+        '-' in the "printer-NNN" identifier lpstat -o reports) zero-padded
+        to 5 digits, and <NNN> is a per-file sequence number (usually 001
+        for single-file jobs). Requires root to read -- the agent already
+        runs as root for file-system monitoring. Returns None (not raises)
+        if the spool file is missing/unreadable, which is common and
+        expected once a job has finished printing or been purged.
+        """
+        try:
+            numeric_id = job_id.rsplit("-", 1)[-1]
+            if not numeric_id.isdigit():
+                return None
+            padded = numeric_id.zfill(5)
+            spool_dir = "/var/spool/cups"
+            if not os.path.isdir(spool_dir):
+                return None
+            candidates = sorted(
+                f for f in os.listdir(spool_dir) if f.startswith(f"d{padded}-")
+            )
+            if not candidates:
+                return None
+            spool_path = os.path.join(spool_dir, candidates[0])
+            sha256 = hashlib.sha256()
+            with open(spool_path, "rb") as f:
+                for chunk in iter(lambda: f.read(65536), b""):
+                    sha256.update(chunk)
+            return sha256.hexdigest()
+        except (PermissionError, FileNotFoundError, OSError):
+            return None
+        except Exception as e:
+            logger.debug(f"Print job hashing failed for {job_id}: {e}")
+            return None
 
     def _get_job_document(self, job_id):
         """Get document name for a print job"""

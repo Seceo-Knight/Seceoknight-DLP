@@ -7,8 +7,8 @@
 
 #pragma comment(lib, "winspool.lib")
 
-PrintMonitor::PrintMonitor(PrintCallback callback, LogCallback logger, ClassifyCallback classifier)
-    : m_callback(std::move(callback)), m_logger(std::move(logger)), m_classifier(std::move(classifier)) {}
+PrintMonitor::PrintMonitor(PrintCallback callback, LogCallback logger, ClassifyCallback classifier, HashCallback hasher)
+    : m_callback(std::move(callback)), m_logger(std::move(logger)), m_classifier(std::move(classifier)), m_hasher(std::move(hasher)) {}
 
 PrintMonitor::~PrintMonitor() { Stop(); }
 
@@ -131,6 +131,17 @@ void PrintMonitor::MonitorLoop() {
                                                 int pages = jobs[j].TotalPages;
                                                 int jobId = jobs[j].JobId;
 
+                                                // Hash the spooled data file BEFORE any
+                                                // enforcement decision below -- CancelPrintJob
+                                                // (JOB_CONTROL_DELETE) removes the spool file,
+                                                // so hashing after that point would silently
+                                                // miss a hash on exactly the jobs we most want
+                                                // one for (blocked/Restricted documents).
+                                                std::string fileHash;
+                                                if (m_hasher) {
+                                                    fileHash = m_hasher(jobId);
+                                                }
+
                                                 if (m_logger) m_logger("INFO", "PRINT_CONTENT_ANALYZED: " +
                                                                        docName + " on " + printerName);
 
@@ -167,6 +178,7 @@ void PrintMonitor::MonitorLoop() {
                                                 event.actionTaken = action;
                                                 event.pages = pages;
                                                 event.jobId = jobId;
+                                                event.fileHash = fileHash;
                                                 event.timestamp = GetTimestamp();
 
                                                 if (m_callback) m_callback(event);

@@ -143,7 +143,7 @@ sudo tail -f /var/log/seceoknight_agent.log
 | **File Created** | New file created in monitored directories |
 | **File Modified** | File content changed |
 | **File Moved** | File moved or renamed |
-| **Print Job** | Document sent to a CUPS printer -- classified by filename, blocked (job cancelled) if Restricted |
+| **Print Job** | Document sent to a CUPS printer -- classified by filename, blocked (job cancelled) if Restricted; SHA-256 of the spooled document data is hashed and reported when the spool file is readable |
 | **USB Connect/Disconnect** | USB storage device attached/removed -- checked against the same allowlist as the Windows agent; non-allowlisted devices are unmounted when enforcement is on |
 | **Clipboard Copy** | Clipboard content changed for the active graphical session's user -- classified with the same rules as file content; reported only, not cleared (see clipboard_monitor.py for why) |
 

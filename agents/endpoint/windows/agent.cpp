@@ -374,6 +374,34 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
  }
 
  /**
+  * Best-effort path to the physical spooled print job data file, so the
+  * actual document content sent to the printer can be hashed (not just its
+  * filename) -- lets the server match printed documents against the same
+  * hash-based denylists used for file transfers. Windows names spool files
+  * FP<jobid zero-padded to 5 digits>.SPL under the print spooler's spool
+  * directory, which defaults to %SystemRoot%\System32\spool\PRINTERS and is
+  * only rarely relocated by admins. If that guess misses (custom spool
+  * directory, or the spooler has already purged the job), returns "" and
+  * the print event is simply sent without a hash, exactly as it always has
+  * been -- this is additive, not a required field.
+  */
+ std::string GetPrintSpoolFilePath(int jobId) {
+     char sysDir[MAX_PATH] = {0};
+     if (GetSystemDirectoryA(sysDir, MAX_PATH) == 0) return "";
+
+     std::ostringstream oss;
+     oss << sysDir << "\\spool\\PRINTERS\\FP"
+         << std::setfill('0') << std::setw(5) << jobId << ".SPL";
+     std::string path = oss.str();
+
+     DWORD attrs = GetFileAttributesA(path.c_str());
+     if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+         return "";
+     }
+     return path;
+ }
+
+ /**
   * Download a file from any HTTPS URL using WinHTTP.
   * Returns true on success, false on any error.
   * Used by the auto-update loop to fetch the new binary from GitHub.
@@ -3980,6 +4008,9 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  json.AddString("classification_level", event.category);
                  json.AddBool("blocked", event.actionTaken == "Block");
                  json.AddString("file_path", event.documentName);
+                 if (!event.fileHash.empty()) {
+                     json.AddString("file_hash", event.fileHash);
+                 }
                  json.AddString("timestamp", GetCurrentTimestampISO());
                  SendEvent(json.Build());
              },
@@ -3988,7 +4019,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  else if (level == "ERROR") logger.Error(msg);
                  else logger.Info(msg);
              },
-             printClassifier
+             printClassifier,
+             [](int jobId) -> std::string {
+                 std::string spoolPath = GetPrintSpoolFilePath(jobId);
+                 return spoolPath.empty() ? "" : CalculateFileHash(spoolPath);
+             }
          );
          printMonitor->Start();
          logger.Info("Print monitoring started");
