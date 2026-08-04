@@ -8,6 +8,34 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ⏱️ USB Content-Aware Quarantine: Reduce (Not Eliminate) the Race Window Against Fast Exfiltration (August 4, 2026)
+
+### The gap
+
+User-reported scenario: with a "block USB file transfer" content policy configured, copying a sensitive file to an approved USB drive correctly gets detected and the file gets quarantined off the drive — but if the drive is physically unplugged quickly enough after the copy finishes, the data has already left the machine before detection+quarantine completes, and no software on the endpoint can act on a drive that's no longer connected.
+
+### Why this is a real, fundamental limitation, not a bug
+
+`UsbFileTransferMonitor()` detects USB file transfers by polling: once per interval it lists every removable drive's files (`ScanDirectoryRecursiveUSB`) and diffs against the last-known state. Detection, content classification (`EvaluatePolicyRealtime`, a server round-trip), and the actual quarantine move/delete all necessarily happen **after** Windows has already finished writing the file to the physical USB media — this loop has no way to intercept the write itself before it completes. That's only possible with a kernel-mode minifilter driver that can deny an `IRP_MJ_WRITE` before it's committed — the mechanism real enterprise DLP suites use for genuine prevention (not just detect-and-clean-up) on removable media. This agent doesn't have one; building one is a legitimately large, separate engineering effort (WDK driver development, Microsoft code-signing/attestation, crash-safety testing — a bad kernel driver blue-screens the endpoint) and is out of scope for a same-session fix.
+
+### What was actually changed
+
+The poll interval was 1 full second (`sleep_for(std::chrono::seconds(1))`), which was itself a real, avoidable chunk of the exposure window on top of the unavoidable classification+quarantine time. Cut to 250ms — a ~4x tighter average detection delay. This is safe to do cheaply because `ScanDirectoryRecursiveUSB` only enumerates file names/paths (no content reads or hashing), so the extra scan frequency doesn't meaningfully add CPU or disk I/O even on drives with several thousand files.
+
+### What this does NOT fix
+
+This narrows the window, it does not close it. A fast, deliberate user copying a small file and yanking the drive within roughly a second (poll interval + classification round-trip + quarantine-move time) can still beat detection. Communicated this directly rather than overstating what changed.
+
+### The actual preventive control (already in place, unaffected by this change)
+
+Device-level allowlisting (`usb_devices` allowlist, default `mode: "enforce"`) is the one USB control here that's genuinely preventive, not reactive — an unsanctioned device is blocked before any file can be copied to it at all, not raced after the fact. For data that must never leave via removable media regardless of content, the allowlist (or disabling USB mass storage devices entirely for a given policy) is the reliable control today; content-aware quarantine is a detection/cleanup layer on top of that, useful for approved devices where policy still needs to catch specific sensitive content, with the residual race window above.
+
+### Verification
+
+Brace-balance check (same script used throughout this project) against a fresh clone of the pre-change file confirms identical depth (paren=-2, brace=-5, bracket=-1) — no new imbalance introduced. No C++ compiler available in this sandbox. **Not yet live-tested** — worth re-running the same copy-then-immediately-unplug test after updating the agent to confirm the tighter interval visibly reduces (not eliminates) the number of times a fast transfer slips through undetected.
+
+---
+
 ## 🏷️ Fix: USB Devices Tab Showed Generic Name and Empty VID:PID for a Real SanDisk Drive (August 4, 2026)
 
 ### Summary

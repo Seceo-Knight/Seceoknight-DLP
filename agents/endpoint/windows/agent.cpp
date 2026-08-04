@@ -8141,11 +8141,29 @@ if (shouldMonitor) {
             } catch (...) {
                 logger.Error("Unknown USB file transfer monitor error");
             }
-            
-            // Check every 1 second
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            // Content-aware USB transfer blocking is inherently reactive:
+            // detection, classification, and quarantine all necessarily run
+            // AFTER Windows has already finished writing the file to the
+            // physical USB media (this loop has no way to intercept the
+            // write itself before it completes -- that requires a
+            // kernel-mode minifilter driver, which this agent doesn't have).
+            // A fast, deliberate user can still beat detection by yanking
+            // the drive within the poll interval. This can't be closed to
+            // zero from a user-mode poll loop, but the interval itself is a
+            // real, directly-controllable part of that window -- tightening
+            // it from 1s to 250ms cuts the average detection delay by ~4x
+            // for no real cost, since ScanDirectoryRecursiveUSB only
+            // enumerates file names/paths (no content reads/hashing), so
+            // the extra scan frequency is cheap even on drives with several
+            // thousand files. Device-level allowlisting (enforce mode,
+            // default-deny unsanctioned devices) remains the one control
+            // here that's genuinely preventive -- it blocks before any file
+            // can be copied at all, rather than racing a copy already in
+            // progress.
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
         }
-        
+
         logger.Info("USB file transfer monitoring stopped");
     }
 
