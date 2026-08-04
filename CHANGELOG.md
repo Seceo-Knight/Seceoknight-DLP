@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🏷️ Fix: USB Devices Tab Showed Generic Name and Empty VID:PID for a Real SanDisk Drive (August 4, 2026)
+
+### Summary
+
+A user plugged in a real SanDisk pendrive. The event triggered correctly and the serial number was captured correctly, but the USB Devices tab's "Seen on Endpoints" row showed device name **"USB Mass Storage Device"** (a generic label, not "SanDisk...") and VID:PID as **"—"** (empty), even though task #56 earlier in this project specifically added VID:PID resolution and a real device-name lookup.
+
+### Root cause
+
+This agent registers USB device-arrival notifications for `GUID_DEVINTERFACE_USB_DEVICE`, whose interface path *is* the composite `USB\VID_xxxx&PID_yyyy` device node itself (e.g. `\\?\USB#VID_0781&PID_5567#serial#{GUID}`) — the numeric VID/PID is already sitting directly in that string. But the two functions responsible for VID:PID and device name were both written on the opposite assumption (that `deviceId` was a *child* USBSTOR disk-node path, which only has `Ven_`/`Prod_` text and needs a walk *up* to its parent to find the numeric ID):
+
+- `GetUsbStorageVidPid()` skipped straight to `CM_Get_Parent()`. For this device, that parent is one level too far — the USB hub/controller node, which naturally has no VID/PID matching the flash drive at all. Result: VID:PID always empty.
+- `GetBetterDeviceName()` correctly parsed VID_/PID_ from the composite node and located it via SetupAPI, but then read that composite node's own `FriendlyName`/`DeviceDesc` — and for a standard bulk-only mass-storage device, Windows' generic class driver sets that composite node's description to the fixed, generic string `"USB Mass Storage Device"` for *every* compliant flash drive, regardless of vendor. The real vendor-specific name ("SanDisk Cruzer Blade USB Device") lives one level *down*, on the actual "Disk drives" child node — which nothing was reading.
+
+### Fix
+
+- `GetUsbStorageVidPid()`: try parsing VID_/PID_ directly out of `deviceId` first (the common case for this agent's actual notification format); only fall back to the parent-walk if that fails, preserving compatibility with any deviceId format that genuinely lacks its own VID/PID.
+- Added `GetUsbStorageChildFriendlyName()`: walks down from the composite USB device node (`CM_Get_Child`/`CM_Get_Sibling`, capped at 8 to guarantee termination) looking for the actual USBSTOR/SCSI disk child node, and reads *its* `FriendlyName`/`DeviceDesc` (via `CM_Get_DevNode_Registry_PropertyA`) — falling back to parsing `Ven_X&Prod_Y` text directly out of that child's own device instance ID if neither property is set. `GetBetterDeviceName()` now tries this child-node lookup before falling back to the composite node's generic description.
+- The disconnect handler (`DBT_DEVICEREMOVECOMPLETE`) previously used the raw, un-resolved device description for both the classic-policy event and the dashboard visibility report — meaning unplugging a drive would silently revert its "Seen" row back to the generic name. It now runs the same `GetBetterDeviceName()` resolution as the connect path.
+
+### Verification
+
+Brace-balance check (same script used throughout this project) against a fresh clone of the pre-change file confirms identical depth (paren=-2, brace=-5, bracket=-1, the known pre-existing baseline) — no new imbalance introduced. All new Windows APIs used (`CM_Get_Child`, `CM_Get_Sibling`, `CM_Get_DevNode_Registry_PropertyA`, `CM_DRP_FRIENDLYNAME`, `CM_DRP_DEVICEDESC`) are declared in `cfgmgr32.h`/linked via `cfgmgr32.lib`, both already used elsewhere in this file for the existing `CM_Get_Parent`/`CM_Locate_DevNodeA` calls — no new includes or libraries needed. No C++ compiler available in this sandbox to build and test. **Not yet live-tested** — next step is rebuilding the agent and re-inserting the same SanDisk drive to confirm the USB Devices tab now shows its real name and VID:PID.
+
+---
+
 ## 🧊 Critical Fix: Windows Agent Self-Deadlock Froze Entire Process on Log Rotation (August 4, 2026)
 
 ### Summary

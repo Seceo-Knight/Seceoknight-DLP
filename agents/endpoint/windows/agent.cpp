@@ -2622,9 +2622,23 @@ static ClassificationResult Classify(const std::string& content,
                      DEV_BROADCAST_DEVICEINTERFACE_A* pDevInf = (DEV_BROADCAST_DEVICEINTERFACE_A*)pHdr;
                      std::string deviceName = GetDeviceDescription(pDevInf);
                      std::string deviceId = pDevInf->dbcc_name;
-                     
+                     // Same vendor-specific-name resolution used on arrival
+                     // (see GetBetterDeviceName / GetUsbStorageChildFriendlyName).
+                     // Without this, a disconnect event would overwrite the
+                     // "Seen on Endpoints" row's device name back to the raw/
+                     // generic GetDeviceDescription() text the moment the user
+                     // unplugs the drive, undoing the improved name shown while
+                     // it was connected. The device node is usually still
+                     // present in the tree at DEVICEREMOVECOMPLETE time, so
+                     // this best-effort lookup can still succeed; falls back
+                     // gracefully (same as on arrival) if it can't.
+                     std::string betterDisconnectName = GetBetterDeviceName(deviceId);
+                     if (!betterDisconnectName.empty()) {
+                         deviceName = betterDisconnectName;
+                     }
+
                      logger.Info("USB device disconnected: " + deviceName);
-                     
+
                      // Handle disconnect event (classic monitored-event USB
                      // policy pipeline — no-ops if no such policy is active).
                      HandleUsbEvent(deviceName, deviceId, "disconnect");
@@ -7803,64 +7817,152 @@ if (shouldMonitor) {
         return s;
     }
 
-    // A USBSTOR device interface path never contains a numeric
-    // "VID_xxxx&PID_yyyy" — only Ven_/Prod_ TEXT strings (see
-    // ExtractUsbSerialFromDeviceId's comment above). The real numeric
-    // vendor/product ID lives on the PARENT USB device node one level up
-    // in the device tree (e.g. USB\VID_0781&PID_5567&REV_0100\...).
-    // Without this walk, the USB Devices dashboard page's VID:PID column
-    // is empty for every mass-storage device. Returns false (leaving
-    // outVid/outPid empty) if the device has already been removed by the
-    // time this runs, or the lookup otherwise fails — callers already
-    // treat empty VID/PID as "unknown", same as before this existed.
+    // Pulls "VID_xxxx" / "PID_xxxx" substrings directly out of a device ID
+    // or interface path string, if present. This agent registers device
+    // notifications for GUID_DEVINTERFACE_USB_DEVICE, whose interface path
+    // IS the composite USB device node itself -- e.g.
+    // \\?\USB#VID_0781&PID_5567#serial#{GUID} -- which already contains the
+    // numeric VID_/PID_ directly, no device-tree walk required. (A USBSTOR
+    // disk-node path, if one is ever encountered instead, only has
+    // Ven_/Prod_ TEXT and needs the parent-walk fallback below.)
+    static void ExtractVidPidFromText(const std::string& text, std::string& outVid, std::string& outPid) {
+        size_t vidPos = text.find("VID_");
+        if (vidPos != std::string::npos && vidPos + 8 <= text.length()) {
+            outVid = text.substr(vidPos + 4, 4);
+        }
+        size_t pidPos = text.find("PID_");
+        if (pidPos != std::string::npos && pidPos + 8 <= text.length()) {
+            outPid = text.substr(pidPos + 4, 4);
+        }
+    }
+
+    // Returns false (leaving outVid/outPid empty) only if neither the
+    // deviceId itself nor its parent node yields a VID/PID — callers
+    // already treat empty VID/PID as "unknown", same as before this existed.
     bool GetUsbStorageVidPid(const std::string& deviceId, std::string& outVid, std::string& outPid) {
         outVid.clear();
         outPid.clear();
+
+        // Common case: deviceId is already the composite USB\VID_xxxx&
+        // PID_yyyy node's own path (see ExtractVidPidFromText's comment).
+        // Previously this function skipped straight to CM_Get_Parent, which
+        // for this format walks PAST the node that actually has the VID/PID
+        // (up to the USB hub/controller, which doesn't carry the flash
+        // drive's own ID) — that's why the VID:PID column was showing empty
+        // even though the info was sitting right there in deviceId.
+        ExtractVidPidFromText(deviceId, outVid, outPid);
+        if (!outVid.empty() && !outPid.empty()) {
+            return true;
+        }
+
+        // Fallback for any deviceId that turns out to be a child/disk node
+        // instead (no VID_/PID_ of its own) — walk up to its parent, which
+        // is where a USBSTOR-style path would carry the numeric ID.
         std::string instanceId = DeviceInterfacePathToInstanceId(deviceId);
-        if (instanceId.empty()) return false;
+        if (instanceId.empty()) return !outVid.empty() || !outPid.empty();
 
         DEVINST devInst = 0;
         if (CM_Locate_DevNodeA(&devInst, const_cast<DEVINSTID_A>(instanceId.c_str()),
                                 CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS) {
-            return false;
+            return !outVid.empty() || !outPid.empty();
         }
         DEVINST parentInst = 0;
         if (CM_Get_Parent(&parentInst, devInst, 0) != CR_SUCCESS) {
-            return false;
+            return !outVid.empty() || !outPid.empty();
         }
         char parentId[MAX_DEVICE_ID_LEN];
         if (CM_Get_Device_IDA(parentInst, parentId, MAX_DEVICE_ID_LEN, 0) != CR_SUCCESS) {
-            return false;
+            return !outVid.empty() || !outPid.empty();
         }
-        std::string parent(parentId);
-        size_t vidPos = parent.find("VID_");
-        if (vidPos != std::string::npos && vidPos + 8 <= parent.length()) {
-            outVid = parent.substr(vidPos + 4, 4);
-        }
-        size_t pidPos = parent.find("PID_");
-        if (pidPos != std::string::npos && pidPos + 8 <= parent.length()) {
-            outPid = parent.substr(pidPos + 4, 4);
-        }
+        ExtractVidPidFromText(std::string(parentId), outVid, outPid);
         return !outVid.empty() || !outPid.empty();
+    }
+
+    // Walks down from the composite USB device node to find its actual
+    // mass-storage ("Disk drives") child, e.g. USBSTOR\Disk&Ven_SanDisk&
+    // Prod_Cruzer_Blade&Rev_1.00\... The composite node itself (USB\
+    // VID_xxxx&PID_yyyy) is what the GUID_DEVINTERFACE_USB_DEVICE arrival
+    // notification carries, but its own FriendlyName/DeviceDesc is set by
+    // Windows' generic bulk-only mass-storage class driver to a FIXED
+    // generic string — typically "USB Mass Storage Device" — for every
+    // compliant flash drive, regardless of actual vendor. That's why the
+    // USB Devices page was showing that exact generic text for a real
+    // SanDisk drive instead of its actual name. The real vendor-specific
+    // name lives one level down, on this child disk node. Returns "" if no
+    // USBSTOR/SCSI child is found or none has a usable name. Capped walk
+    // (max 8 siblings) so a malformed device tree can never hang the
+    // device-arrival thread.
+    std::string GetUsbStorageChildFriendlyName(DEVINST parentDevInst) {
+        DEVINST current = 0;
+        if (CM_Get_Child(&current, parentDevInst, 0) != CR_SUCCESS) {
+            return "";
+        }
+        for (int guard = 0; guard < 8 && current != 0; guard++) {
+            char childId[MAX_DEVICE_ID_LEN];
+            if (CM_Get_Device_IDA(current, childId, MAX_DEVICE_ID_LEN, 0) == CR_SUCCESS) {
+                std::string idStr(childId);
+                std::string idUpper = idStr;
+                for (auto& c : idUpper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                if (idUpper.rfind("USBSTOR", 0) == 0 || idUpper.rfind("SCSI", 0) == 0) {
+                    char nameBuf[256] = {0};
+                    ULONG regType = 0;
+                    ULONG len = sizeof(nameBuf);
+                    if (CM_Get_DevNode_Registry_PropertyA(current, CM_DRP_FRIENDLYNAME, &regType,
+                                                           nameBuf, &len, 0) == CR_SUCCESS && nameBuf[0]) {
+                        return std::string(nameBuf);
+                    }
+                    nameBuf[0] = '\0';
+                    len = sizeof(nameBuf);
+                    if (CM_Get_DevNode_Registry_PropertyA(current, CM_DRP_DEVICEDESC, &regType,
+                                                           nameBuf, &len, 0) == CR_SUCCESS && nameBuf[0]) {
+                        return std::string(nameBuf);
+                    }
+                    // Neither property is set — fall back to parsing the
+                    // vendor/product text directly out of the child's own
+                    // device instance ID (always present for USBSTOR-
+                    // enumerated devices — it's how Windows itself builds
+                    // the node's hardware ID), e.g. "USBSTOR\Disk&Ven_
+                    // SanDisk&Prod_Cruzer_Blade&Rev_1.00\..." -> "SanDisk
+                    // Cruzer Blade".
+                    size_t venPos = idStr.find("Ven_");
+                    if (venPos != std::string::npos) {
+                        size_t venEnd = idStr.find('&', venPos);
+                        std::string ven = (venEnd != std::string::npos)
+                            ? idStr.substr(venPos + 4, venEnd - venPos - 4)
+                            : idStr.substr(venPos + 4);
+                        std::string prod;
+                        size_t prodPos = idStr.find("Prod_");
+                        if (prodPos != std::string::npos) {
+                            size_t prodEnd = idStr.find('&', prodPos);
+                            prod = (prodEnd != std::string::npos)
+                                ? idStr.substr(prodPos + 5, prodEnd - prodPos - 5)
+                                : idStr.substr(prodPos + 5);
+                        }
+                        for (auto& c : ven) if (c == '_') c = ' ';
+                        for (auto& c : prod) if (c == '_') c = ' ';
+                        std::string combined = ven;
+                        if (!prod.empty()) combined += " " + prod;
+                        if (!combined.empty()) return combined;
+                    }
+                }
+            }
+            DEVINST sibling = 0;
+            if (CM_Get_Sibling(&sibling, current, 0) != CR_SUCCESS) break;
+            current = sibling;
+        }
+        return "";
     }
 
     std::string GetBetterDeviceName(const std::string& deviceId) {
         std::string deviceName = "USB Device";
-        
+
         // Extract Vendor and Product IDs
         std::string vendorId = "????";
         std::string productId = "????";
-        
-        size_t vidPos = deviceId.find("VID_");
-        if (vidPos != std::string::npos && vidPos + 8 <= deviceId.length()) {
-            vendorId = deviceId.substr(vidPos + 4, 4);
-        }
-        
-        size_t pidPos = deviceId.find("PID_");
-        if (pidPos != std::string::npos && pidPos + 8 <= deviceId.length()) {
-            productId = deviceId.substr(pidPos + 4, 4);
-        }
-        
+        ExtractVidPidFromText(deviceId, vendorId, productId);
+        if (vendorId.empty()) vendorId = "????";
+        if (productId.empty()) productId = "????";
+
         // Try to get friendly name using SetupAPI
         HDEVINFO hDevInfo = SetupDiGetClassDevsA(
             NULL,
@@ -7868,20 +7970,33 @@ if (shouldMonitor) {
             NULL,
             DIGCF_PRESENT | DIGCF_ALLCLASSES
         );
-        
+
         if (hDevInfo != INVALID_HANDLE_VALUE) {
             SP_DEVINFO_DATA devInfoData;
             devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
-            
+
             for (DWORD i = 0; SetupDiEnumDeviceInfo(hDevInfo, i, &devInfoData); i++) {
                 char currentDeviceId[256];
                 if (SetupDiGetDeviceInstanceIdA(hDevInfo, &devInfoData, currentDeviceId, sizeof(currentDeviceId), NULL)) {
                     // Check if this matches our device
-                    if (deviceId.find(vendorId) != std::string::npos && 
+                    if (deviceId.find(vendorId) != std::string::npos &&
                         std::string(currentDeviceId).find(vendorId) != std::string::npos &&
                         std::string(currentDeviceId).find(productId) != std::string::npos) {
-                        
-                        // Get friendly name
+
+                        // Prefer the real vendor-specific name from the
+                        // device's actual mass-storage child node — see
+                        // GetUsbStorageChildFriendlyName's comment for why
+                        // the composite node matched above is the wrong
+                        // place to read a vendor name from.
+                        std::string childName = GetUsbStorageChildFriendlyName(devInfoData.DevInst);
+                        if (!childName.empty()) {
+                            deviceName = childName;
+                            break;
+                        }
+
+                        // Get friendly name (of the composite node itself —
+                        // usually generic for flash drives, see above, but
+                        // still better than nothing if the child walk failed)
                         char friendlyName[256];
                         DWORD propertyType;
                         if (SetupDiGetDeviceRegistryPropertyA(
@@ -7895,7 +8010,7 @@ if (shouldMonitor) {
                             deviceName = std::string(friendlyName);
                             break;
                         }
-                        
+
                         // Try device description
                         if (SetupDiGetDeviceRegistryPropertyA(
                             hDevInfo,
@@ -7911,15 +8026,15 @@ if (shouldMonitor) {
                     }
                 }
             }
-            
+
             SetupDiDestroyDeviceInfoList(hDevInfo);
         }
-        
+
         // If we couldn't get a friendly name, use VID/PID
         if (deviceName == "USB Device") {
             deviceName = "USB Device (VID:" + vendorId + " PID:" + productId + ")";
         }
-        
+
         return deviceName;
     }
 
