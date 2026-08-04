@@ -33,9 +33,14 @@ jobs:
       image: python:3.9-slim-bullseye
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      # Installed BEFORE checkout, deliberately. python:3.9-slim-bullseye has
+      # no git binary at all -- and actions/checkout@v4 silently degrades to
+      # a git-less tarball download (via the GitHub REST API) whenever it
+      # can't find `git` on PATH, which produces a working tree with NO .git
+      # directory. Every later git command in this job (safe.directory,
+      # commit, push) then fails with "fatal: not in a git directory" --
+      # not a permissions/ownership issue, just no repo to operate on.
+      # Installing git first makes checkout do a real clone.
       - name: Install system build dependencies
         run: |
           apt-get update -qq
@@ -49,6 +54,9 @@ jobs:
             build-essential libudev-dev pkg-config git ca-certificates file
           echo "=== glibc version this binary will be built/linked against ==="
           ldd --version | head -1
+
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Install Python dependencies
         working-directory: agents/endpoint/linux

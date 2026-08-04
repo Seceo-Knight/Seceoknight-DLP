@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 CI Fix: Linux Agent Build Workflow Failing on Every Run (August 4, 2026)
+
+### Summary
+
+`build-linux-agent.yml` was failing at its final "Commit updated binary" step on every run, immediately after `git config --global --add safe.directory "$GITHUB_WORKSPACE"`, with `fatal: not in a git directory`.
+
+### Root cause
+
+The job runs inside a bare `python:3.9-slim-bullseye` container, which has no `git` binary preinstalled. The workflow's step order was: (1) `actions/checkout@v4`, then (2) `apt-get install ... git ...`. `actions/checkout@v4` requires `git` to perform a real clone; when it isn't found on `PATH`, checkout silently falls back to downloading the repository as a plain source tarball via the GitHub REST API instead -- which produces a normal-looking working tree with **no `.git` directory at all**. Every step after that ran fine (the build itself doesn't need git), until the final step tried to `git add`/`git commit`/`git push` against a directory that was never a git repo in the first place. `safe.directory` only fixes an ownership-mismatch error ("detected dubious ownership") -- it does nothing for "not in a git directory," which is a different failure mode entirely (no repo present, period).
+
+### Fix
+
+Reordered the two steps so `git` (and the rest of the system build dependencies) install before checkout runs. `actions/checkout@v4` then finds `git` on `PATH` and does a real clone, so `$GITHUB_WORKSPACE` is an actual git working tree by the time the commit-back step runs.
+
+### Verification
+
+Parsed the edited workflow with PyYAML to confirm it's still valid YAML and that the step order is now `Install system build dependencies` → `Checkout code` → ... → `Commit updated binary`. This is a config-only fix touching a `paths:`-filtered file (`.github/workflows/build-linux-agent.yml`), so pushing it re-triggers the workflow -- the resulting run itself is the real end-to-end verification of whether the checkout now includes a working `.git` directory.
+
+---
+
 ## 🛠️ CyberSentinel Parity: Consolidated Windows Management Script (August 4, 2026)
 
 ### Summary
