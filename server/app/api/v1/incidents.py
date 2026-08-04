@@ -468,9 +468,23 @@ async def get_auto_incident(
         if f in doc and isinstance(doc[f], datetime):
             doc[f] = doc[f].isoformat()
 
-    # Get related events (same user, same hour)
+    # Get related events. Prefer the incident's actual coalesced
+    # related_event_ids (populated by the coalescing logic in
+    # _auto_create_incident when a burst of qualifying events from the same
+    # user gets folded into this incident) -- this is the real merged set,
+    # not an approximation. Fall back to the old same-user/high-severity
+    # heuristic for incidents created before that field existed.
     related = []
-    if doc.get("user_email"):
+    related_ids = doc.get("related_event_ids")
+    if related_ids:
+        cursor = events_col.find({"id": {"$in": related_ids}}).sort("timestamp", -1)
+        async for ev in cursor:
+            ev.pop("_id", None)
+            for f in ("timestamp", "created_at", "processed_at"):
+                if f in ev and isinstance(ev[f], datetime):
+                    ev[f] = ev[f].isoformat()
+            related.append(ev)
+    elif doc.get("user_email"):
         cursor = events_col.find({
             "user_email": doc["user_email"],
             "severity": {"$in": ["critical", "high"]},

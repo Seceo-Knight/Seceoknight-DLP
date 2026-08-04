@@ -455,12 +455,24 @@ async def _auto_create_incident(
     db, event_id: str, payload: Dict[str, Any], update_fields: Dict[str, Any]
 ) -> None:
     """
-    Auto-create incidents for blocked or high-severity events.
+    Auto-create (or coalesce into) incidents for blocked or high-severity events.
 
     Triggers:
       - Classification level is Restricted or Confidential AND action is block
       - Severity is critical or high
       - Repeated violations from same user (5+ events in 1 hour)
+
+    Coalescing: a burst of qualifying events from the same user within a
+    1-hour window folds into ONE incident (event_count/related_event_ids
+    grow, severity ratchets to the worst seen) instead of minting a new
+    incident per event. This was the CyberSentinel-parity gap — previously
+    every qualifying event got its own incident, de-duped only on exact
+    event_id (which can't collide across different events), so five blocked
+    events from one user in ten minutes flooded the Incidents queue with
+    five rows for what's really one ongoing problem. The window is fixed to
+    the coalescing incident's created_at (not rolling on every new event),
+    so a single user can't keep one incident open indefinitely — once an
+    hour passes, the next qualifying event opens a fresh incident.
     """
     try:
         incidents_col = db["incidents"]
@@ -497,9 +509,15 @@ async def _auto_create_incident(
         if not should_create:
             return
 
-        # Check for duplicate — don't create if same event_id already has an incident
-        existing = await incidents_col.find_one({"event_id": event_id})
-        if existing:
+        # Idempotency: skip if this exact event already produced (or was
+        # merged into) an incident — covers both the "primary" event of an
+        # incident and any event that was folded in via coalescing below.
+        # Without the related_event_ids check, retried event processing
+        # could double-count a single event into event_count on re-merge.
+        existing_any = await incidents_col.find_one(
+            {"$or": [{"event_id": event_id}, {"related_event_ids": event_id}]}
+        )
+        if existing_any:
             return
 
         # Check for repeated violations — count events from same user in last hour
@@ -514,6 +532,45 @@ async def _auto_create_incident(
         if violation_count >= 5:
             title = f"Repeated Violations ({violation_count}x) — {user_email}"
             sev_num = 4
+
+        # Coalesce into an existing OPEN incident for the same user opened
+        # within the last hour, if one exists, instead of creating a new one.
+        existing_open = await incidents_col.find_one(
+            {
+                "user_email": user_email,
+                "status": "open",
+                "created_at": {"$gte": one_hour_ago},
+            },
+            sort=[("created_at", -1)],
+        )
+        if existing_open:
+            new_event_count = max(violation_count, existing_open.get("event_count", 1) + 1)
+            new_sev = max(existing_open.get("severity", 0), sev_num)
+            update_doc: Dict[str, Any] = {
+                "severity": new_sev,
+                "updated_at": datetime.now(timezone.utc),
+                "event_count": new_event_count,
+            }
+            # A repeated-violations escalation retitles the incident so the
+            # headline reflects what it's actually become; otherwise the
+            # original triggering event's title is left alone.
+            if violation_count >= 5:
+                update_doc["title"] = title
+            await incidents_col.update_one(
+                {"_id": existing_open["_id"]},
+                {
+                    "$set": update_doc,
+                    "$addToSet": {"related_event_ids": event_id},
+                },
+            )
+            logger.info(
+                "Auto-incident coalesced",
+                incident_id=existing_open.get("id"),
+                event_id=event_id,
+                severity=new_sev,
+                event_count=new_event_count,
+            )
+            return
 
         # Stamp the auto-incident with the source event's ABAC attributes so
         # it can be department-filtered like any other record. We read them
@@ -535,8 +592,10 @@ async def _auto_create_incident(
             "status": "open",
             "agent_id": agent_id,
             "user_email": user_email,
+            "event_type": event_type,
             "classification_level": classification,
             "event_count": violation_count,
+            "related_event_ids": [event_id],
             "department": dept,
             "required_clearance": req_clr,
             "created_at": datetime.now(timezone.utc),

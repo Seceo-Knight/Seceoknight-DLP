@@ -8,6 +8,35 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🧩 CyberSentinel Parity: Incident Coalescing (August 4, 2026)
+
+### Summary
+
+Fifth of the CyberSentinel-parity batch. Auto-generated incidents (`_auto_create_incident` in `server/app/api/v1/events.py`, backing the MongoDB `incidents` collection that the Incidents dashboard page actually reads via `/incidents/auto/*`) now merge a burst of qualifying events from the same user into a single incident, instead of minting one incident per event.
+
+### Root cause
+
+The dashboard has two parallel incident systems: a PostgreSQL `Incident` model with full CRUD for manually-created/analyst-managed incidents, and a separate MongoDB `incidents` collection auto-populated whenever a blocked-Restricted/Confidential event or a critical/high-severity event comes through `POST /events`. `Incidents.tsx` displays the latter (`getAutoIncidents()`). The auto-create logic only de-duplicated on exact `event_id` (which can never collide across two different events), so five blocked events from the same user in ten minutes produced five separate incident rows in the queue for what's really one ongoing problem -- no merging across different qualifying events at all.
+
+### Fix
+
+`_auto_create_incident` now looks for an existing **open** incident from the same `user_email` created within the last hour before creating anything new:
+
+- If found: folds the new event in via `$addToSet` on a new `related_event_ids` array field, bumps `event_count`, and ratchets `severity` up to the worse of the two (never down). The incident's original title is left alone unless this event pushes it past the repeated-violations threshold (5+ blocked events/hour), in which case the title is updated to reflect that.
+- If not found: creates a new incident as before, now also stamping `event_type` and seeding `related_event_ids: [event_id]`.
+- The window is anchored to the incident's own `created_at` (not extended/rolled forward by each new event), so a single user can't keep one incident open indefinitely -- once an hour passes since it opened, the next qualifying event starts a fresh incident.
+- Idempotency: the old "does an incident already exist for this event_id" dedup check was widened to also check `related_event_ids`, so a retried/reprocessed event can't get folded into an incident twice and double-count `event_count`.
+
+`GET /incidents/auto/{id}` (`server/app/api/v1/incidents.py`) previously computed "related events" at read time via a loose heuristic (same user, severity critical/high, last 20) that had no actual connection to what caused the incident. It now prefers the incident's real `related_event_ids` list when present -- the actual coalesced set -- falling back to the old heuristic only for incidents created before this field existed.
+
+No frontend changes were needed: `Incidents.tsx` already renders `incident.event_count` and `incident.related_events` on the card and detail view, so a coalesced incident just shows a higher count and a longer related-events list automatically.
+
+### Verification
+
+`ast.parse()` on both edited files confirms valid Python syntax. Traced the idempotency path by hand (retried event → matches `related_event_ids` → early return, no double-count) and the window-expiry path (incident older than 1 hour → `existing_open` query excludes it → new incident opens instead of growing the old one indefinitely). Not yet exercised against a running server with a real burst of events -- worth confirming end-to-end (fire 3-4 blocked events from one test user within a minute, confirm one incident with `event_count: 4` rather than four rows) before considering this fully done.
+
+---
+
 ## 📄 CyberSentinel Parity: Pagination on List Pages (August 4, 2026)
 
 ### Summary
