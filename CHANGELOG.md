@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🎯 Reduce False Positives: Phone-Number Matches Now Context-Weighted (August 4, 2026)
+
+### Summary
+
+Investigated a user's suspicion that a "CONTACT" detection badge on a clipboard event was a false positive. It wasn't — the Email Address rule tags its matches with both `CONTACT` and `EMAIL` labels, so that badge was the same genuine email match shown twice under different names, not a separate misfire. But the investigation surfaced a real, separate gap worth closing for false-positive reduction: the phone-number rules had no secondary validation at all.
+
+### The gap
+
+`CREDIT_CARD`/`PCI` matches get a Luhn checksum before counting as a hit — a real algorithmic validation with a very low false-positive rate. `US Phone Number` and `Indian Mobile Number` (`server/data/default_rules.json`) had nothing equivalent: any 10-digit sequence in the right shape (with separators/parentheses in the right places) counted as a full-confidence match. An order ID, tracking number, or account number formatted like a phone number would match just as readily as an actual phone number, with no way to tell them apart.
+
+### Fix
+
+Phone numbers have no checksum the way card numbers do, so an outright reject-without-context approach was ruled out — it would trade false positives for false negatives (missing a genuine phone number that happens to appear with no surrounding words). Instead, added `_has_nearby_keyword()` to `classification_engine.py`: checks a ±40-character window around each matched digit sequence for a phone-context keyword (phone, mobile, cell, tel, call, dial, whatsapp, contact, sms, etc.). When a phone-type rule matches with no such keyword nearby, its confidence *contribution* to the overall score is discounted to 40% (`_PHONE_NO_CONTEXT_DISCOUNT`) rather than rejected outright — the match still shows up in the event's detected data (nothing hidden from the analyst), it just can no longer single-handedly push a document to Confidential/Restricted the way a genuinely phone-number-shaped-and-contextualized match would.
+
+Standalone test of the keyword-window logic: `"Call me at 9876543210"` → context found (full confidence); `"Order ID: 9876543210 has been confirmed"` → no context (discounted); `"My mobile number is 9876543210"` → context found; `"Tracking: 9876543210, ETA Friday"` → no context. All four behaved as intended.
+
+### Verification
+
+`ast.parse()` confirms valid Python syntax. The standalone keyword-window test above ran directly (not just traced by hand) and passed all four cases. **Not yet run against the full classification pipeline with real database rules** — worth testing a genuine phone number both with and without context wording nearby, and confirming the resulting confidence score/classification level differ sensibly between the two.
+
+---
+
 ## 🎯 Fix: Every "Detected Sensitive Data" Badge Showed the Same Confidence (August 4, 2026)
 
 ### Summary

@@ -141,6 +141,27 @@ _MEDIUM_RISK_EXTENSIONS = frozenset({
 # Sources with higher risk multiplier
 _HIGH_RISK_SOURCES = frozenset({"clipboard", "usb", "removable", "email", "cloud"})
 
+# Phone-number rules (US Phone Number, Indian Mobile Number in
+# default_rules.json) have no deterministic secondary validation the way
+# CREDIT_CARD/PCI matches do (Luhn checksum) -- a phone number has no
+# checksum to validate against, so any 10-digit run in the right shape
+# counts as a match. That's a real false-positive source: an order ID,
+# tracking number, or account number formatted like a phone number
+# matches just as readily as an actual phone number. Rather than reject
+# such matches outright (which would create false NEGATIVES on genuine
+# phone numbers that happen to appear with no surrounding words), a
+# nearby context keyword is used as a confidence signal instead -- see
+# _has_nearby_keyword() and its call site in classify_content(). A match
+# with no contextual support is still reported (nothing is hidden from
+# the analyst), just discounted so a lone decontextualized digit run
+# can't by itself push a document to Confidential/Restricted.
+_PHONE_CONTEXT_KEYWORDS = frozenset({
+    "phone", "phone number", "mobile", "mobile number", "cell", "cell phone",
+    "telephone", "tel:", "tel.", "call", "calling", "dial", "whatsapp",
+    "contact number", "contact:", "sms", "text me", "reach me",
+})
+_PHONE_NO_CONTEXT_DISCOUNT = 0.4
+
 
 @dataclass
 class ClassificationResult:
@@ -281,6 +302,23 @@ class ClassificationEngine:
                 else:
                     scale = 1.0
                 contribution = rule.weight * scale
+
+                # Phone numbers have no deterministic secondary validation
+                # the way CREDIT_CARD/PCI matches get a Luhn checksum -- a
+                # bare 10-digit run in the right shape (order ID, tracking
+                # number, account number) matches just as readily as a real
+                # phone number. Discount the contribution when no
+                # phone-context keyword (call, mobile, tel, contact, ...)
+                # appears near the matched digits, so a decontextualized
+                # match can't by itself push classification to Confidential/
+                # Restricted the way a genuine phone number mention would.
+                # The match is still reported in matched_rules either way --
+                # only its weight in the overall score is discounted.
+                if "PHONE" in (rule.classification_labels or []) and not self._has_nearby_keyword(
+                    eval_content, matched_values, _PHONE_CONTEXT_KEYWORDS
+                ):
+                    contribution *= _PHONE_NO_CONTEXT_DISCOUNT
+
                 total_weight += contribution
                 total_matches += validated_count
 
@@ -702,6 +740,32 @@ class ClassificationEngine:
                 }
             return rule_result
         return None
+
+    def _has_nearby_keyword(
+        self, content: str, matched_values: List[str], keywords: frozenset, window: int = 40
+    ) -> bool:
+        """
+        True if any of `keywords` appears within `window` characters of any
+        matched value's position in `content` (case-insensitive). Used as a
+        confidence signal for pattern types (currently phone numbers) that
+        have no deterministic secondary validation like a Luhn checksum --
+        finding "call" or "mobile" near a 10-digit run is meaningfully
+        stronger evidence than the bare digit shape alone. Best-effort: if a
+        matched value can't be located in content (shouldn't normally
+        happen since it came from matching against this same content), it's
+        just skipped rather than raising.
+        """
+        content_lower = content.lower()
+        for value in matched_values:
+            idx = content_lower.find(value.lower())
+            if idx == -1:
+                continue
+            start = max(0, idx - window)
+            end = min(len(content_lower), idx + len(value) + window)
+            snippet = content_lower[start:end]
+            if any(kw in snippet for kw in keywords):
+                return True
+        return False
 
     async def _get_cached_rules(self) -> List[Rule]:
         """Get enabled rules with module-level caching."""
