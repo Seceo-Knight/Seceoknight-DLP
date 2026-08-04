@@ -335,7 +335,19 @@ class EventProcessor:
                             classification = {
                                 "type": matched_rule["rule_type"],
                                 "label": matched_rule["rule_name"],
-                                "confidence": result.confidence_score,
+                                # This rule's OWN match confidence (set per-rule
+                                # in classify_content), not the single overall
+                                # event confidence_score -- previously every
+                                # entry here got the same overall score, which
+                                # is why every "Detected Sensitive Data" badge
+                                # in the dashboard showed an identical
+                                # percentage regardless of how strongly that
+                                # specific pattern actually matched. Falls back
+                                # to the overall score only for rule results
+                                # that predate this field (defensive, shouldn't
+                                # happen for anything produced by the engine
+                                # above).
+                                "confidence": matched_rule.get("confidence", result.confidence_score),
                                 "patterns_matched": [matched_rule["rule_id"]],
                                 "sensitive_data": {
                                     "type": matched_rule["rule_type"],
@@ -382,6 +394,19 @@ class EventProcessor:
                             "total_matches": result.total_matches,
                             "matched_rules_count": len(result.matched_rules),
                             "classification_labels": result.data_types,
+                            # Per-label confidence, keyed by the SAME strings
+                            # as classification_labels. classification_labels
+                            # is a deduped list of distinct sensitive-data
+                            # types across ALL matched rules, while
+                            # `classifications` above is one entry PER
+                            # matched rule -- those two lists don't have
+                            # matching lengths or order in general (a rule can
+                            # contribute multiple labels, or two rules can
+                            # both contribute the same label), so index-based
+                            # lookups between them are unreliable. Looking a
+                            # label up by name in this dict instead is always
+                            # correct.
+                            "label_confidence": result.label_confidence,
                             "engine": "rule_based"
                         }
 

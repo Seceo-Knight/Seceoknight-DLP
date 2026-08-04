@@ -8,6 +8,29 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🎯 Fix: Every "Detected Sensitive Data" Badge Showed the Same Confidence (August 4, 2026)
+
+### Summary
+
+In an event's detail view, the "Detected Sensitive Data" badges (e.g. CONTACT, EMAIL, NETWORK, IP_ADDRESS, STUDY_REPORT) all showed the exact same percentage as the overall classification confidence score — reported on a real clipboard event where every one of five distinct detected types showed an identical "70%", which is misleading: a deterministic EMAIL regex match and a fuzzy CONTACT heuristic match should not carry the same confidence.
+
+### Root cause (two separate bugs stacked)
+
+1. **No per-rule confidence was ever computed.** `classification_engine.py`'s rule-matching loop calculated a scaled confidence *contribution* per matched rule (`rule.weight * scale`) but only summed it into the single overall `total_weight`/`confidence_score` — the per-rule value itself was discarded. `event_processor.py` then built the event's `classification` list by stamping that one overall `result.confidence_score` onto every matched rule's entry, so every category necessarily showed the identical number.
+2. **Even after computing per-rule values, the frontend couldn't have used them correctly.** `Events.tsx` tried to look up each badge's confidence via `classification[idx]?.confidence`, matching by array index against `classification_labels[idx]`. Those two arrays don't correspond 1:1 by construction: `classification_labels` is a *deduped* list of distinct sensitive-data types across all matched rules, while `classification` has one entry *per matched rule* (a rule can contribute multiple labels; two rules can contribute the same label) — different lengths, different order, in general. On top of that, `event.classification` was never actually persisted to the stored event document at all (`_process_event_background` in `events.py` only ever wrote `classification_metadata`, never the raw `classification` array), so the index lookup was always `undefined` and always fell through to the same overall score regardless.
+
+### Fix
+
+- `classification_engine.py`: each matched rule's `rule_result` now carries its own `confidence` (the same per-rule scaled contribution, capped at 1.0). `ClassificationResult` gained a new `label_confidence: Dict[str, float]` field — for every classification label a rule contributes, its confidence is rolled up as the *max* across every rule that contributed that label (so a weak rule tagging "EMAIL" can't drag down a strong rule that also found it). Correlation-derived extra rules/labels get the same treatment using their `bonus_weight`.
+- `event_processor.py`: `classification[].confidence` now uses the per-rule value instead of the overall score; `classification_metadata` gained a `label_confidence` dict (keyed by the same strings as `classification_labels`) that's what actually reaches the dashboard, since the whole `classification_metadata` object was already being persisted.
+- `Events.tsx`: rewrote the badge confidence lookup to read `event.classification_metadata?.label_confidence?.[label]` by name instead of the fragile, always-broken index lookup into a never-persisted array.
+
+### Verification
+
+`ast.parse()` on both edited Python files confirms valid syntax. Ran the project's own `tsc --noEmit` — 42 errors, identical to the established baseline, zero in `Events.tsx`. Traced the full data path by hand: rule match → per-rule `confidence` on `rule_result` → rolled into `label_confidence` in `ClassificationResult` → copied into `classification_metadata` in `event_processor.py` → persisted whole via the existing `update_fields["classification_metadata"] = ...` write in `events.py` (no new persistence code needed there) → read by label name in `Events.tsx`. **Not yet observed against a live event** — worth re-triggering the same clipboard test that surfaced this (content with email + IP + a study-report keyword match) and confirming the badges now show genuinely different percentages instead of one repeated number.
+
+---
+
 ## 🚨 Windows Agent: Startup Baseline Scan Was Blocking ALL Monitoring (August 4, 2026)
 
 ### Summary

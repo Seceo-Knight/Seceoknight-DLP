@@ -152,6 +152,14 @@ class ClassificationResult:
     details: Dict[str, Any]
     entropy_score: float = 0.0
     data_types: List[str] = field(default_factory=list)
+    # Per-label confidence, keyed by the same strings as data_types. Added
+    # so the dashboard can show each detected sensitive-data badge (EMAIL,
+    # CONTACT, IP_ADDRESS, ...) with ITS OWN match confidence instead of
+    # every badge displaying the single overall confidence_score -- see the
+    # per-rule confidence tracked in classify_content() below. When a label
+    # is contributed by more than one matched rule, this holds the
+    # strongest (max) confidence among them.
+    label_confidence: Dict[str, float] = field(default_factory=dict)
     # Populated only when FEATURE_ML_CLASSIFICATION is on and the ML/context
     # passes actually ran (None otherwise — fully backward compatible).
     ml_analysis: Optional[Dict[str, Any]] = None
@@ -247,6 +255,7 @@ class ClassificationEngine:
         total_weight = 0.0
         total_matches = 0
         data_types: List[str] = []
+        label_confidence: Dict[str, float] = {}
         all_matched_values: List[str] = []
 
         for rule in rules:
@@ -275,11 +284,26 @@ class ClassificationEngine:
                 total_weight += contribution
                 total_matches += validated_count
 
-                # Track data types
+                # Per-rule confidence: how strongly THIS rule matched, on its
+                # own, independent of whatever else also matched. Same value
+                # already being summed into total_weight -- just also
+                # attached to the rule result and rolled up per label below
+                # so it survives into the API response instead of every
+                # detected type falling back to the single overall
+                # confidence_score (the bug this fixes).
+                rule_confidence_value = round(min(1.0, contribution), 4)
+                rule_result["confidence"] = rule_confidence_value
+
+                # Track data types + per-label confidence (max across every
+                # rule that contributed the label, so a weak rule tagging
+                # "EMAIL" never drags down a strong rule that also found it)
                 if rule.classification_labels:
                     for label in rule.classification_labels:
                         if label not in data_types:
                             data_types.append(label)
+                        label_confidence[label] = max(
+                            label_confidence.get(label, 0.0), rule_confidence_value
+                        )
 
         # Step 6: Correlation analysis — detect multi-signal patterns
         correlation_result = self._correlate_signals(eval_content, matched_rules, data_types)
@@ -287,9 +311,13 @@ class ClassificationEngine:
             matched_rules.extend(correlation_result["extra_rules"])
             total_weight += correlation_result["bonus_weight"]
             total_matches += correlation_result["extra_matches"]
+            correlation_confidence = round(min(1.0, correlation_result["bonus_weight"]), 4)
+            for extra_rule in correlation_result["extra_rules"]:
+                extra_rule["confidence"] = correlation_confidence
             for dt in correlation_result.get("extra_types", []):
                 if dt not in data_types:
                     data_types.append(dt)
+                label_confidence[dt] = max(label_confidence.get(dt, 0.0), correlation_confidence)
 
         # Step 6b: ML classification + context (false-positive) analysis.
         # Gated behind FEATURE_ML_CLASSIFICATION so this is a strict opt-in:
@@ -348,6 +376,7 @@ class ClassificationEngine:
             },
             entropy_score=round(entropy, 4),
             data_types=data_types,
+            label_confidence={k: round(v, 4) for k, v in label_confidence.items()},
             ml_analysis=ml_result,
             context_analysis=context_result,
         )

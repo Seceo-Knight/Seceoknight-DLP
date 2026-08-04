@@ -217,7 +217,15 @@ function EventDetailModal({
     : (event.content || event.content_redacted || '')
 
   const classificationLabels = event.classification_labels || []
-  const classification = event.classification || []
+  // Per-label confidence, keyed by label NAME rather than array index.
+  // event.classification (a list of one entry per matched RULE) and
+  // event.classification_labels (a deduped list of distinct sensitive-data
+  // TYPES across all rules) don't have matching lengths or order in
+  // general, so index-based lookups between them (the previous approach)
+  // were unreliable -- and event.classification is never actually
+  // populated on the stored event doc in the first place, which is why
+  // every badge always fell back to the same overall classification_score.
+  const labelConfidence: Record<string, number> = event.classification_metadata?.label_confidence || {}
   const matchedPolicies = event.matched_policies || []
 
   const fileName = event.file_name || (event.file_path ? event.file_path.split(/[/\\]/).pop() : 'Unknown')
@@ -449,7 +457,7 @@ function EventDetailModal({
               </div>
               <div className="flex flex-wrap gap-2">
                 {classificationLabels.map((label: string, idx: number) => {
-                  const conf = classification[idx]?.confidence || event.classification_score || 1.0
+                  const conf = labelConfidence[label] ?? event.classification_score ?? 1.0
                   return (
                     <span key={idx} className={cn('inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium', tone('red'))}>
                       <Shield className="w-4 h-4" />
