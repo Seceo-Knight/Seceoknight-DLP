@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Shield, CheckCircle, XCircle, RefreshCw } from 'lucide-react'
+import { Plus, Shield, CheckCircle, XCircle, RefreshCw, Download, Upload } from 'lucide-react'
 import PolicyCreatorModal from '@/components/policies/PolicyCreatorModal'
 import PolicyTable from '@/components/policies/PolicyTable'
 import PolicyDetailsModal from '@/components/policies/PolicyDetailsModal'
+import ExportPoliciesModal from '@/components/policies/ExportPoliciesModal'
+import ImportPoliciesModal from '@/components/policies/ImportPoliciesModal'
 import { Policy } from '@/types/policy'
 import {
   getPolicies,
@@ -36,6 +38,8 @@ export default function PoliciesPage() {
   const [selectedPolicy, setSelectedPolicy] = useState<Policy | null>(null)
   const [showDetailsModal, setShowDetailsModal] = useState(false)
   const [lastRefreshAt, setLastRefreshAt] = useState<Date | null>(null)
+  const [showExportModal, setShowExportModal] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
 
   // Fetch policies from API
   const {
@@ -248,6 +252,20 @@ export default function PoliciesPage() {
         <div className="flex-1" />
         <div className="flex items-center gap-3">
           <button
+            onClick={() => setShowImportModal(true)}
+            className="flex items-center gap-2 border border-border text-foreground px-4 py-3 rounded-xl hover:bg-accent"
+          >
+            <Upload className="w-4 h-4" />
+            Import
+          </button>
+          <button
+            onClick={() => setShowExportModal(true)}
+            className="flex items-center gap-2 border border-border text-foreground px-4 py-3 rounded-xl hover:bg-accent"
+          >
+            <Download className="w-4 h-4" />
+            Export
+          </button>
+          <button
             onClick={() => refreshBundlesMutation.mutate()}
             disabled={refreshBundlesMutation.isPending}
             className="flex items-center gap-2 border border-border text-foreground px-4 py-3 rounded-xl hover:bg-accent disabled:opacity-60 disabled:cursor-not-allowed"
@@ -371,6 +389,23 @@ export default function PoliciesPage() {
         onClose={() => {
           setShowDetailsModal(false)
           setSelectedPolicy(null)
+        }}
+      />
+
+      {/* Export Policies Modal */}
+      <ExportPoliciesModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        policies={policies}
+      />
+
+      {/* Import Policies Modal */}
+      <ImportPoliciesModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onImported={() => {
+          queryClient.invalidateQueries({ queryKey: ['policies'] })
+          queryClient.invalidateQueries({ queryKey: ['policy-stats'] })
         }}
       />
     </div>

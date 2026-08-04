@@ -471,6 +471,20 @@ export const refreshPolicyBundles = async () => {
   return data
 }
 
+export const exportPolicies = async (policyIds?: string[]) => {
+  const { data } = await apiClient.get('/policies/export', {
+    params: policyIds && policyIds.length > 0 ? { policy_ids: policyIds } : undefined,
+  })
+  return data
+}
+
+export const importPolicies = async (bundle: { version?: number; policies: any[] }, onConflict: 'skip' | 'rename' = 'skip') => {
+  const { data } = await apiClient.post('/policies/import', bundle, {
+    params: { on_conflict: onConflict },
+  })
+  return data
+}
+
 // Events helper used by dashboard pages
 export const getEvents = async (params?: any) => {
   const { data } = await apiClient.get('/events/', { params })

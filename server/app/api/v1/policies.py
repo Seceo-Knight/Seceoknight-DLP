@@ -430,6 +430,182 @@ async def get_policies(
     ]
 
 
+@router.get("/export")
+async def export_policies(
+    policy_ids: Optional[List[str]] = Query(
+        None, description="Export only these policy IDs; omit to export every policy visible to the caller"
+    ),
+    current_user: User = Depends(require_role("analyst")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Export policies as a portable JSON bundle, importable into any other
+    SeceoKnight deployment via POST /policies/import.
+
+    NOTE: this route is registered ahead of GET /{policy_id} deliberately --
+    FastAPI matches routes in registration order, so "/export" would
+    otherwise be swallowed by the "/{policy_id}" path parameter and 404/500
+    trying to parse "export" as a policy UUID.
+
+    Deliberately omits everything that doesn't survive a move to a
+    different deployment: id, domain (re-derived from type on import
+    anyway), agent_ids (agent UUIDs are deployment-specific and won't exist
+    on the target), created_at/updated_at/created_by, and violations (a
+    live stat, not policy definition). What's left -- name, description,
+    enabled, priority, type, severity, config, match, conditions, actions,
+    compliance_tags -- is exactly PolicyUpsert's shape, so the exported file
+    can be fed straight back into POST /policies/import without any
+    reshaping on either end.
+    """
+    policy_service = PolicyService(db)
+    policies = await policy_service.get_all_policies(skip=0, limit=10000)
+
+    _allowed = get_user_domains(current_user)
+    if _allowed is not None:
+        policies = [p for p in policies if (getattr(p, "domain", None) or "general") in _allowed]
+
+    if policy_ids:
+        wanted = set(policy_ids)
+        policies = [p for p in policies if str(p.id) in wanted]
+
+    exported = []
+    for policy in policies:
+        exported.append(
+            {
+                "name": policy.name,
+                "description": policy.description,
+                "enabled": policy.enabled,
+                "priority": policy.priority,
+                "type": policy.type,
+                "severity": policy.severity,
+                "config": policy.config,
+                "match": policy.conditions.get("match", "all")
+                if isinstance(policy.conditions, dict)
+                else "all",
+                "conditions": policy.conditions.get("rules", [])
+                if isinstance(policy.conditions, dict)
+                else [],
+                "actions": [
+                    {"type": k, "parameters": v} for k, v in policy.actions.items()
+                ]
+                if isinstance(policy.actions, dict)
+                else [],
+                "compliance_tags": policy.compliance_tags or [],
+            }
+        )
+
+    await audit_log(current_user.id, "policy.export", {"count": len(exported)})
+
+    return {
+        "version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_by": current_user.email,
+        "policy_count": len(exported),
+        "policies": exported,
+    }
+
+
+class PolicyImportBundle(BaseModel):
+    version: int = 1
+    policies: List[PolicyUpsert]
+
+
+@router.post("/import")
+async def import_policies(
+    bundle: PolicyImportBundle,
+    on_conflict: Literal["skip", "rename"] = Query(
+        "skip", description="What to do when an imported policy's name already exists: skip it, or import it under a '(imported)' suffixed name"
+    ),
+    current_user: User = Depends(require_role("analyst")),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Import policies from a bundle produced by GET /policies/export.
+
+    Each policy is created independently via the same path POST /
+    (create_policy) uses -- same domain-RBAC check, same
+    transform_frontend_config_to_backend for type+config policies, same
+    duplicate-name rejection from PolicyService.create_policy -- so an
+    imported policy is indistinguishable from one authored by hand. A
+    failure on one policy (name collision, RBAC, invalid structure) does
+    NOT abort the batch; it's recorded in the response and the rest of the
+    bundle still imports. Agent scoping is deliberately dropped on import
+    (agent_id/agent_ids from the source deployment won't exist here) --
+    every imported policy applies to all agents until manually re-scoped.
+    """
+    policy_service = PolicyService(db)
+
+    created: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    for item in bundle.policies:
+        name = item.name
+
+        # Domain RBAC -- same check create_policy() enforces, applied per
+        # item so one disallowed policy doesn't sink the whole import.
+        item_domain = domain_for_policy_type(item.type)
+        if not user_can_access_domain(current_user, item_domain):
+            errors.append({"name": name, "reason": f"outside your '{item_domain}' domain access"})
+            continue
+
+        existing = await policy_service.get_policy_by_name(name)
+        if existing:
+            if on_conflict == "skip":
+                skipped.append({"name": name, "reason": "name already exists"})
+                continue
+            # rename: keep retrying with an incrementing suffix until free
+            suffix = 2
+            candidate = f"{name} (imported)"
+            while await policy_service.get_policy_by_name(candidate):
+                candidate = f"{name} (imported {suffix})"
+                suffix += 1
+            name = candidate
+
+        if item.config and item.type:
+            conditions_dict, actions_dict = transform_frontend_config_to_backend(item.type, item.config)
+        else:
+            conditions_dict = {
+                "match": item.match,
+                "rules": [cond.dict() for cond in (item.conditions or [])],
+            }
+            actions_dict = {action.type: action.parameters for action in (item.actions or [])}
+
+        try:
+            created_policy = await policy_service.create_policy(
+                name=name,
+                description=item.description,
+                conditions=conditions_dict,
+                actions=actions_dict,
+                created_by=str(current_user.id),
+                enabled=item.enabled,
+                priority=item.priority,
+                compliance_tags=item.compliance_tags,
+                type=item.type,
+                severity=item.severity,
+                config=item.config,
+                agent_ids=[],  # deliberately unscoped -- see docstring
+            )
+            created.append({"name": name, "id": str(created_policy.id)})
+        except ValueError as e:
+            errors.append({"name": name, "reason": str(e)})
+
+    if created:
+        await invalidate_policy_bundle_cache()
+    await audit_log(
+        current_user.id,
+        "policy.import",
+        {"created": len(created), "skipped": len(skipped), "errors": len(errors)},
+    )
+
+    return {
+        "created": created,
+        "skipped": skipped,
+        "errors": errors,
+        "summary": f"{len(created)} created, {len(skipped)} skipped, {len(errors)} failed",
+    }
+
+
 @router.get("/{policy_id}")
 async def get_policy(
     policy_id: str,

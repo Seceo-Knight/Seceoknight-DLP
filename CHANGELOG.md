@@ -8,6 +8,25 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📤 CyberSentinel Parity: Policy Import/Export (August 4, 2026)
+
+### Summary
+
+Third of the CyberSentinel-parity batch. Policies can now be exported to a portable JSON file and imported into any other SeceoKnight deployment -- useful for promoting a tested policy set from staging to production, sharing a starter policy pack across customers, or just backing up policy configuration outside the database.
+
+### What's new
+
+- **Server**: `GET /policies/export` returns a JSON bundle (`{version, exported_at, exported_by, policy_count, policies: [...]}`) built from the same domain-scoped RBAC filtering `GET /policies/` already applies, so a domain admin can only export what they can already see. Each exported policy is stripped down to exactly `PolicyUpsert`'s shape (name, description, enabled, priority, type, severity, config, match, conditions, actions, compliance_tags) -- deliberately omitting id, domain, agent_ids, timestamps, and created_by, none of which are meaningful on a different deployment.
+- `POST /policies/import` accepts that same bundle shape and creates each policy independently through the exact same path `POST /policies/` (create_policy) uses -- same domain-RBAC check per item, same `transform_frontend_config_to_backend` for type+config policies. One policy failing (name collision, RBAC, invalid structure) doesn't abort the batch -- every outcome (created/skipped/errored) is collected and returned as a per-policy summary. A `?on_conflict=skip|rename` query param controls what happens when an imported name already exists; `rename` finds a free `"<name> (imported)"` / `"<name> (imported 2)"` slot rather than overwriting. Agent scoping is deliberately dropped on import (source agent UUIDs won't exist on the target) -- imported policies apply to all agents until manually re-scoped.
+- Both routes are registered ahead of the existing `GET /{policy_id}` in `policies.py` -- FastAPI matches routes in registration order, so `/export` needed to come first or it would have been swallowed by the `{policy_id}` path parameter and thrown trying to parse "export" as a UUID.
+- **Dashboard**: new Export/Import buttons on the Policies page toolbar. `ExportPoliciesModal.tsx` lists every visible policy with checkboxes (select-all default) and downloads the result as `seceoknight-policies-<date>.json` via the same blob/`createObjectURL` pattern the Reports page already uses for PDF/CSV downloads. `ImportPoliciesModal.tsx` accepts a `.json` file, parses and previews the policy names client-side before committing, surfaces the skip/rename choice, and displays the created/skipped/failed breakdown from the server's response after import.
+
+### Verification
+
+`python3 -c "import ast; ast.parse(...)"` clean on `policies.py`. Ran the project's own `tsc --noEmit` before and after -- identical error count (42), and confirmed via `grep` that none of the pre-existing errors are in any of the newly touched files (`ExportPoliciesModal.tsx`, `ImportPoliciesModal.tsx`, `Policies.tsx`, `lib/api.ts`). Not yet exercised end-to-end against a running server (export a real policy set, import into a second deployment, confirm it lands correctly) -- recommend testing that round-trip before relying on it for a real staging-to-production promotion.
+
+---
+
 ## 🚫 CyberSentinel Parity: File Identity Denylist Policy Type (August 4, 2026)
 
 ### Summary
