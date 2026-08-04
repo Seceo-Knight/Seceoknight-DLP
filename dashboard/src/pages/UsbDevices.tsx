@@ -9,6 +9,8 @@ import {
   listDevices, seenDevices, approveDevice, updateDevice, revokeDevice, setUsbEnforcement, deviceActivity,
   type SanctionedDevice, type SeenDevice, type DeviceActivityEvent,
 } from '@/lib/usb-devices-api'
+import { usePagination } from '@/lib/hooks/useTableState'
+import { DataPagination } from '@/components/ui/pagination'
 
 // Ported from the CyberSentinel-DLP reference project (see
 // SECEOKNIGHT_VS_CYBERSENTINEL_COMPARISON.md). Strict allowlist: when
@@ -42,14 +44,26 @@ export default function UsbDevices() {
     onError: (e: any) => toast.error(extractErrorDetail(e, 'Failed to update enforcement')),
   })
 
+  // These three usePagination calls must run unconditionally on every
+  // render, before the isLoading/error early returns below -- calling
+  // hooks after a conditional return would change the number of hooks
+  // invoked between the loading render and the loaded render, which
+  // violates React's rules of hooks. Falls back to empty arrays while
+  // devicesQ/seenQ haven't resolved yet.
+  const allDevices = devicesQ.data?.devices || []
+  const sanctioned = allDevices.filter((d) => d.decision !== 'deny')
+  const disallowed = allDevices.filter((d) => d.decision === 'deny')
+  const seenDevicesList = seenQ.data?.devices || []
+
+  const sanctionedPg = usePagination(sanctioned, 25)
+  const disallowedPg = usePagination(disallowed, 25)
+  const seenPg = usePagination(seenDevicesList, 25)
+
   if (devicesQ.isLoading) return <LoadingSpinner size="lg" />
   if (devicesQ.error) return <ErrorMessage message="Failed to load USB devices" retry={() => devicesQ.refetch()} />
 
   const enforced = devicesQ.data?.enforced
   const mode = devicesQ.data?.mode || 'off'
-  const allDevices = devicesQ.data?.devices || []
-  const sanctioned = allDevices.filter((d) => d.decision !== 'deny')
-  const disallowed = allDevices.filter((d) => d.decision === 'deny')
 
   return (
     <div className="space-y-6">
@@ -110,11 +124,20 @@ export default function UsbDevices() {
         {sanctioned.length === 0 ? (
           <Empty text="No devices approved yet. Approve one by serial above, or from the seen list below." />
         ) : (
-          <Table headers={['', 'Serial', 'Alias', 'Device', 'VID:PID', 'Status', 'Approved', '']}>
-            {sanctioned.map((d) => (
-              <SanctionedRow key={d.id} d={d} onChange={invalidate} onHistory={() => setHistorySerial(d.serial_number)} />
-            ))}
-          </Table>
+          <>
+            <Table headers={['', 'Serial', 'Alias', 'Device', 'VID:PID', 'Status', 'Approved', '']}>
+              {sanctionedPg.pageRows.map((d) => (
+                <SanctionedRow key={d.id} d={d} onChange={invalidate} onHistory={() => setHistorySerial(d.serial_number)} />
+              ))}
+            </Table>
+            <DataPagination
+              page={sanctionedPg.page}
+              pageSize={sanctionedPg.pageSize}
+              total={sanctioned.length}
+              onPageChange={sanctionedPg.setPage}
+              onPageSizeChange={sanctionedPg.setPageSize}
+            />
+          </>
         )}
       </Section>
 
@@ -127,11 +150,20 @@ export default function UsbDevices() {
         {disallowed.length === 0 ? (
           <Empty text="No devices disallowed. Deny one from the Seen list below, or by serial above." />
         ) : (
-          <Table headers={['', 'Serial', 'Alias', 'Device', 'VID:PID', 'Status', 'Denied', '']}>
-            {disallowed.map((d) => (
-              <SanctionedRow key={d.id} d={d} onChange={invalidate} onHistory={() => setHistorySerial(d.serial_number)} />
-            ))}
-          </Table>
+          <>
+            <Table headers={['', 'Serial', 'Alias', 'Device', 'VID:PID', 'Status', 'Denied', '']}>
+              {disallowedPg.pageRows.map((d) => (
+                <SanctionedRow key={d.id} d={d} onChange={invalidate} onHistory={() => setHistorySerial(d.serial_number)} />
+              ))}
+            </Table>
+            <DataPagination
+              page={disallowedPg.page}
+              pageSize={disallowedPg.pageSize}
+              total={disallowed.length}
+              onPageChange={disallowedPg.setPage}
+              onPageSizeChange={disallowedPg.setPageSize}
+            />
+          </>
         )}
       </Section>
 
@@ -143,14 +175,23 @@ export default function UsbDevices() {
       >
         {seenQ.isLoading ? (
           <LoadingSpinner />
-        ) : (seenQ.data?.devices.length || 0) === 0 ? (
+        ) : seenDevicesList.length === 0 ? (
           <Empty text="No unsanctioned devices have been seen." />
         ) : (
-          <Table headers={['', 'Serial', 'Device', 'VID:PID', 'Last seen', 'Agent', '']}>
-            {seenQ.data!.devices.map((s) => (
-              <SeenRow key={s.serial_number} s={s} onApproved={invalidate} onHistory={() => setHistorySerial(s.serial_number)} />
-            ))}
-          </Table>
+          <>
+            <Table headers={['', 'Serial', 'Device', 'VID:PID', 'Last seen', 'Agent', '']}>
+              {seenPg.pageRows.map((s) => (
+                <SeenRow key={s.serial_number} s={s} onApproved={invalidate} onHistory={() => setHistorySerial(s.serial_number)} />
+              ))}
+            </Table>
+            <DataPagination
+              page={seenPg.page}
+              pageSize={seenPg.pageSize}
+              total={seenDevicesList.length}
+              onPageChange={seenPg.setPage}
+              onPageSizeChange={seenPg.setPageSize}
+            />
+          </>
         )}
       </Section>
 

@@ -8,6 +8,8 @@ import RuleModal from '@/components/rules/RuleModal'
 import RuleTestModal from '@/components/rules/RuleTestModal'
 import { getRules, getRuleStatistics, deleteRule, toggleRule, type Rule } from '@/lib/rules-api'
 import { formatRelativeTime, cn } from '@/lib/utils'
+import { usePagination } from '@/lib/hooks/useTableState'
+import { DataPagination } from '@/components/ui/pagination'
 import toast from 'react-hot-toast'
 
 type FilterType = 'all' | 'regex' | 'keyword' | 'dictionary'
@@ -93,6 +95,8 @@ export default function Rules() {
       rule.type.toLowerCase().includes(query)
     )
   })
+
+  const { page, pageSize, pageRows, setPage, setPageSize } = usePagination(filteredRules || [], 25)
 
   if (isLoading) {
     return <LoadingSpinner size="lg" />
@@ -247,7 +251,7 @@ export default function Rules() {
                   </td>
                 </tr>
               ) : (
-                filteredRules?.map((rule) => (
+                pageRows.map((rule) => (
                   <tr key={rule.id} className="hover:bg-accent">
                     <td>
                       <button
@@ -355,6 +359,15 @@ export default function Rules() {
             </tbody>
           </table>
         </div>
+        {(filteredRules?.length || 0) > 0 && (
+          <DataPagination
+            page={page}
+            pageSize={pageSize}
+            total={filteredRules?.length || 0}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
+        )}
       </div>
 
       {/* Modals */}

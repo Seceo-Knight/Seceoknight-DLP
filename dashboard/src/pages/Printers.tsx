@@ -9,6 +9,8 @@ import {
   listPrinters, approvePrinter, updatePrinter, revokePrinter, setPrinterEnforcement,
   type SanctionedPrinter,
 } from '@/lib/printers-api'
+import { usePagination } from '@/lib/hooks/useTableState'
+import { DataPagination } from '@/components/ui/pagination'
 
 // Ported from the CyberSentinel-DLP reference project. NOTE: the Windows
 // agent doesn't monitor print jobs yet, so this page manages the allowlist
@@ -28,6 +30,11 @@ export default function Printers() {
     onSuccess: (r) => { invalidate(); toast.success(r.enforced ? 'Allowlist marked as enforced' : 'Allowlist marked as not enforced') },
     onError: (e: any) => toast.error(extractErrorDetail(e, 'Failed to update enforcement')),
   })
+
+  // Must run before the isLoading/error early returns -- see the same note
+  // in UsbDevices.tsx (hooks can't be called conditionally).
+  const printersList = printersQ.data?.printers || []
+  const printersPg = usePagination(printersList, 25)
 
   if (printersQ.isLoading) return <LoadingSpinner size="lg" />
   if (printersQ.error) return <ErrorMessage message="Failed to load printers" retry={() => printersQ.refetch()} />
@@ -89,14 +96,23 @@ export default function Printers() {
       <ApproveForm onDone={invalidate} />
 
       <Section title="Sanctioned printers" count={printersQ.data?.count || 0}>
-        {(printersQ.data?.printers.length || 0) === 0 ? (
+        {printersList.length === 0 ? (
           <Empty text="No printers approved yet. Approve one by name above." />
         ) : (
-          <Table headers={['Printer', 'Label', 'Type', 'Status', 'Approved', '']}>
-            {printersQ.data!.printers.map((p) => (
-              <SanctionedRow key={p.id} p={p} onChange={invalidate} />
-            ))}
-          </Table>
+          <>
+            <Table headers={['Printer', 'Label', 'Type', 'Status', 'Approved', '']}>
+              {printersPg.pageRows.map((p) => (
+                <SanctionedRow key={p.id} p={p} onChange={invalidate} />
+              ))}
+            </Table>
+            <DataPagination
+              page={printersPg.page}
+              pageSize={printersPg.pageSize}
+              total={printersList.length}
+              onPageChange={printersPg.setPage}
+              onPageSizeChange={printersPg.setPageSize}
+            />
+          </>
         )}
       </Section>
     </div>

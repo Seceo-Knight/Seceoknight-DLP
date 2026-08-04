@@ -7,6 +7,8 @@ import {
   getSharingConfig, updateSharingConfig,
   type IOC, type TaxiiFeed, type IocStats, type SharingConfig,
 } from '@/lib/api'
+import { usePagination } from '@/lib/hooks/useTableState'
+import { DataPagination } from '@/components/ui/pagination'
 
 const IOC_TYPES = ['ipv4', 'ipv6', 'domain', 'url', 'email', 'file_sha256', 'file_sha1', 'file_md5']
 const TLPS = ['white', 'green', 'amber', 'red']
@@ -54,6 +56,8 @@ export default function ThreatIntelligence() {
   useEffect(() => { load() }, [])
 
   const shareUrl = sharing ? `${window.location.origin}${sharing.taxii_path}` : ''
+
+  const iocsPg = usePagination(iocs, 25)
 
   const handleSaveSharing = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -330,7 +334,7 @@ export default function ThreatIntelligence() {
                 <th className="py-2 w-10"></th>
               </tr></thead>
               <tbody>
-                {iocs.map((i) => (
+                {iocsPg.pageRows.map((i) => (
                   <tr key={i.id} className="border-b border-cs-hair-2 last:border-0">
                     <td className="py-2 pr-4 text-cs-ink-2">{i.ioc_type}</td>
                     <td className="py-2 pr-4 num text-cs-ink break-all">{i.value}</td>
@@ -352,6 +356,13 @@ export default function ThreatIntelligence() {
                 ))}
               </tbody>
             </table>
+            <DataPagination
+              page={iocsPg.page}
+              pageSize={iocsPg.pageSize}
+              total={iocs.length}
+              onPageChange={iocsPg.setPage}
+              onPageSizeChange={iocsPg.setPageSize}
+            />
           </div>
         )}
       </div>

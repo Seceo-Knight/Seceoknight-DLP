@@ -6,6 +6,8 @@ import ErrorMessage from '@/components/ErrorMessage'
 import AlertDetailsModal from '@/components/alerts/AlertDetailsModal'
 import { getAlerts } from '@/lib/api'
 import { formatRelativeTime, getSeverityColor, cn } from '@/lib/utils'
+import { usePagination } from '@/lib/hooks/useTableState'
+import { DataPagination } from '@/components/ui/pagination'
 
 type FilterType = 'all' | 'high' | 'critical'
 
@@ -26,18 +28,15 @@ export default function Alerts() {
     setIsModalOpen(true)
   }
 
-  if (isLoading) {
-    return <LoadingSpinner size="lg" />
-  }
-
-  if (error) {
-    return <ErrorMessage message="Failed to load alerts" retry={() => refetch()} />
-  }
-
-  // Handle both old format (array) and new format (object with alerts and counts)
+  // Handle both old format (array) and new format (object with alerts and counts).
+  // This whole derivation -- including usePagination -- has to run
+  // unconditionally on every render, before the isLoading/error early
+  // returns below, since hooks can't be called conditionally. alertsData
+  // is simply undefined while loading, which every branch here already
+  // guards for.
   let alerts: any[] = []
   let counts: Record<string, number> = {}
-  
+
   if (!alertsData) {
     // No data - use empty arrays
     alerts = []
@@ -53,12 +52,12 @@ export default function Alerts() {
       counts = alertsData.counts
     }
   }
-  
+
   // Ensure alerts is always an array
   if (!Array.isArray(alerts)) {
     alerts = []
   }
-  
+
   // Calculate alert counts by type
   const totalAlertsCount = typeof counts.total === 'number' ? counts.total : alerts.length
   const highAlertsCount = alerts.filter((a) => a && a.severity === 'high').length
@@ -85,6 +84,20 @@ export default function Alerts() {
 
     return true
   })
+
+  // Client-side pagination over the filtered list -- getAlerts() has no
+  // server-side skip/limit, so the full set is already in memory; this
+  // just windows what's rendered instead of dumping every alert into the
+  // DOM at once (the "list pages render everything unpaginated" gap).
+  const { page, pageSize, pageRows, setPage, setPageSize } = usePagination(filteredAlerts, 25)
+
+  if (isLoading) {
+    return <LoadingSpinner size="lg" />
+  }
+
+  if (error) {
+    return <ErrorMessage message="Failed to load alerts" retry={() => refetch()} />
+  }
 
   return (
     <div className="space-y-6">
@@ -188,7 +201,7 @@ export default function Alerts() {
               </p>
             </div>
           ) : (
-            filteredAlerts.map((alert) => (
+            pageRows.map((alert) => (
               <div
                 key={alert.id}
                 className="p-4 hover:bg-accent cursor-pointer transition-colors"
@@ -239,6 +252,15 @@ export default function Alerts() {
             ))
           )}
         </div>
+        {filteredAlerts.length > 0 && (
+          <DataPagination
+            page={page}
+            pageSize={pageSize}
+            total={filteredAlerts.length}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
+        )}
       </div>
 
       {/* Alert Details Modal */}

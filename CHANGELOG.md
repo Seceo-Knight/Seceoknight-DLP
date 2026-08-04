@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📄 CyberSentinel Parity: Pagination on List Pages (August 4, 2026)
+
+### Summary
+
+Fourth of the CyberSentinel-parity batch. Six dashboard pages that rendered their entire result set into the DOM at once -- Alerts, Agents, Rules, USB Devices, Printers, Threat Intelligence (Indicators) -- now paginate, so a deployment with hundreds/thousands of rows doesn't dump them all into one unbounded table.
+
+### What was actually needed (less than expected)
+
+Before writing anything new, checked whether a shared pagination component already existed -- it did. `usePagination<T>()` (`src/lib/hooks/useTableState.ts`) and `<DataPagination>` (`src/components/ui/pagination.tsx`) already back the Events page's table, doing client-side windowing (slice the already-fetched array by page) with a "showing X-Y of Z" footer, rows-per-page selector, and first/prev/next/last controls. The task was reuse, not rebuild: wire that existing pair into the six pages that were rendering `filteredX.map(...)` directly with no windowing at all.
+
+### What changed
+
+- **Alerts.tsx, Agents.tsx, Rules.tsx**: each already computed a filtered array (`filteredAlerts`, `filteredAgents`, `filteredRules`) before rendering a `.map()` over it directly. Swapped the render to `usePagination(filtered, 25).pageRows.map(...)` and added a `<DataPagination>` footer below each table.
+- **UsbDevices.tsx**: three independent lists on one page (Sanctioned, Disallowed, Seen-but-unsanctioned) -- each gets its own `usePagination` instance and footer, since they're logically separate tables that happen to share a page.
+- **Printers.tsx**: same treatment for the single Sanctioned Printers table.
+- **ThreatIntelligence.tsx**: paginated the Indicators (IOCs) table specifically -- left Recent Matches and TAXII Feeds unpaginated since those lists are inherently bounded (recent activity window / configured feed count), not something that grows toward hundreds of rows.
+- **Real bug caught and fixed while wiring this in**: on Alerts.tsx, Agents.tsx, and Printers.tsx/UsbDevices.tsx, the natural place to add `usePagination()` was right before the JSX return -- but all of these components have an `if (isLoading) return <LoadingSpinner />` / `if (error) return <ErrorMessage />` earlier in the function body. A hook call placed after a conditional early return only executes on some renders (skipped during the loading render, executed once data arrives), which violates React's rules of hooks and can corrupt hook state across re-renders. Moved each `usePagination()` call (and the array derivation it depends on) above the early returns instead, relying on the existing `Array.isArray(...) ? ... : []` / `data?.field || []` guards that were already there to handle the `undefined`-while-loading case safely.
+
+### Verification
+
+Ran the project's own `tsc --noEmit` before and after this change -- identical error count (42), and confirmed via `grep` that none of the pre-existing errors are in any of the six touched page files or the pagination utilities. Manually traced the hook-ordering fix in each of the four affected files to confirm `usePagination()` now runs unconditionally on every render path (loading, error, and loaded). Not yet exercised in a running browser against a real large dataset (confirm page-size selector, first/last buttons, and the "showing X-Y of Z" count all render correctly against several hundred real rows) -- worth a quick visual check before considering this fully done.
+
+---
+
 ## 📤 CyberSentinel Parity: Policy Import/Export (August 4, 2026)
 
 ### Summary

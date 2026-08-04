@@ -13,6 +13,8 @@ import {
   type Agent,
 } from '@/lib/api'
 import { formatRelativeTime } from '@/lib/utils'
+import { usePagination } from '@/lib/hooks/useTableState'
+import { DataPagination } from '@/components/ui/pagination'
 
 type LifecycleTier = 'active' | 'disconnected' | 'inactive' | 'stale'
 type FilterType = 'all' | LifecycleTier
@@ -156,19 +158,11 @@ export default function Agents() {
     },
   })
 
-  if (isLoading) {
-    return <LoadingSpinner size="lg" />
-  }
-
-  if (error) {
-    return (
-      <ErrorMessage
-        message="Failed to load agents"
-        retry={() => refetch()}
-      />
-    )
-  }
-
+  // This whole derivation -- including usePagination -- has to run
+  // unconditionally on every render, before the isLoading/error early
+  // returns below, since hooks can't be called conditionally. `agents` is
+  // simply undefined while loading, which the Array.isArray guard here
+  // already handles.
   const list: Agent[] = Array.isArray(agents) ? agents : []
 
   const counts: Record<LifecycleTier, number> = {
@@ -185,6 +179,21 @@ export default function Agents() {
     if (filter === 'all') return true
     return resolveTier(agent) === filter
   })
+
+  const { page, pageSize, pageRows, setPage, setPageSize } = usePagination(filteredAgents, 25)
+
+  if (isLoading) {
+    return <LoadingSpinner size="lg" />
+  }
+
+  if (error) {
+    return (
+      <ErrorMessage
+        message="Failed to load agents"
+        retry={() => refetch()}
+      />
+    )
+  }
 
   const handleAgentClick = (agentId: string) => {
     navigate(`/events?agent=${agentId}`)
@@ -311,7 +320,7 @@ export default function Agents() {
                   </td>
                 </tr>
               ) : (
-                filteredAgents.map((agent) => {
+                pageRows.map((agent) => {
                   const tier = resolveTier(agent)
                   const badge = TIER_BADGE[tier]
                   return (
@@ -431,6 +440,15 @@ export default function Agents() {
             </tbody>
           </table>
         </div>
+        {filteredAgents.length > 0 && (
+          <DataPagination
+            page={page}
+            pageSize={pageSize}
+            total={filteredAgents.length}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
+        )}
       </div>
 
       {/* Cleanup-stale modal — admin sweeps agents not seen for >N days */}
