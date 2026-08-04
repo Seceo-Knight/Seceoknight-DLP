@@ -8,6 +8,35 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛠️ CyberSentinel Parity: Consolidated Windows Management Script (August 4, 2026)
+
+### Summary
+
+Sixth and last of the CyberSentinel-parity batch. Added `manage-agent.ps1` at the repo root -- a single entry point for Install / Update / Uninstall on a Windows endpoint, with a live status readout (running/stopped/broken/not installed, recent log errors, whether a newer build is published) shown before every action.
+
+### Why not a straight port
+
+The CyberSentinel reference project has an equivalent `manage-windows-agent.ps1`, but porting it as-is would have reintroduced a bug this project already fixed once and silently dropped a feature this project already has:
+
+- Its uninstall function stops the process, removes the scheduled task, and deletes the install/data directories -- but never calls any server-side unregister endpoint first. That's exactly the "duplicate/ghost agent" bug fixed earlier in this project (see the "Fix 1: uninstall/reinstall calls unregister endpoint" entry below): once the agent's key file is deleted, nothing can ever tell the server the device is gone, and it lingers in the Agents view permanently.
+- It only knows about one scheduled task. SeceoKnight's installer registers three (`SeceoKnight DLP Agent`, `SeceoKnight DLP Watchdog`, `SeceoKnight DLP USB Block`) -- a single-task uninstall would leave two of them orphaned on the machine.
+
+`manage-agent.ps1` was written fresh against SeceoKnight's actual install layout instead, reusing the same unregister-before-delete pattern install-agent.ps1 already uses on reinstall, and removing all three tasks by name.
+
+### What it does
+
+- **Self-elevates** to Administrator (same pattern as the reference script), then detects whatever's actually on the machine: install dir, binary, process, all three scheduled tasks, and reads `agent_config.json`/`agent_key.json` for server URL / agent ID / agent name.
+- **Status**: prints a health verdict (RUNNING / STOPPED but autostart configured / BROKEN - no autostart task / RUNNING but binary missing / NOT INSTALLED), whether the watchdog and USB-block tasks are present, the last 80 log lines scanned for error/critical/fatal/exception/traceback, and whether a newer build is published (SHA-256 sidecar comparison against the currently installed binary's hash).
+- **[1] Install**: delegates to `install-agent.ps1` (downloads and runs it) rather than re-implementing OCR dependency setup, integrity verification, and scheduled-task creation a second time in this file -- avoids two copies of that logic drifting apart.
+- **[2] Update**: binary-only swap. Downloads the latest exe, verifies its SHA-256 against the published sidecar (same verify-or-refuse logic as the installer), stops the task/process, replaces the file, restarts the task. Config and scheduled tasks are left untouched.
+- **[3] Uninstall**: single `y` confirmation, then unregisters the agent identity from the server (best-effort, using the stored `agent_key.json`), kills the process, removes all three scheduled tasks, deletes both directories, and clears the machine-wide `SECEOKNIGHT_SERVER_URL` env var.
+
+### Verification
+
+No PowerShell interpreter was available in the sandbox this was written in (network-restricted, no package manager access), so this could not be run end-to-end. Verified structurally instead: a custom brace/paren/bracket balance checker (Python, aware of PowerShell single/double-quoted strings, `#` comments, and `@"..."@`/`@'...'@` here-strings) confirms no unclosed or mismatched delimiters. Manually cross-checked every constant (`$INSTALL_DIR`, `$EXE_NAME`, `$TASK_NAME`, the three task names, the config/key file names) against the exact values `install-agent.ps1` uses, and confirmed the unregister call matches the real `DELETE /agents/{id}/unregister` endpoint (`server/app/api/v1/agents.py`) and its `X-Agent-Key` header convention. **Not yet run on a real Windows endpoint** -- worth a supervised dry run (Status only, then Update on a disposable test VM) before relying on it for a production Uninstall.
+
+---
+
 ## 🧩 CyberSentinel Parity: Incident Coalescing (August 4, 2026)
 
 ### Summary
