@@ -8,6 +8,29 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🚨 Windows Agent: Startup Baseline Scan Was Blocking ALL Monitoring (August 4, 2026)
+
+### Summary
+
+On a fresh install/reinstall (or the first time file policies become active), the Windows agent ran its existing-file baseline scan synchronously on the main thread, before spawning any monitor thread. A monitored folder with a large number of files -- confirmed on a real endpoint with a folder full of ICU/CLDR locale `.dat` files under Documents/Desktop/Downloads -- could keep this scan running for a long time, during which clipboard, USB, file-system, and every other monitor were simply not running yet. Symptom reported: agent process alive, log flooding with "Stored baseline for existing file: ..." lines, and a clipboard copy on the same machine produced no event at all.
+
+### Root cause
+
+`ScanAndStoreExistingFiles()` was called directly in `Start()`, right after the initial policy sync and before the block that spawns `workerThreads` (`HeartbeatLoop`, `ClipboardMonitor`, `UsbMonitor`, `FileSystemMonitor`, etc.). Since `ClipboardMonitor`'s thread object didn't exist yet, there was nothing to detect the clipboard event with -- the agent wasn't failing or dropping the event, it just hadn't started monitoring at all. A second call site in `PolicySyncLoop()` (fired when file policies newly become active mid-run) had the same synchronous-call pattern, which would stall that loop's next sync cycle for the scan's duration.
+
+### Fix
+
+- `Start()`: the baseline scan is now spawned as its own thread (`workerThreads.emplace_back(&DLPAgent::ScanAndStoreExistingFiles, this)`), added to `workerThreads` **after** every other monitor thread is already spawned -- so clipboard/USB/file-system/etc. are live immediately, and the baseline scan proceeds concurrently in the background instead of gating them.
+- `PolicySyncLoop()`: same call replaced with a detached `std::thread(&DLPAgent::ScanAndStoreExistingFiles, this).detach()`, since this call happens from within a worker thread (not the main thread) where pushing into the shared `workerThreads` vector would race with a shutdown-time `Stop()` iterating/clearing it.
+- `ScanAndStoreExistingFiles()` now checks the `running` flag at the top of both its per-directory and per-file loops and bails out early if the agent is shutting down -- bounds how long a huge folder can keep a scan thread alive after `Stop()` is called (relevant for the detached case, since nothing explicitly joins it) to roughly one file's worth of I/O instead of the entire remaining scan.
+- No locking changes were needed: `ScanAndStoreExistingFiles()` already takes `policiesMutex` and `originalContentsMutex` around every read/write of the shared directory list and content map, so running it concurrently with the other monitors (which touch the same state) was already safe.
+
+### Verification
+
+No C++ compiler available in the sandbox this was written in. Verified with the same brace-balance script used earlier in this project (character-by-character walk skipping string/char literals and `//`/`/* */` comments): the edited `agent.cpp` reports the identical depth (-5) as a fresh clone of the pre-change file, confirming no new brace imbalance was introduced by these edits. Traced both call sites and the `Stop()`/join logic by hand to confirm `workerThreads.emplace_back` from `Start()` (main thread, before any worker thread exists yet) is safe, while the `PolicySyncLoop()` call site deliberately avoids the same pattern since it runs concurrently with a possible `Stop()`. **Not yet run on a real Windows endpoint** -- this needs `build-windows-agent.yml` to produce a new binary and a real reinstall/policy-toggle test (large monitored folder + immediate clipboard copy) before considering this closed.
+
+---
+
 ## 🔧 CI Fix: Linux Agent Build Workflow Failing on Every Run (August 4, 2026)
 
 ### Summary

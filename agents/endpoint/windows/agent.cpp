@@ -3560,11 +3560,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          
          logger.Info("Fetching initial policies...");
          SyncPolicies(true);
-         if (allowEvents && hasFilePolices) {
-            logger.Info("Scanning existing files to establish baselines...");
-            ScanAndStoreExistingFiles();
-        }
-         
+
          if (!allowEvents) {
              logger.Warning("==============================================");
              logger.Warning("WARNING: No active policies found!");
@@ -3625,6 +3621,28 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
         // workerThreads.emplace_back(&DLPAgent::RemovableDriveMonitor, this);
          workerThreads.emplace_back(&DLPAgent::UsbFileTransferMonitor, this);
          workerThreads.emplace_back(&DLPAgent::MonitorUSBTransferDirectories, this);
+
+         // File-existence baseline scan runs on its OWN thread, started
+         // LAST (after every other monitor thread above is already live).
+         // It used to run synchronously right here in Start(), before any
+         // worker thread existed -- on an endpoint with a large monitored
+         // folder (thousands of small files under Documents/Desktop/
+         // Downloads, e.g. a portable app or extracted archive) that scan
+         // could take minutes, and for that whole time NOTHING was
+         // monitored: no clipboard, no USB, no file-system watch, nothing.
+         // Real-world symptom: a fresh install/reinstall sat there logging
+         // "Stored baseline for existing file" for one file at a time while
+         // a clipboard copy on the same machine produced no event at all,
+         // because ClipboardMonitor's thread hadn't even been created yet.
+         // ScanAndStoreExistingFiles() already takes policiesMutex and
+         // originalContentsMutex around every read/write of shared state,
+         // so running it concurrently with the monitors above (which touch
+         // the same maps) is safe -- this is purely a "start it later,
+         // not first" fix, not a locking change.
+         if (allowEvents && hasFilePolices) {
+             logger.Info("Scanning existing files to establish baselines (background - other monitoring is already active)...");
+             workerThreads.emplace_back(&DLPAgent::ScanAndStoreExistingFiles, this);
+         }
 
          // ── Screen Capture Monitor ──
          // Multi-method text extraction + classification:
@@ -5313,10 +5331,20 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 bool hadPoliciesBefore = hasFilePolices;
                 SyncPolicies();
                 
-                // If file policies were just enabled, scan existing files
+                // If file policies were just enabled, scan existing files.
+                // Same reasoning as the startup scan (see Start()): run it on
+                // its own thread rather than inline here, so a large
+                // monitored folder doesn't delay this loop's NEXT policy
+                // sync (or any other worker thread) for however long the
+                // scan takes. Detached rather than tracked in workerThreads
+                // because this call happens FROM a worker thread (not the
+                // main thread), and workerThreads is only ever mutated from
+                // Start() (main thread, before Stop() can run) or Stop()
+                // itself -- pushing into it concurrently from here would
+                // race with a shutdown-time Stop() iterating/clearing it.
                 if (!hadPoliciesBefore && hasFilePolices) {
-                    logger.Info("File policies now active - scanning existing files...");
-                    ScanAndStoreExistingFiles();
+                    logger.Info("File policies now active - scanning existing files (background)...");
+                    std::thread(&DLPAgent::ScanAndStoreExistingFiles, this).detach();
                 }
             } catch (...) {
                 logger.Debug("Policy sync loop error");
@@ -7568,18 +7596,28 @@ if (shouldMonitor) {
         int filesStored = 0;
         
         for (const auto& dir : dirsToScan) {
+            // Now that this runs on a background thread (see the two call
+            // sites in Start()/PolicySyncLoop()), a shutdown mid-scan needs
+            // a way to actually stop -- otherwise a huge monitored folder
+            // means either Stop()'s join() blocks on it (call site #1) or,
+            // worse, a detached scan thread (call site #2) keeps touching
+            // `this` after the DLPAgent object is destroyed. Bailing out
+            // per-directory and per-file on `running` going false bounds
+            // that window to roughly one file's worth of I/O.
+            if (!running) break;
             try {
                 if (!fs::exists(dir)) {
                     logger.Warning("Directory does not exist: " + dir);
                     continue;
                 }
-                
+
                 logger.Info("Scanning directory: " + dir);
-                
+
                 for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+                    if (!running) break;
                     try {
                         if (!entry.is_regular_file()) continue;
-                        
+
                         std::string filePath = entry.path().string();
                         filesScanned++;
                         
