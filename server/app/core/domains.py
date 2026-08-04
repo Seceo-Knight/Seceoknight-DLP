@@ -49,6 +49,11 @@ POLICY_TYPE_DOMAIN = {
     "google_drive_cloud_monitoring": PolicyDomain.DATA_PROTECTION,
     "onedrive_cloud_monitoring": PolicyDomain.DATA_PROTECTION,
     "classification_aware_policy": PolicyDomain.DATA_PROTECTION,
+    # Identity-based (extension/hash) denylist -- content-independent, but
+    # grouped with file_system/file_transfer since it's authored and
+    # reasoned about the same way (a file-handling control), even though it
+    # can also match print/USB events that carry a file_path or file_hash.
+    "file_identity_denylist": PolicyDomain.DATA_PROTECTION,
     # Access Control — device authorization (future-facing types)
     "usb_device_authorization": PolicyDomain.ACCESS_CONTROL,
     "device_access": PolicyDomain.ACCESS_CONTROL,

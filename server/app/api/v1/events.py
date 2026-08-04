@@ -586,7 +586,14 @@ def _build_processor_payload(event: EventCreate) -> Dict[str, Any]:
         payload.setdefault("file", {})["path"] = event.file_path
     if event.file_hash:
         payload["file_hash"] = event.file_hash
-        payload.setdefault("file", {})["hash"] = event.file_hash
+        # Nested as {"sha256": ...}, matching the shape EventProcessor's own
+        # _enrich_file_event() uses when it derives a hash from raw content
+        # (file_info.setdefault("hash", {})["sha256"] = ...). Setting it here
+        # ahead of time also means that content-based fallback is skipped for
+        # events that already carry an agent-computed hash, rather than two
+        # different "file.hash" shapes (a flat string here vs. a dict there)
+        # existing depending on which code path set it.
+        payload.setdefault("file", {})["hash"] = {"sha256": event.file_hash}
     if event.source_path or event.file_path:
         source_path = event.source_path or event.file_path
         payload["source_path"] = source_path

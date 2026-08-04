@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🚫 CyberSentinel Parity: File Identity Denylist Policy Type (August 4, 2026)
+
+### Summary
+
+Second of the CyberSentinel-parity batch. New policy type that blocks files by *what they are* -- a known-bad extension (`.exe`, `.bat`, ...) or an exact SHA-256 hash -- independent of DLP content classification, the same way an antivirus denylist works. Applies to any event carrying a file path or hash: file system, file transfer, USB transfer, and print (now that print events carry a hash, per the previous entry).
+
+### Why this needed almost no new matching code
+
+`DatabasePolicyEvaluator` (`server/app/policies/database_policy_evaluator.py`) is already a generic field/operator/value rule engine, not a set of hardcoded per-policy-type handlers -- a condition like `{"field": "file_hash", "operator": "in", "value": [...]}` is evaluated the same way as every other policy's rules. The only gap was that `file_hash` wasn't in `_extract_field_value`'s field-mapping table, so a rule referencing it could never resolve to anything. Added `"file_hash": ["file.hash.sha256", "file_hash"]` to close that gap -- `file_extension` was already mapped and already auto-derived from `file.path` by `EventProcessor._enrich_file_event()`.
+
+Also caught and fixed a shape mismatch introduced by the previous entry: `_build_processor_payload()` had set `payload["file"]["hash"]` as a flat string, but `EventProcessor._enrich_file_event()`'s own content-based hash fallback expects `file.hash` to be a dict (`{"sha256": "..."}`) -- left as a flat string, that fallback's `file_info.setdefault("hash", {})["sha256"] = ...` would have raised a `TypeError` the first time it ran against an agent-supplied hash. Fixed to set the dict shape directly, which also means the content-based fallback is correctly skipped (via `setdefault`) when an agent already supplied a hash instead of two different hash values coexisting.
+
+### What's new
+
+- **Server**: `_transform_file_identity_denylist_config()` in `policy_transformer.py` turns a simple `{extensions, hashes, action, quarantinePath}` frontend config into `{"match": "any", "rules": [...]}` conditions -- "any" because a file matching either the extension list or the hash list should be denied, not both. Registered in `domains.py`'s `POLICY_TYPE_DOMAIN` under `data_protection` (same domain as file_system/file_transfer monitoring, the closest sibling controls).
+- **Dashboard**: new `file_identity_denylist` policy type in the creator wizard (`PolicyTypeSelector.tsx`, new `FileIdentityDenylistPolicyForm.tsx`), with extension chips (common exe/script extensions pre-listed, custom entry supported) and a hash list with SHA-256 format validation (64 hex chars) before a hash can be added. Wired into `PolicyCreatorModal.tsx`'s type/config dispatch and `policyUtils.ts`'s icon/label/summary/validation switches, matching every other policy type's integration points exactly.
+- No agent changes needed -- extensions/hashes are evaluated server-side against fields the agents already send (or, for hashes, now send as of the print-hashing fix).
+
+### Verification
+
+`python3 -m ast.parse` clean on all four touched server files. Dashboard: ran the project's own `tsc --noEmit` before and after these changes and diffed the output -- identical error count (42) both times, and the only textual differences are pre-existing errors' union-type strings getting longer (because the new types were added to those unions), not new errors. Confirmed via a fresh clone of the currently-pushed `main` as the "before" baseline. Not yet exercised against a live policy evaluation (create a real denylist policy, trigger a matching file/print event, confirm it's blocked) -- recommend testing that end-to-end before relying on this for enforcement.
+
+---
+
 ## 🔒 CyberSentinel Parity: Print-Job File Hashing + Fixed Silent Event-Field Drops (August 4, 2026)
 
 ### Summary

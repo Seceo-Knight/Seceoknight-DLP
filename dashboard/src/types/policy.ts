@@ -14,6 +14,7 @@ export type PolicyType =
   | 'onedrive_cloud_monitoring'
   | 'classification_aware_policy'
   | 'browser_upload_monitoring'
+  | 'file_identity_denylist'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
 export type ClipboardAction = 'alert' | 'log'
@@ -21,6 +22,7 @@ export type FileSystemAction = 'alert' | 'log' | 'quarantine' | 'block'
 export type FileTransferAction = 'block' | 'quarantine' | 'alert'
 export type USBDeviceAction = 'alert' | 'log' | 'block'
 export type USBTransferAction = 'block' | 'quarantine' | 'alert'
+export type FileIdentityDenylistAction = 'block' | 'quarantine' | 'alert' | 'log'
 
 export interface ClipboardConfig {
   patterns: {
@@ -116,6 +118,16 @@ export interface OneDriveCloudConfig {
   action: 'log'
 }
 
+export interface FileIdentityDenylistConfig {
+  // Content-independent identity denylist -- blocks by what a file *is*
+  // (extension or exact-content hash), not what's inside it. At least one
+  // of extensions/hashes should be populated or the policy never matches.
+  extensions?: string[]  // e.g. ['.exe', '.bat', '.scr']
+  hashes?: string[]      // SHA-256 hex, e.g. from an Events row's file_hash
+  action: FileIdentityDenylistAction
+  quarantinePath?: string
+}
+
 // Classification-aware policy types
 export interface PolicyCondition {
   field: string
@@ -153,6 +165,7 @@ export type PolicyConfig =
   | GoogleDriveCloudConfig
   | OneDriveCloudConfig
   | ClassificationPolicyConfig
+  | FileIdentityDenylistConfig
 
 export interface Policy {
   id: string

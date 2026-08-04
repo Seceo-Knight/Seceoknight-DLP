@@ -11,9 +11,10 @@ import {
   FileSystemConfig, 
   USBDeviceConfig, 
   USBTransferConfig,
-  FileTransferConfig
+  FileTransferConfig,
+  FileIdentityDenylistConfig
 } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban } from 'lucide-react'
 
 /**
  * Get icon component for policy type
@@ -36,6 +37,8 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return Cloud
     case 'browser_upload_monitoring':
       return Cloud
+    case 'file_identity_denylist':
+      return Ban
     default:
       return FileText
   }
@@ -62,6 +65,8 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Google Drive (Cloud)'
     case 'browser_upload_monitoring':
       return 'Browser Upload Monitoring'
+    case 'file_identity_denylist':
+      return 'File Identity Denylist'
     default:
       return 'Unknown'
   }
@@ -155,6 +160,13 @@ export const formatPolicyConfig = (policy: Policy): string => {
           ? `${c.protectedFolders.length} folder(s)`
           : 'None'
         return `Folders: ${folders} | Interval: ${c.pollingInterval || 10} min | Action: log`
+      }
+
+      case 'file_identity_denylist': {
+        const c = config as FileIdentityDenylistConfig
+        const extCount = (c.extensions || []).length
+        const hashCount = (c.hashes || []).length
+        return `Extensions: ${extCount} | Hashes: ${hashCount} | Action: ${c.action || 'block'}`
       }
 
       default:
@@ -269,6 +281,17 @@ export const validatePolicy = (policy: Partial<Policy>): { valid: boolean; error
       case 'usb_file_transfer_monitoring': {
         const c = policy.config as USBTransferConfig
         // monitoredPaths can be empty — empty means classification-based mode (scan all files on USB)
+        if (c.action === 'quarantine' && !c.quarantinePath?.trim()) {
+          errors.push('Quarantine path is required when action is quarantine')
+        }
+        break
+      }
+
+      case 'file_identity_denylist': {
+        const c = policy.config as FileIdentityDenylistConfig
+        if ((c.extensions || []).length === 0 && (c.hashes || []).length === 0) {
+          errors.push('At least one extension or hash is required')
+        }
         if (c.action === 'quarantine' && !c.quarantinePath?.trim()) {
           errors.push('Quarantine path is required when action is quarantine')
         }
@@ -525,6 +548,8 @@ const getDefaultConfig = (type: PolicyType): any => {
         pollingInterval: 10,
         action: 'log'
       }
+    case 'file_identity_denylist':
+      return { extensions: [], hashes: [], action: 'block' }
     default:
       return {}
   }

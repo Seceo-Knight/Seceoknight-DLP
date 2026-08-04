@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield, Globe } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield, Globe, Ban } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -73,6 +73,12 @@ const policyTypes: Array<{
     label: 'Browser Upload Monitoring',
     description: 'Detect and alert when files are uploaded via browser file dialog',
     icon: Globe
+  },
+  {
+    type: 'file_identity_denylist',
+    label: 'File Identity Denylist',
+    description: 'Block files by extension or exact hash, independent of content classification',
+    icon: Ban
   }
 ]
 

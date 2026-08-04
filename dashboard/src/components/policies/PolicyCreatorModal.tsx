@@ -11,7 +11,8 @@ import {
   FileTransferConfig,
   GoogleDriveLocalConfig,
   GoogleDriveCloudConfig,
-  OneDriveCloudConfig
+  OneDriveCloudConfig,
+  FileIdentityDenylistConfig
 } from '@/types/policy'
 import { validatePolicy } from '@/utils/policyUtils'
 import PolicyTypeSelector from './PolicyTypeSelector'
@@ -23,6 +24,7 @@ import USBTransferPolicyForm from './USBTransferPolicyForm'
 import GoogleDriveLocalPolicyForm from './GoogleDriveLocalPolicyForm'
 import GoogleDriveCloudPolicyForm from './GoogleDriveCloudPolicyForm'
 import OneDriveCloudPolicyForm from './OneDriveCloudPolicyForm'
+import FileIdentityDenylistPolicyForm from './FileIdentityDenylistPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
 import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react'
@@ -35,7 +37,7 @@ interface PolicyCreatorModalProps {
   editingPolicy?: Policy | null
 }
 
-const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | GoogleDriveLocalConfig | GoogleDriveCloudConfig | OneDriveCloudConfig | {} => {
+const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | GoogleDriveLocalConfig | GoogleDriveCloudConfig | OneDriveCloudConfig | FileIdentityDenylistConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
     case 'browser_upload_monitoring':
@@ -121,6 +123,13 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
         pollingInterval: 10,
         action: 'log'
       } as OneDriveCloudConfig
+
+    case 'file_identity_denylist':
+      return {
+        extensions: [],
+        hashes: [],
+        action: 'block'
+      } as FileIdentityDenylistConfig
   }
 }
 
@@ -147,7 +156,7 @@ export default function PolicyCreatorModal({
   const [enabled, setEnabled] = useState(editingPolicy?.enabled ?? true)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
-  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | GoogleDriveLocalConfig | GoogleDriveCloudConfig>(
+  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | GoogleDriveLocalConfig | GoogleDriveCloudConfig | OneDriveCloudConfig | FileIdentityDenylistConfig>(
     editingPolicy?.config || (policyType ? getDefaultConfig(policyType) : getDefaultConfig('clipboard_monitoring'))
   )
   const [classificationPolicy, setClassificationPolicy] = useState<ClassificationPolicy>(() => {
@@ -586,6 +595,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'onedrive_cloud_monitoring' && (
                   <OneDriveCloudPolicyForm
                     config={config as OneDriveCloudConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'file_identity_denylist' && (
+                  <FileIdentityDenylistPolicyForm
+                    config={config as FileIdentityDenylistConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

@@ -266,6 +266,15 @@ class DatabasePolicyEvaluator:
             "severity": ["event.severity", "severity"],
             "file_path": ["file.path", "file_path"],
             "file_extension": ["file.extension", "file_extension"],
+            # Enables the file-identity denylist policy type: a policy
+            # condition like {"field": "file_hash", "operator": "in",
+            # "value": [<sha256>, ...]} needs no new evaluator code at all --
+            # this generic rule engine already supports "in"/"not_in" on any
+            # mapped field. "file.hash.sha256" is EventProcessor's own
+            # enrichment shape (_enrich_file_event sets file.hash as a dict,
+            # not a flat string); "file_hash" is the flat top-level fallback
+            # set directly in events.py's _build_processor_payload.
+            "file_hash": ["file.hash.sha256", "file_hash"],
             "clipboard_content": ["clipboard.content", "content", "clipboard_content"],
             "usb_event_type": ["usb.event_type", "usb_event_type"],
             "source_path": ["source_path", "file.source_path"],

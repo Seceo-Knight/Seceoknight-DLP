@@ -35,6 +35,8 @@ def transform_frontend_config_to_backend(
         return _transform_google_drive_cloud_config(config)
     elif policy_type == "onedrive_cloud_monitoring":
         return _transform_onedrive_cloud_config(config)
+    elif policy_type == "file_identity_denylist":
+        return _transform_file_identity_denylist_config(config)
     else:
         # Unknown type, return empty defaults
         return (
@@ -373,6 +375,93 @@ def _transform_file_system_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any
     # from that capability. Falls back to "log" for any unrecognized value.
     if action not in {"alert", "log", "quarantine", "block"}:
         action = "log"
+
+    actions: Dict[str, Any] = {}
+    if action == "quarantine" and quarantine_path:
+        actions["quarantine"] = {"path": quarantine_path}
+    else:
+        actions[action] = {}
+
+    return conditions, actions
+
+
+def _transform_file_identity_denylist_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform file-identity denylist config to backend format.
+
+    Unlike every other policy type here, this one is deliberately independent
+    of content/DLP classification -- it blocks purely by *what the file is*
+    (its extension, or its exact contents via hash), the same way an
+    antivirus denylist works, rather than by what's *inside* it. This is
+    also why it needs no dedicated matching code in
+    DatabasePolicyEvaluator: "file_extension"/"file_hash" are both already
+    mapped fields in its generic field/operator/value rule engine (file_hash
+    was added specifically to support this policy type -- see
+    database_policy_evaluator.py's _extract_field_value), so an ordinary "in"
+    rule is sufficient.
+
+    Applies to any event carrying a file_path/file_hash -- file system,
+    file transfer, USB transfer, and print events all populate these fields,
+    so one denylist policy covers a file however it's encountered.
+
+    Frontend format:
+    {
+        "extensions": [".exe", ".bat", ".scr", ...],   // optional
+        "hashes": ["<sha256 hex>", ...],                // optional
+        "action": "block" | "quarantine" | "alert" | "log",
+        "quarantinePath": "..." (optional, for quarantine action)
+    }
+
+    At least one of extensions/hashes should be non-empty for the policy to
+    ever match anything; if both are empty this produces a policy with no
+    rules, which the evaluator already skips (see evaluate_event's
+    `if not conditions.get("rules"): continue`).
+
+    Backend format:
+    conditions: {
+        "match": "any",
+        "rules": [
+            {"field": "file_extension", "operator": "in", "value": [".exe", ...]} (if specified),
+            {"field": "file_hash", "operator": "in", "value": ["<sha256>", ...]} (if specified)
+        ]
+    }
+    actions: {
+        "block": {} | "quarantine": {"path": "..."} | "alert": {} | "log": {}
+    }
+    """
+    extensions = [e.lower() for e in config.get("extensions", []) if e]
+    hashes = [h.lower() for h in config.get("hashes", []) if h]
+    action = config.get("action", "block")
+    quarantine_path = config.get("quarantinePath")
+
+    rules = []
+    if extensions:
+        rules.append(
+            {
+                "field": "file_extension",
+                "operator": "in",
+                "value": extensions,
+            }
+        )
+    if hashes:
+        rules.append(
+            {
+                "field": "file_hash",
+                "operator": "in",
+                "value": hashes,
+            }
+        )
+
+    # "any" -- a file matches the denylist if it's on the extension list OR
+    # its hash is on the hash list, not both. With a single rule (only one
+    # of extensions/hashes configured) "any" vs "all" makes no difference.
+    conditions = {
+        "match": "any",
+        "rules": rules,
+    }
+
+    if action not in {"alert", "log", "quarantine", "block"}:
+        action = "block"
 
     actions: Dict[str, Any] = {}
     if action == "quarantine" and quarantine_path:
