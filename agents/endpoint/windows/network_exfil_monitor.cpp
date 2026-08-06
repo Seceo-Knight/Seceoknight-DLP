@@ -1313,7 +1313,8 @@ static IUIAutomation* g_browserUia = nullptr;
 // Forward declaration
 static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
                                         const std::string& browserExe,
-                                        DWORD browserPid);
+                                        DWORD browserPid,
+                                        MessagingVerdict mv = MessagingVerdict{});
 
 // WinEvent callback — fires on the BrowserDetectorThread message loop
 // whenever ANY window is created in the system (WINEVENT_OUTOFCONTEXT).
@@ -1367,14 +1368,27 @@ void CALLBACK BrowserWinEventProc(
         }
     }
 
-    if (!fromBrowser) return;
+    // Managed messaging / thick-client app control (additive, ported from
+    // CyberSentinel-DLP): if this dialog wasn't opened by a browser, check
+    // whether it was opened by a MANAGED MESSAGING app instead (Teams /
+    // WhatsApp / Telegram / Slack / Discord / Signal / ...). Unlike Chrome's
+    // sandboxed-helper indirection, these apps host their own file-open
+    // dialog directly, so no owner-window lookup is needed here -- just the
+    // dialog's own creating process.
+    MessagingVerdict mv;
+    if (!fromBrowser && g_cfg.messagingPolicy) {
+        try { mv = g_cfg.messagingPolicy(ToLower(exe), g_cfg.username); } catch (...) {}
+    }
 
-    LogInfo("Browser file dialog detected: exe=" + exe);
+    if (!fromBrowser && !mv.managed) return;
+
+    LogInfo(std::string(fromBrowser ? "Browser" : "Messaging") +
+            " file dialog detected: exe=" + exe);
 
     // Dispatch file polling to a background thread so we don't block the
     // message loop (and therefore don't miss subsequent WinEvents).
-    std::thread([hwnd, exe, browserPid]() {
-        HandleBrowserDialogFromHwnd(hwnd, exe, browserPid);
+    std::thread([hwnd, exe, browserPid, mv]() {
+        HandleBrowserDialogFromHwnd(hwnd, exe, browserPid, mv);
     }).detach();
 }
 
@@ -1494,8 +1508,16 @@ static std::string GetLastOpenedFileFromMRU(FILETIME* outWriteTime = nullptr) {
 // then classifies content and emits an event.  Runs on a detached thread.
 static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
                                         const std::string& browserExe,
-                                        DWORD browserPid)
+                                        DWORD browserPid,
+                                        MessagingVerdict mv)
 {
+    // mv.managed == true means this dialog belongs to a managed messaging
+    // app (Teams/WhatsApp/Telegram/...), not a browser -- ported from
+    // CyberSentinel-DLP. Everything through file capture/resolution below is
+    // shared between the two paths; only the final classify+enforce step at
+    // the bottom of this function branches on it.
+    bool isMessaging = mv.managed;
+
     // NOTE: this thread intentionally does NOT touch g_browserUia / IUIAutomation.
     //
     // g_browserUia is created on BrowserDetectorThread, which also owns the
@@ -1638,7 +1660,39 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
     }
     if (resolved.empty()) resolved = captured;
 
-    // Read + classify (BEST EFFORT — we never block browsers)
+    // eventSubtype/channel differ between the two paths this function now
+    // serves; everything else (capture, resolve, classify) is shared.
+    // Ported from CyberSentinel-DLP.
+    const std::string eventSubtype = isMessaging ? "messaging_file_selection" : "browser_file_selection";
+    const std::string channel      = isMessaging ? "MESSAGING" : "BROWSER";
+    const std::string appLabel     = isMessaging ? "messaging app" : "browser";
+
+    // Managed messaging exempt file types (e.g. a site that exempts .log or
+    // .csv exports from a chat tool): skip content inspection entirely and
+    // ALLOW without reading the file. Browsers have no such exemption list.
+    if (isMessaging && !mv.exemptExtensions.empty()) {
+        std::string ext = fs::path(resolved).extension().string();
+        if (!ext.empty() && ext[0] == '.') ext.erase(0, 1);
+        ext = ToLower(ext);
+        if (!ext.empty() &&
+            std::find(mv.exemptExtensions.begin(), mv.exemptExtensions.end(), ext) != mv.exemptExtensions.end()) {
+            EventFields f;
+            f.eventSubtype = eventSubtype;
+            f.channel      = channel;
+            f.processName  = browserExe;
+            f.pid          = browserPid;
+            f.fileName     = fs::path(resolved).filename().string();
+            f.filePath     = resolved;
+            f.action       = "ALLOW";
+            f.severity     = "low";
+            f.reason       = "Exempt file type (." + ext + ") -- not inspected";
+            EmitEvent(f);
+            return;
+        }
+    }
+
+    // Read + classify (BEST EFFORT -- we never block browsers; messaging apps
+    // are only ever terminated below, in the "sensitive && mv.block" branch)
     std::string content;
     size_t      sz = 0;
     try {
@@ -1647,10 +1701,10 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
     } catch (...) {}
 
     if (content.empty()) {
-        LogWarn("CONTENT_EXTRACTION_FAILED browser path=" + resolved);
+        LogWarn("CONTENT_EXTRACTION_FAILED " + appLabel + " path=" + resolved);
         EventFields f;
-        f.eventSubtype = "browser_file_selection";
-        f.channel      = "BROWSER";
+        f.eventSubtype = eventSubtype;
+        f.channel      = channel;
         f.processName  = browserExe;
         f.pid          = browserPid;
         f.fileName     = fs::path(resolved).filename().string();
@@ -1658,7 +1712,9 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
         f.fileSize     = sz;
         f.action       = "ALERT";
         f.severity     = "low";
-        f.reason       = "Browser file selection detected (content not readable)";
+        f.reason       = (isMessaging ? "Messaging app file selection detected"
+                                       : "Browser file selection detected") +
+                          std::string(" (content not readable)");
         EmitEvent(f);
         return;
     }
@@ -1666,15 +1722,15 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
     ClassifyResult cls;
     try { cls = g_cfg.classify(content, "network_exfil"); } catch (...) {}
 
-    LogInfo("CLASSIFICATION_RESULT browser pid=" + std::to_string(browserPid) +
+    LogInfo("CLASSIFICATION_RESULT " + appLabel + " pid=" + std::to_string(browserPid) +
             " category=" + (cls.category.empty() ? "none" : cls.category));
 
     std::string catLower = ToLower(cls.category);
     bool sensitive = (catLower == "confidential" || catLower == "restricted");
 
     EventFields f;
-    f.eventSubtype        = "browser_file_selection";
-    f.channel             = "BROWSER";
+    f.eventSubtype        = eventSubtype;
+    f.channel             = channel;
     f.processName         = browserExe;
     f.pid                 = browserPid;
     f.fileName            = fs::path(resolved).filename().string();
@@ -1691,20 +1747,34 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
     f.content             = content;
 
     // Always emit — server-side policy decides whether to alert.
-    // Keeping browser events purely local (only for confidential files) means
+    // Keeping these events purely local (only for confidential files) means
     // the dashboard policy "browser_upload_monitoring" never fires on test files.
-    if (sensitive) {
+    if (sensitive && isMessaging && mv.block) {
+        // Managed messaging apps CAN be terminated when the policy opts into
+        // "block" (audit-first default is "alert" -- see FetchMessagingAppPolicy()
+        // in agent.cpp). Browsers are NEVER terminated regardless of policy;
+        // this branch is unreachable when isMessaging is false. Ported from
+        // CyberSentinel-DLP.
+        bool killed = TerminatePid(browserPid);
+        f.action   = "BLOCK";
+        f.severity = (catLower == "restricted") ? "critical" : "high";
+        f.reason   = "Blocked sensitive attachment in " + browserExe +
+                     " (" + cls.category + ")" + (killed ? "" : " [terminate failed]");
+        LogWarn("POLICY_DECISION messaging decision=BLOCK category=" + cls.category +
+                " killed=" + std::string(killed ? "true" : "false"));
+    } else if (sensitive) {
         f.action   = "ALERT";
         f.severity = (catLower == "restricted") ? "critical" : "high";
         f.reason   = "Sensitive file selected for upload in " + browserExe +
                      " (" + cls.category + "). Alert only - not blocked.";
-        LogWarn("POLICY_DECISION browser decision=ALERT category=" + cls.category);
+        LogWarn("POLICY_DECISION " + appLabel + " decision=ALERT category=" + cls.category);
     } else {
         f.action   = "ALLOW";
         f.severity = "low";
-        f.reason   = "Browser file selection detected: " + browserExe +
+        f.reason   = (isMessaging ? "Messaging app file selection detected: "
+                                   : "Browser file selection detected: ") + browserExe +
                      (cls.category.empty() ? "" : " (" + cls.category + ")");
-        LogInfo("POLICY_DECISION browser decision=ALLOW category=" +
+        LogInfo("POLICY_DECISION " + appLabel + " decision=ALLOW category=" +
                 (cls.category.empty() ? "none" : cls.category));
     }
     EmitEvent(f);

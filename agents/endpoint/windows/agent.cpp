@@ -2624,6 +2624,22 @@ static ClassificationResult Classify(const std::string& content,
      std::set<std::string> appControlExceptTypes;        // extensions, no leading dot
      std::mutex appControlMutex;
 
+     // ── Messaging / thick-client app attachment control (task #115) ────────
+     // Synced from GET /agents/{id}/messaging-app-policy. Ported from
+     // CyberSentinel-DLP. The network-exfil monitor's file-dialog detector
+     // consults GetMessagingVerdict() when a file-open dialog is raised by
+     // a managed app (Teams/WhatsApp/Telegram/Slack/Discord/Signal) and
+     // alerts (default) or blocks (terminates the app) on a sensitive
+     // attachment. Alert-first: action defaults to "alert" so enabling a
+     // policy never kills an app until an admin opts in. All app names /
+     // users / extensions stored lowercase.
+     std::atomic<bool> messagingEnforced{false};
+     std::string messagingAction;                        // "alert" | "block"
+     std::set<std::string> messagingApps;                // managed messaging exe names
+     std::set<std::string> messagingExceptUsers;          // users exempt
+     std::vector<std::string> messagingExemptTypes;      // extensions, no leading dot
+     std::mutex messagingMutex;
+
      // ── Wireless / Bluetooth transfer control (task #113) ───────────────────
      // Synced from GET /agents/{id}/wireless-policy. Ported from CyberSentinel-
      // DLP. Blocks Bluetooth file transfer (the built-in fsquirt.exe wizard)
@@ -4438,6 +4454,18 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  return !IsAppActionAllowed("network", proc, GetUsername(), path, ext);
              };
 
+             // Managed messaging / thick-client attachment control: the file-
+             // dialog detector asks whether the dialog-owning app (Teams/
+             // WhatsApp/Telegram/…) is managed and, if so, whether to block or
+             // only alert on a sensitive attachment. Driven from
+             // GET /messaging-app-policy each sync; returns managed=false
+             // when no policy is active, so this is a no-op then. Ported from
+             // CyberSentinel-DLP.
+             nemCfg.messagingPolicy = [this](const std::string& exeLower,
+                                             const std::string& user) {
+                 return GetMessagingVerdict(exeLower, user);
+             };
+
              if (NetworkExfilMonitor::Start(nemCfg)) {
                  logger.Info("Network Exfiltration Monitor started");
              } else {
@@ -4613,6 +4641,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          FetchNetworkSharePolicy();
          // Managed-application file control -- same reasoning, own endpoint.
          FetchApplicationControl();
+         // Messaging / thick-client app attachment control -- same reasoning, own endpoint.
+         FetchMessagingAppPolicy();
          // Wireless / Bluetooth transfer control -- same reasoning, own endpoint.
          FetchWirelessPolicy();
          // Printer device control + print content inspection -- same reasoning, own endpoint.
@@ -4732,6 +4762,76 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          bool listed = appControlApps.count(proc) > 0;
          if (appControlMode == "blocklist") return !listed;   // block listed apps
          return listed;                                       // allowlist: allow only listed
+     }
+
+     // ── Messaging / thick-client app attachment control ─────────────────────
+     // Pulls GET /agents/{id}/messaging-app-policy and caches it locally.
+     // Ported from CyberSentinel-DLP. Mirrors FetchApplicationControl() above:
+     // polled on the policy-sync cadence, own try/catch, keeps last-known-good
+     // on a transient error/outage.
+     void FetchMessagingAppPolicy() {
+         try {
+             std::pair<int, std::string> resp = GetHttpClient()->Get(
+                 "/agents/" + config.agentId + "/messaging-app-policy");
+             auto& [status, response] = resp;
+             if (status != 200) return;   // keep last-known-good on error/outage
+
+             bool enforced = ExtractJsonBool(response, "enforced");
+             std::string action = ToLower(config.ExtractJsonValue(response, "action"));
+             if (action != "block") action = "alert";   // audit-first default
+
+             auto lc = [](std::vector<std::string> v) { for (auto& s : v) s = ToLower(s); return v; };
+             auto apps    = lc(ExtractJsonArray(response, "apps"));
+             auto exUsers = lc(ExtractJsonArray(response, "exception_users"));
+             auto exTypes = lc(ExtractJsonArray(response, "exempt_file_types"));
+             for (auto& t : exTypes) if (!t.empty() && t[0] == '.') t.erase(0, 1);
+
+             // Safety net: an enforced policy that names no apps falls back to
+             // the built-in managed set, so the feature works even with a bare
+             // policy (mirrors the server's own _DEFAULT_MESSAGING_APPS fallback).
+             if (enforced && apps.empty()) {
+                 apps = {"teams.exe", "ms-teams.exe", "msteams.exe",
+                         "whatsapp.exe", "telegram.exe", "slack.exe",
+                         "discord.exe", "signal.exe"};
+             }
+             {
+                 std::lock_guard<std::mutex> lock(messagingMutex);
+                 messagingAction      = action;
+                 messagingApps        = std::set<std::string>(apps.begin(), apps.end());
+                 messagingExceptUsers = std::set<std::string>(exUsers.begin(), exUsers.end());
+                 messagingExemptTypes = exTypes;
+             }
+             messagingEnforced.store(enforced);
+             logger.Debug("Messaging app control: enforced=" + std::string(enforced ? "true" : "false") +
+                         " action=" + action + " apps=" + std::to_string(apps.size()));
+         } catch (const std::exception& e) {
+             logger.Debug(std::string("FetchMessagingAppPolicy failed: ") + e.what());
+         } catch (...) {
+             logger.Debug("FetchMessagingAppPolicy failed");
+         }
+     }
+
+     // Local verdict for the messaging-app attachment detector. Given the
+     // dialog-owning process exe (lowercased) and the current user, reports
+     // whether it's a managed messaging client, whether to BLOCK (vs alert)
+     // on a sensitive attachment, and the exempt file types. Fails closed to
+     // "not managed" (managed=false) when no policy is active -- the
+     // NetworkExfilMonitor::Config::messagingPolicy callback then treats the
+     // dialog as ordinary, ignored traffic, same as before this feature
+     // existed. Ported from CyberSentinel-DLP.
+     NetworkExfilMonitor::MessagingVerdict GetMessagingVerdict(
+             const std::string& exeLower, const std::string& userName) {
+         NetworkExfilMonitor::MessagingVerdict v;
+         if (!messagingEnforced.load()) return v;   // managed=false => detector ignores it
+         std::lock_guard<std::mutex> lock(messagingMutex);
+         std::string u = ToLower(userName);
+         if (!u.empty() && messagingExceptUsers.count(u)) return v;   // user exempt
+         if (messagingApps.count(exeLower)) {
+             v.managed          = true;
+             v.block            = (messagingAction == "block");
+             v.exemptExtensions = messagingExemptTypes;
+         }
+         return v;
      }
 
      // ── Wireless / Bluetooth transfer control ──────────────────────────────

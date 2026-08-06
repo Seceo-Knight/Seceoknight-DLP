@@ -53,6 +53,9 @@ POLICY_TYPE_DOMAIN = {
     # wizard (fsquirt.exe, via IFEO) and/or Wi-Fi Direct / Nearby Sharing.
     # Ported from CyberSentinel-DLP.
     "wireless_transfer_control": PolicyDomain.THREAT,
+    # Managed messaging / thick-client app attachment control (Teams/
+    # WhatsApp/Telegram/Slack/Discord/Signal). Ported from CyberSentinel-DLP.
+    "messaging_app_control": PolicyDomain.THREAT,
     # Data Protection — content handling
     "clipboard_monitoring": PolicyDomain.DATA_PROTECTION,
     "clipboard": PolicyDomain.DATA_PROTECTION,

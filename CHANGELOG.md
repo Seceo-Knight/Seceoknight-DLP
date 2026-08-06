@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Messaging / thick-client app attachment control -- new capability (August 6, 2026)
+
+### Summary
+
+User asked to close every remaining gap between CyberSentinel-DLP and SeceoKnight. A fresh comparison sweep (after the four features above) found one genuine miss not caught by the earlier gap analysis: CyberSentinel intercepts file attachments in managed messaging/thick-client apps -- Teams, WhatsApp, Telegram, Slack, Discord, Signal -- alerting (default) or terminating the app when a sensitive file is picked. SeceoKnight had zero equivalent, agent or server side.
+
+### Design decision: extend, don't duplicate
+
+CyberSentinel implements this via a separate `IUIAutomationEventHandler` (`BrowserDialogHandler`, `UIA_Window_WindowOpenedEventId`) layered next to its browser-upload detector. SeceoKnight's own browser-upload detector is architecturally different -- a `SetWinEventHook(EVENT_OBJECT_CREATE)` + Shell MRU-registry fallback (`BrowserWinEventProc`/`HandleBrowserDialogFromHwnd`) -- and was independently hardened through several real production bugs already fixed in this codebase (stale-filename MRU fallback, one-test-lag from unstable timing, Gmail's JS-driven attach flow needing a freshness check against dialog-close time). Porting CyberSentinel's separate UIA handler wholesale would have meant two independent, overlapping file-dialog watchers competing for the same events. Instead, this port **extends SeceoKnight's existing, hardened detector** to also recognize messaging apps, reusing 100% of its capture/resolve logic and only branching at the final classify+enforce step.
+
+### What was added
+
+**`network_exfil_monitor.h`**: added `MessagingVerdict` (managed/block/exemptExtensions) and `MessagingPolicyFn` callback type to `Config`, plus an `enableMessagingDetector` toggle -- all ported from CyberSentinel's shapes.
+
+**`network_exfil_monitor.cpp`**: `BrowserWinEventProc` now also checks `g_cfg.messagingPolicy(exe, username)` for the dialog's owning process when it isn't a browser, and dispatches to `HandleBrowserDialogFromHwnd` either way (now takes a `MessagingVerdict` parameter). The shared function's tail now branches: exempt file types skip inspection entirely and ALLOW; unreadable content ALERTs (as before); a sensitive attachment ALERTs unless the app is BOTH managed AND the policy's action is "block", in which case the app process is actually terminated (`TerminatePid`, the same helper the CLI-transfer path already uses) and the event carries `action=BLOCK`. Browsers are structurally excluded from ever reaching the terminate branch -- `isMessaging` is `mv.managed`, which is only ever true for a messaging-app dialog, never a browser one, so "we never block browsers" (this module's original, explicit design constraint) is unchanged.
+
+**`agent.cpp`**: `FetchMessagingAppPolicy()` polls the new endpoint on the policy-sync cadence (own try/catch, mirrors `FetchApplicationControl()`), with the same built-in managed-app fallback list the server uses when a policy is active but names no apps. `GetMessagingVerdict(exeLower, userName)` is the local verdict function, fails to `managed=false` (ignored) when no policy is active or the user is excepted. Wired into `NetworkExfilMonitor::Config::messagingPolicy` at the existing `NetworkExfilMonitor::Start()` call site.
+
+**Server** (`server/app/api/v1/agents.py`): new `GET /agents/{agent_id}/messaging-app-policy` endpoint (`X-Agent-Key` auth), driven by a `Policy` row of `type="messaging_app_control"` -- `action` (alert/block, audit-first default), `apps`, `exceptions.users`, `exceptions.file_types`. Registered `messaging_app_control` in `server/app/core/domains.py` as `PolicyDomain.THREAT`. No new event-type registration needed -- this module's events always carry `event_type="network_exfil"` regardless of subtype, and that's already registered.
+
+### Verification
+
+`ast.parse` clean on `agents.py`/`domains.py`. Brace-balance check on `agent.cpp` (paren=-2, brace=-5, bracket=-1) and `network_exfil_monitor.h` (0/0/0) both match their established baselines exactly. `network_exfil_monitor.cpp` has no saved pre-edit baseline in this sandbox (same limitation as the application-control port two entries back) -- verified instead by confirming its balance is `paren=1 brace=-2 bracket=-1` both immediately before and immediately after this batch of edits, i.e. unchanged, which is only possible if every individual edit in this pass was itself balanced (each was additionally traced by hand). **Not live-tested**: no MinGW compiler and no Teams/WhatsApp/Slack instance in this sandbox, so the actual dialog interception, extension-exemption logic, and the terminate-on-block path haven't been exercised against a real messaging app.
+
+---
+
 ## 🛡️ Real print content inspection + printer device control -- new capability (August 6, 2026)
 
 ### Summary

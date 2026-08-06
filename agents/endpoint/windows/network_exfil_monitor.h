@@ -46,6 +46,29 @@ using AppActionFn = std::function<bool(const std::string& processName,
                                        const std::string& filePath,
                                        const std::string& fileExt)>;
 
+// Optional: managed messaging / thick-client app control. For a file-open
+// dialog owned by process `exeLower` (already lowercased) run by `userName`,
+// the host returns whether that app is a managed messaging client (Teams /
+// WhatsApp / Telegram / Slack / Discord / Signal / ...), whether a sensitive
+// attachment must be BLOCKED (true, terminates the app) or only ALERTED
+// (false, the audit-first default), and any file extensions to exempt.
+// Driving the app list + action through a callback lets the host refresh
+// them from server policy each sync without restarting the monitor.
+// SCOPE: only file-picker attachments are seen here -- drag-and-drop into
+// the app window bypasses the common dialog and would need a filesystem
+// minifilter (out of scope for this user-mode module). Ported from
+// CyberSentinel-DLP; reuses this module's EXISTING WinEvent-hook-based
+// dialog detector (not CyberSentinel's separate UIA event handler) since
+// that detector was independently hardened through several real-world
+// browser-upload bugs already fixed in this codebase.
+struct MessagingVerdict {
+    bool managed = false;                       // is exeLower a managed messaging app?
+    bool block   = false;                       // sensitive attach: true = block, false = alert
+    std::vector<std::string> exemptExtensions;  // lowercased, no leading dot
+};
+using MessagingPolicyFn = std::function<MessagingVerdict(const std::string& exeLower,
+                                                         const std::string& userName)>;
+
 struct Config {
     // Identity fields copied into every emitted event
     std::string agentId;
@@ -58,6 +81,7 @@ struct Config {
     SendEventFn sendEvent;      // MUST be set
     LogFn       log;            // MUST be set (level: "INFO"/"WARNING"/"ERROR"/"DEBUG")
     AppActionFn appAction;      // optional -- managed-application file control (by acting exe)
+    MessagingPolicyFn messagingPolicy;  // optional -- managed messaging-app attachment control
 
     // Safety caps
     size_t maxFileBytes = 50ull * 1024 * 1024;   // Do not read files larger than this
@@ -66,6 +90,10 @@ struct Config {
     // Feature toggles (useful for incremental rollout / kill switch)
     bool enableCliMonitor      = true;
     bool enableBrowserDetector = true;
+    // Reuse the browser dialog detector to also watch managed messaging apps.
+    // Only fires when messagingPolicy is set AND reports an app as managed,
+    // so leaving this on with no policy configured is a no-op.
+    bool enableMessagingDetector = true;
 };
 
 // Start the monitor. Launches background threads and returns immediately.

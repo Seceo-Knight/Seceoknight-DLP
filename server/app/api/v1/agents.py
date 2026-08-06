@@ -1389,6 +1389,83 @@ async def get_printer_policy(
     }
 
 
+# Built-in managed set used when a policy is active but names no apps of its
+# own, so the feature works out of the box. Mirrors the agent's own fallback
+# list in FetchMessagingAppPolicy() (agent.cpp).
+_DEFAULT_MESSAGING_APPS = [
+    "teams.exe", "ms-teams.exe", "msteams.exe", "whatsapp.exe",
+    "telegram.exe", "slack.exe", "discord.exe", "signal.exe",
+]
+
+
+@router.get("/{agent_id}/messaging-app-policy")
+async def get_messaging_app_policy(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(verify_agent_key),
+):
+    """
+    Managed messaging / thick-client app attachment-control policy. Ported
+    from CyberSentinel-DLP. For a file selected in a managed app's (Teams /
+    WhatsApp / Telegram / Slack / Discord / Signal) file picker, the agent
+    reads + classifies it locally and, if Confidential/Restricted, alerts
+    (default) or terminates the app (action == "block"), unless the user or
+    file type is excepted.
+
+    Same inspect-before-encryption model as the CLI-transfer-tool
+    interception: the agent reads the file BEFORE it enters the app's
+    (TLS-encrypted) upload, so pinned thick clients are covered without
+    needing to break their TLS. action defaults to "alert" -- audit-first,
+    so enabling a policy never kills an app until an admin opts into
+    "block". Only file-picker attachments are seen; drag-and-drop into the
+    app window bypasses the common dialog and would need a filesystem
+    minifilter (out of scope for this user-mode agent).
+
+    Driven by a Policy row with type="messaging_app_control". The agent
+    polls this on the same cadence as policy sync and caches the result.
+    Requires ``X-Agent-Key`` header.
+    """
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "messaging_app_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+
+    if not policy:
+        return {
+            "enforced": False,
+            "action": "alert",
+            "apps": [],
+            "exception_users": [],
+            "exempt_file_types": [],
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    cfg = policy.config or {}
+    action = str(cfg.get("action") or "alert").lower()
+    if action not in ("alert", "block"):
+        action = "alert"
+
+    def _lc_list(v):
+        return [str(x).strip().lower() for x in (v or []) if str(x).strip()]
+
+    apps = _lc_list(cfg.get("apps")) or list(_DEFAULT_MESSAGING_APPS)
+    exc = cfg.get("exceptions") or {}
+    return {
+        "enforced": True,
+        "action": action,
+        "apps": apps,
+        "exception_users": _lc_list(exc.get("users")),
+        "exempt_file_types": [s.lstrip(".") for s in _lc_list(exc.get("file_types"))],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 class DeviceAuthorizeRequest(BaseModel):
     """Device identity the agent reports when a USB storage device connects.
     This is a visibility/audit-trail call, logged as an event — the block/
