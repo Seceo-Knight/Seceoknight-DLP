@@ -8,6 +8,34 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Real print content inspection + printer device control -- new capability (August 6, 2026)
+
+### Summary
+
+Last item off the "why aren't you porting these" list. The original ask was narrower ("upgrade print monitoring from hash-only to content scanning"), but tracing CyberSentinel-DLP's implementation turned up that print content inspection and printer device control are genuinely one combined server response and one combined agent policy fetch (`GET /agents/{id}/printer-policy` returns both) -- and SeceoKnight's own `SanctionedPrinter` model docstring already said outright: *"this allowlist has no agent-side enforcement yet ... shipped now so the management surface is ready the moment print monitoring lands."* This is that moment, so both landed together rather than half-porting one endpoint.
+
+### What was replaced
+
+Before this change, the only "print content" signal was `printClassifier` in `agent.cpp` -- a static keyword list (`"restricted"`, `"confidential"`, `"ssn"`, `"salary"`, …) matched against the **document's filename only**. A file named `report.pdf` containing a customer's SSN sailed through as "Public"; a file named `confidential_notes.txt` containing nothing sensitive got flagged. It never looked at what was actually sent to the printer.
+
+### What was added
+
+**Server** (`server/app/api/v1/agents.py`): new `GET /agents/{agent_id}/printer-policy` endpoint (`X-Agent-Key` auth), combining two independent policies in one response (matching CyberSentinel's own design, and SK's existing `SanctionedPrinter` table which already existed with zero consumers): `printer_control` (device control: `mode` enforce/audit, `scope` block_all/block_network/block_local/allowlist, `printers` -- the sanctioned allowlist names, shipped only in allowlist scope) and `print_content_prevention` (`content_inspection`, `content_mode`). Registered `print_content_prevention` in `server/app/core/domains.py` as `PolicyDomain.THREAT` (`printer_control` was already registered, just unenforced). Updated `SanctionedPrinter`'s docstring to point at the new enforcement path instead of saying "not enforced yet."
+
+**`print_monitor.h`/`.cpp`**: added `PrinterControlCallback` (return true to cancel a job by which printer it's going to, independent of content) and `PrintContentCallback` (pause the job, inspect it, return true to block) to `Config`/constructor args -- both optional, both additive, the existing `HashCallback` is untouched. Added a `blockReason` field to `PrintEvent` (`""` | `"content"` | `"printer_control"`) so the dashboard can tell which control fired. `MonitorLoop` now: computes `deviceBlocked` from the printer-control callback; when a content callback is set, pauses the job (`JOB_CONTROL_PAUSE`) before calling it and resumes (`JOB_CONTROL_RESUME`) if allowed; falls back to the old filename-keyword `isSensitive` result when no content callback is set, so an agent build without the new wiring behaves exactly as before.
+
+**`agent.cpp`**: `FetchPrinterPolicy()` polls the new endpoint on the policy-sync cadence (own try/catch). `ShouldBlockPrinter()` is the device-control verdict (`IsNetworkPrinter()`/`NormalizePrinter()` helpers, ported verbatim). `EvaluatePrintContent()` is the content-control verdict: `ReadSpoolText()` resolves the spooled document's actual file path (tries the existing `GetPrintSpoolFilePath()` `"FP<jobid>.SPL"` convention first, then CyberSentinel's plain `"<jobid>.SPL"` convention, then the newest `*.SPL` in the spool directory as a last resort -- deliberately more defensive than either source alone, since spool naming varies by print-processor config) and `ExtractSpoolStrings()` pulls readable ASCII and UTF-16LE text runs out of the raw EMF/RAW/PS/PCL bytes (EMF's `ExtTextOutW` stores document text as UTF-16), then POSTs that real text to the same `/agents/{id}/policy/evaluate` endpoint the USB and network-share content-aware paths already use. `printMonitor->SetPrinterControl(...)`/`SetPrintContent(...)` wire both into the existing `PrintMonitor` construction, and the print event JSON now carries `printer_name`/`block_reason` so a device-control block is distinguishable from a content block in the dashboard.
+
+### Deliberate deviation from CyberSentinel
+
+CyberSentinel's version computes and sends both MD5 and SHA-256 of the spooled document using its own from-scratch MD5/SHA-256 implementations. SK doesn't have (and this port doesn't add) an MD5 implementation, and SK's existing `CalculateFileHash()` (SHA-256, already used by the pre-existing hash callback) is reused for `EvaluatePrintContent()`'s hash instead of porting new, unverified crypto code into a security product with no compiler available in this sandbox to test it against known test vectors. `lastSpoolHash` therefore stores SHA-256 only, not MD5+SHA-256.
+
+### Verification
+
+`ast.parse` clean on `agents.py`/`domains.py`/`sanctioned_printer.py`. Brace-balance check on `agent.cpp` (paren=-2, brace=-5, bracket=-1) matches the established baseline exactly. `print_monitor.h` and `print_monitor.cpp` both balance at 0/0/0, both before and after this change. **Not live-tested**: no MinGW compiler and no real printer in this sandbox, so the actual spool-file text extraction, the pause/resume timing around the server round-trip, and the printer-scope enforcement haven't been exercised against a real print job. Worth a real build + a manual print test (including a deliberately sensitive document, to confirm the pause survives the round trip and the job is actually cancelled, not just logged) before relying on this in production.
+
+---
+
 ## 🛡️ Wireless / Bluetooth transfer control -- new capability (August 6, 2026)
 
 ### Summary

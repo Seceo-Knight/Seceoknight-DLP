@@ -7,10 +7,10 @@ only if its printer NAME matches an enabled row here; every other printer is
 blocked. Printers are matched on ``printer_name`` (what the endpoint reports
 at print time). ``printer_type`` (local/network) is captured for display.
 
-NOTE: SeceoKnight's Windows agent does not currently monitor print jobs, so
-this allowlist has no agent-side enforcement yet (unlike the USB device
-allowlist). It's shipped now so the management surface (API + dashboard) is
-ready the moment print monitoring lands.
+Agent-side enforcement: GET /agents/{agent_id}/printer-policy (in
+app/api/v1/agents.py) ships enabled rows here to the Windows agent when a
+printer_control policy is in scope="allowlist" mode; ShouldBlockPrinter()
+in agent.cpp cancels any print job whose printer name doesn't match.
 """
 from datetime import datetime, timezone
 

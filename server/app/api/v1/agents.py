@@ -1302,6 +1302,93 @@ async def get_wireless_policy(
     }
 
 
+@router.get("/{agent_id}/printer-policy")
+async def get_printer_policy(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(verify_agent_key),
+):
+    """
+    Combined printer DEVICE control + print CONTENT inspection policy for the
+    endpoint. Ported from CyberSentinel-DLP. Closes the gap flagged in
+    ``SanctionedPrinter``'s own docstring ("this allowlist has no agent-side
+    enforcement yet ... shipped now so the management surface is ready the
+    moment print monitoring lands") -- this is that moment.
+
+    Device control (driven by a Policy row of type="printer_control"):
+    enforced && mode=="enforce" -> agent cancels print jobs matching `scope`
+    (block_all | block_network | block_local | allowlist, the last checked
+    against the sanctioned_printers table below) regardless of document
+    content. audit mode logs "would block" only. Independent of and additive
+    to content inspection.
+
+    Content inspection (driven by a Policy row of type="print_content_prevention"):
+    when active, the agent pauses the job, extracts real text from the
+    spooled document (EMF/RAW ASCII + UTF-16LE string runs -- not just the
+    filename), and evaluates it via the same POST /policy/evaluate endpoint
+    the USB and network-share content-aware paths already use. content_mode
+    enforce vs audit controls whether a sensitive verdict actually cancels
+    the job or only logs it.
+
+    The agent polls this on the same cadence as policy sync. Requires
+    ``X-Agent-Key`` header.
+    """
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+    from app.models.sanctioned_printer import SanctionedPrinter
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "printer_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+    enforced = policy is not None
+    cfg = (policy.config or {}) if policy else {}
+    mode = str(cfg.get("mode") or "enforce").lower() if enforced else "off"
+    if mode not in ("enforce", "audit"):
+        mode = "enforce"
+    scope = str(cfg.get("scope") or "block_network").lower() if enforced else "none"
+    if scope not in ("block_all", "block_network", "block_local", "allowlist", "none"):
+        scope = "block_network"
+
+    # Ship the sanctioned printer names only when allowlist scope is in play,
+    # so the agent can enforce "block anything not on the list" offline.
+    printers = []
+    if enforced and scope == "allowlist":
+        printers = [
+            n for (n,) in (await db.execute(
+                _select(SanctionedPrinter.printer_name).where(
+                    SanctionedPrinter.is_enabled.is_(True)
+                )
+            )).all()
+        ]
+
+    content_policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "print_content_prevention",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+    content_inspection = content_policy is not None
+    content_mode = str((content_policy.config or {}).get("mode") or "enforce").lower() \
+        if content_inspection else "off"
+    if content_mode not in ("enforce", "audit"):
+        content_mode = "enforce"
+
+    return {
+        "enforced": enforced,
+        "mode": mode,
+        "scope": scope,
+        "printers": printers,
+        "content_inspection": content_inspection,
+        "content_mode": content_mode,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 class DeviceAuthorizeRequest(BaseModel):
     """Device identity the agent reports when a USB storage device connects.
     This is a visibility/audit-trail call, logged as an event — the block/

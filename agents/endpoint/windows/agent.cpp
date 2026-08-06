@@ -188,7 +188,13 @@ DEFINE_GUID(GUID_DEVINTERFACE_USB_DEVICE, 0xA5DCBF10L, 0x6530, 0x11D2, 0x90, 0x1
      std::transform(result.begin(), result.end(), result.begin(), ::tolower);
      return result;
  }
- 
+
+ std::string ToUpperStr(const std::string& str) {
+     std::string result = str;
+     std::transform(result.begin(), result.end(), result.begin(), ::toupper);
+     return result;
+ }
+
  std::string ExpandEnvironmentPath(const std::string& path) {
      char expanded[MAX_PATH];
      ExpandEnvironmentStringsA(path.c_str(), expanded, MAX_PATH);
@@ -2628,6 +2634,31 @@ static ClassificationResult Classify(const std::string& content,
      // changed, not on every sync tick.
      std::string lastWirelessSig;
 
+     // ── Printer device control + print content inspection (task #114) ──────
+     // Synced from GET /agents/{id}/printer-policy. Ported from CyberSentinel-
+     // DLP. Closes the "no agent-side enforcement yet" gap flagged in
+     // SanctionedPrinter's own docstring -- this is that moment. Two
+     // independent, additive layers:
+     //   device control  -- ShouldBlockPrinter(): cancel a job by which
+     //                       PRINTER it's going to, regardless of content.
+     //   content inspect -- EvaluatePrintContent(): read the REAL spooled
+     //                       document text (not just the filename) and
+     //                       evaluate it via the same real-time
+     //                       /policy/evaluate path USB/network-share
+     //                       content-aware modes already use.
+     std::atomic<bool> printerControlEnforced{false};
+     std::string printerControlMode;                     // "enforce" | "audit" | "off"
+     std::string printerControlScope;                    // block_all|block_network|block_local|allowlist|none
+     std::set<std::string> sanctionedPrinters;           // enabled allowlist printer names (UPPERCASE)
+     std::atomic<bool> printContentInspection{false};    // a print_content_prevention policy is active
+     std::string printContentMode;                       // "enforce" | "audit" | "off"
+     std::mutex printerPolicyMutex;
+     // SHA-256 of the last spooled document read, keyed by job id -- computed
+     // once during content inspection and reused by the print event callback
+     // instead of a second spool-directory read (the spool file may already
+     // be gone by the time the event fires for a cancelled job).
+     struct { int jobId = -1; std::string sha256; } lastSpoolHash;
+
      // Policy storage
      std::vector<PolicyRule> filePolicies;
      std::vector<PolicyRule> clipboardPolicies;
@@ -4290,14 +4321,26 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  json.AddString("agent_id", config.agentId);
                  json.AddString("source_type", "agent");
                  json.AddString("user_email", event.user + "@" + config.agentName);
-                 json.AddString("description", event.actionTaken == "Block"
-                     ? "PRINT JOB BLOCKED: " + event.documentName + " — " + event.category + " data"
-                     : "Print job: " + event.documentName);
+                 // blockReason distinguishes a device-control block (wrong
+                 // printer) from a content block (sensitive document) on the
+                 // same job -- both use actionTaken=="Block", so the
+                 // description/reason need to say which one actually fired.
+                 // Ported from CyberSentinel-DLP.
+                 std::string desc;
+                 if (event.actionTaken == "Block" && event.blockReason == "printer_control")
+                     desc = "PRINT BLOCKED (printer control): " + event.documentName + " -> " + event.printerName;
+                 else if (event.actionTaken == "Block")
+                     desc = "PRINT JOB BLOCKED: " + event.documentName + " — " + event.category + " data";
+                 else
+                     desc = "Print job: " + event.documentName + " -> " + event.printerName;
+                 json.AddString("description", desc);
                  json.AddString("severity", event.actionTaken == "Block" ? "high" : "low");
                  json.AddString("action", event.actionTaken == "Block" ? "blocked" : "allowed");
                  json.AddString("classification_level", event.category);
                  json.AddBool("blocked", event.actionTaken == "Block");
                  json.AddString("file_path", event.documentName);
+                 json.AddString("printer_name", event.printerName);
+                 json.AddString("block_reason", event.blockReason);
                  if (!event.fileHash.empty()) {
                      json.AddString("file_hash", event.fileHash);
                  }
@@ -4315,6 +4358,24 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  return spoolPath.empty() ? "" : CalculateFileHash(spoolPath);
              }
          );
+         // Printer DEVICE control: cancel jobs on disallowed printers
+         // (additive; content-based blocking below is unchanged). Ported
+         // from CyberSentinel-DLP -- closes the "no agent enforcement yet"
+         // gap in SanctionedPrinter's model.
+         printMonitor->SetPrinterControl(
+             [this](const std::string& printerName) { return ShouldBlockPrinter(printerName); });
+         // Print CONTENT control: inspect the REAL spooled document (not just
+         // the filename) via the server. Replaces the printClassifier
+         // filename-keyword heuristic above as the primary decision whenever
+         // a print_content_prevention policy is active; the keyword
+         // classifier remains the fallback when it isn't (see
+         // EvaluatePrintContent()'s !printContentInspection.load() early
+         // return, and PrintMonitor::MonitorLoop's m_printContent-unset
+         // branch). Ported from CyberSentinel-DLP.
+         printMonitor->SetPrintContent(
+             [this](const std::string& printerName, int jobId, const std::string& docName) {
+                 return EvaluatePrintContent(printerName, jobId, docName);
+             });
          printMonitor->Start();
          logger.Info("Print monitoring started");
 
@@ -4554,6 +4615,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          FetchApplicationControl();
          // Wireless / Bluetooth transfer control -- same reasoning, own endpoint.
          FetchWirelessPolicy();
+         // Printer device control + print content inspection -- same reasoning, own endpoint.
+         FetchPrinterPolicy();
      }
 
      // Pulls GET /agents/{id}/network-share-policy and caches it locally.
@@ -4770,6 +4833,238 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          } catch (...) {
              logger.Debug("FetchWirelessPolicy failed");
          }
+     }
+
+     // ── Printer device control + print content inspection ──────────────────
+     // Ported from CyberSentinel-DLP.
+     static std::string NormalizePrinter(const std::string& name) {
+         return ToUpperStr(name);
+     }
+
+     // A printer is "network" if it's marked PRINTER_ATTRIBUTE_NETWORK or its
+     // port name looks like a UNC path / IP / WSD / TCP port (covers printers
+     // added without the network flag set, which happens more often than
+     // you'd expect with third-party print drivers).
+     bool IsNetworkPrinter(const std::string& printerName) {
+         HANDLE hPrinter = NULL;
+         if (!OpenPrinterA(const_cast<LPSTR>(printerName.c_str()), &hPrinter, NULL))
+             return false;
+         bool network = false;
+         DWORD needed = 0;
+         GetPrinterA(hPrinter, 2, NULL, 0, &needed);
+         if (needed > 0) {
+             std::vector<BYTE> buf(needed);
+             if (GetPrinterA(hPrinter, 2, buf.data(), needed, &needed)) {
+                 PRINTER_INFO_2A* pi = reinterpret_cast<PRINTER_INFO_2A*>(buf.data());
+                 if (pi->Attributes & PRINTER_ATTRIBUTE_NETWORK) network = true;
+                 std::string port = ToUpperStr(pi->pPortName ? pi->pPortName : "");
+                 if (port.rfind("\\\\", 0) == 0 || port.find("IP_") != std::string::npos ||
+                     port.find("WSD") != std::string::npos || port.find("TCP") != std::string::npos)
+                     network = true;
+             }
+         }
+         ClosePrinter(hPrinter);
+         return network;
+     }
+
+     // Decision consumed by the PrintMonitor callback: should this printer's
+     // job be blocked by the printer_control policy? In audit mode we log
+     // "would block" but return false (don't cancel).
+     bool ShouldBlockPrinter(const std::string& printerName) {
+         if (!printerControlEnforced.load()) return false;
+         std::string mode, scope;
+         bool sanctioned = false;
+         {
+             std::lock_guard<std::mutex> lock(printerPolicyMutex);
+             mode = printerControlMode;
+             scope = printerControlScope;
+             sanctioned = sanctionedPrinters.count(NormalizePrinter(printerName)) > 0;
+         }
+         bool matches = false;
+         if (scope == "block_all")          matches = true;
+         else if (scope == "block_network") matches = IsNetworkPrinter(printerName);
+         else if (scope == "block_local")   matches = !IsNetworkPrinter(printerName);
+         else if (scope == "allowlist")     matches = !sanctioned;   // block anything not sanctioned
+         if (!matches) return false;
+         if (mode == "audit") {
+             logger.Info("PRINT_DEVICE_AUDIT: would block printer " + printerName +
+                         " (scope " + scope + ")");
+             return false;
+         }
+         return true;   // enforce
+     }
+
+     // Pulls GET /agents/{id}/printer-policy and caches it locally. Combined
+     // device-control + content-inspection response (see the server endpoint's
+     // own docstring for why they're one call). Mirrors FetchNetworkSharePolicy()
+     // above: polled on the policy-sync cadence, own try/catch.
+     void FetchPrinterPolicy() {
+         try {
+             std::pair<int, std::string> resp = GetHttpClient()->Get(
+                 "/agents/" + config.agentId + "/printer-policy");
+             auto& [status, response] = resp;
+             if (status != 200) return;   // keep last-known-good on error/outage
+
+             bool enforced = ExtractJsonBool(response, "enforced");
+             std::string mode  = ToLower(config.ExtractJsonValue(response, "mode"));
+             std::string scope = ToLower(config.ExtractJsonValue(response, "scope"));
+             auto rawPrinters = ExtractJsonArray(response, "printers");
+             std::set<std::string> printers;
+             for (const auto& p : rawPrinters) printers.insert(NormalizePrinter(p));
+
+             bool contentInspection = ExtractJsonBool(response, "content_inspection");
+             std::string contentMode = ToLower(config.ExtractJsonValue(response, "content_mode"));
+
+             {
+                 std::lock_guard<std::mutex> lock(printerPolicyMutex);
+                 printerControlMode = mode;
+                 printerControlScope = scope;
+                 sanctionedPrinters = printers;
+                 printContentMode = contentMode;
+             }
+             printerControlEnforced.store(enforced);
+             printContentInspection.store(contentInspection);
+             logger.Debug("Printer control: enforced=" + std::string(enforced ? "true" : "false") +
+                         " mode=" + (mode.empty() ? "off" : mode) +
+                         " scope=" + (scope.empty() ? "none" : scope) +
+                         " content_inspection=" + std::string(contentInspection ? "true" : "false"));
+         } catch (const std::exception& e) {
+             logger.Debug(std::string("FetchPrinterPolicy failed: ") + e.what());
+         } catch (...) {
+             logger.Debug("FetchPrinterPolicy failed");
+         }
+     }
+
+     // ── Print CONTENT inspection (real spooled-document content) ───────────
+     static std::string ReadFileBytesAllForPrint(const std::string& path) {
+         std::ifstream f(path, std::ios::binary);
+         if (!f) return "";
+         return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+     }
+
+     // Newest *.SPL in the spool dir (fallback when the job-id-based filename
+     // guesses below don't match -- e.g. a non-default print processor).
+     std::string NewestSpoolFile(const std::string& dir) {
+         WIN32_FIND_DATAA fd;
+         HANDLE h = FindFirstFileA((dir + "*.SPL").c_str(), &fd);
+         if (h == INVALID_HANDLE_VALUE) return "";
+         std::string best;
+         FILETIME bestT{0, 0};
+         do {
+             if (CompareFileTime(&fd.ftLastWriteTime, &bestT) > 0) {
+                 bestT = fd.ftLastWriteTime;
+                 best = dir + fd.cFileName;
+             }
+         } while (FindNextFileA(h, &fd));
+         FindClose(h);
+         return best;
+     }
+
+     // Resolve the spooled document's actual file path for this job. Tries
+     // GetPrintSpoolFilePath()'s "FP<jobid>.SPL" convention first (already
+     // used by the existing per-job hash callback below), then the plain
+     // "<jobid>.SPL" convention CyberSentinel-DLP uses, then falls back to
+     // the newest *.SPL in the spool directory -- covers both naming schemes
+     // observed across different Windows print-processor configurations
+     // instead of betting on just one.
+     std::string ResolveSpoolFilePath(int jobId) {
+         std::string path = GetPrintSpoolFilePath(jobId);
+         if (!path.empty()) return path;
+
+         char sysdir[MAX_PATH] = {0};
+         GetSystemDirectoryA(sysdir, MAX_PATH);
+         std::string dir = std::string(sysdir) + "\\spool\\PRINTERS\\";
+         char name[32];
+         snprintf(name, sizeof(name), "%05d.SPL", jobId);
+         std::string plain = dir + name;
+         if (fs::exists(plain)) return plain;
+
+         return NewestSpoolFile(dir);
+     }
+
+     // Best-effort text extraction from raw spool bytes: pull ASCII runs AND
+     // UTF-16LE runs (EMF ExtTextOutW stores document text as UTF-16). Works
+     // across EMF/RAW/PS/PCL to varying degrees -- enough to feed the
+     // classifier. Ported from CyberSentinel-DLP.
+     static std::string ExtractSpoolStrings(const std::string& data) {
+         std::string out, run;
+         for (unsigned char c : data) {
+             if (c >= 0x20 && c < 0x7f) run += (char)c;
+             else { if (run.size() >= 4) { out += run; out += ' '; } run.clear(); }
+         }
+         if (run.size() >= 4) { out += run; out += ' '; }
+         run.clear();
+         for (size_t i = 0; i + 1 < data.size(); i += 2) {
+             unsigned char lo = (unsigned char)data[i], hi = (unsigned char)data[i + 1];
+             if (hi == 0 && lo >= 0x20 && lo < 0x7f) run += (char)lo;
+             else { if (run.size() >= 4) { out += run; out += ' '; } run.clear(); }
+         }
+         if (run.size() >= 4) { out += run; out += ' '; }
+         return out;
+     }
+
+     // Real text of the spooled document for this job -- replaces the old
+     // filename-keyword-only classifier with the actual content sent to the
+     // printer. Stashes the document's SHA-256 (via the existing
+     // CalculateFileHash(), not a new hash implementation) for the print
+     // event to log; the content-inspection path already resolved the path,
+     // so this avoids a second directory scan when the event callback runs.
+     std::string ReadSpoolText(int jobId) {
+         std::string path = ResolveSpoolFilePath(jobId);
+         if (path.empty()) return "";
+         std::string bytes = ReadFileBytesAllForPrint(path);
+         if (bytes.empty()) return "";
+         lastSpoolHash.jobId = jobId;
+         try { lastSpoolHash.sha256 = CalculateFileHash(path); } catch (...) {}
+         return ExtractSpoolStrings(bytes);
+     }
+
+     // Callback for PrintMonitor: inspect the spooled document via the same
+     // real-time /policy/evaluate endpoint the USB and network-share
+     // content-aware paths already use, and return true to block. Only runs
+     // when a print_content_prevention policy is active. Fail-open (allow)
+     // on any error so printing is never bricked by a DLP server outage.
+     // Ported from CyberSentinel-DLP.
+     bool EvaluatePrintContent(const std::string& printerName, int jobId, const std::string& docName) {
+         if (!printContentInspection.load()) return false;
+         std::string text = ReadSpoolText(jobId);
+         if (text.size() < 20) text = docName;   // fall back to the document name
+
+         JsonBuilder j;
+         j.AddString("file_name", docName);
+         j.AddString("file_content", text.substr(0, 200000));
+         j.AddString("event_type", "print");
+         j.AddString("destination_type", "printer");
+         j.AddString("destination_path", printerName);
+         // Send the spooled document's hash so the server's file-hash denylist
+         // rule can match (the print channel sends extracted text, not raw
+         // bytes, so the server can't compute this itself).
+         if (lastSpoolHash.jobId == jobId && !lastSpoolHash.sha256.empty()) {
+             j.AddString("file_hash", lastSpoolHash.sha256);
+         }
+
+         std::pair<int, std::string> resp = GetHttpClient()->Post(
+             "/agents/" + config.agentId + "/policy/evaluate", j.Build());
+         auto& [status, response] = resp;
+         if (status != 200) {
+             logger.Warning("Print content evaluate HTTP " + std::to_string(status) + " -- allowing");
+             return false;
+         }
+
+         bool block = config.ExtractJsonValue(response, "action") == "block";
+         std::string cmode;
+         {
+             std::lock_guard<std::mutex> lock(printerPolicyMutex);
+             cmode = printContentMode;
+         }
+         if (block && cmode == "audit") {
+             logger.Info("PRINT_CONTENT_AUDIT: would block " + docName +
+                         " -- sensitive content (" + std::to_string(text.size()) + " chars)");
+             return false;   // audit: log, don't cancel
+         }
+         logger.Info("Print content inspection: " + docName + " -> " +
+                     (block ? "BLOCK" : "allow") + " (" + std::to_string(text.size()) + " chars)");
+         return block;
      }
 
      // Same directory-resolution rule as Logger (SECEOKNIGHT_LOG_DIR env var,

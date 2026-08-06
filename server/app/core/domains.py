@@ -74,8 +74,12 @@ POLICY_TYPE_DOMAIN = {
     # USB device allowlist (strict default-deny by serial number) — created via
     # the USB Devices page's enforcement toggle, ported from CyberSentinel-DLP.
     "usb_device_control": PolicyDomain.ACCESS_CONTROL,
-    # Printer allowlist — same idea, no agent enforcement yet (see printers.py).
+    # Printer allowlist — device control (block_all/network/local/allowlist).
+    # Agent enforcement landed alongside print_content_prevention below.
     "printer_control": PolicyDomain.THREAT,
+    # Print CONTENT inspection -- real spooled-document text scanning (not
+    # just filename keywords). Ported from CyberSentinel-DLP.
+    "print_content_prevention": PolicyDomain.THREAT,
 }
 
 # Event ``event_type`` → domain, so events without a resolvable matched-policy
