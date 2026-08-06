@@ -8,6 +8,27 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Offline event spool + replay on reconnect -- new capability (August 6, 2026)
+
+### Summary
+
+Closes task #96 / the second half of the "agent goes offline" gap (the first half -- offline policy persistence -- was closed for Windows by task #107, and is still open on Linux as task #117). Before this change, `SendEvent()` would POST to `/events` and, on any failure (non-200/201 status or a thrown exception -- laptop asleep, VPN dropped, server mid-restart), just log a warning and silently discard the event. Every USB block, network-exfil block, print event, clipboard alert, etc. that happened while the agent couldn't reach the server was gone forever, with no dashboard record it ever occurred. Ported CyberSentinel-DLP's bounded on-disk spool-and-replay design.
+
+### What was added
+
+**`agent.cpp`**: `SendEvent()` keeps its existing `void` signature (not changed to `bool`, so its ~30+ existing call sites needed zero changes) but now calls a new `SpoolEvent()` on both of its failure paths (non-200/201 status, and the catch-all exception handler) instead of just logging and dropping.
+
+- `SpoolFilePath()`: reuses the exact same `SECEOKNIGHT_LOG_DIR`-env-var-with-`C:\ProgramData\SeceoKnight\logs`-fallback directory rule as `PolicyCachePath()` (the task #107 policy cache) and the `Logger`, for the same non-admin-writability reason -- NOT exe-relative.
+- `SpoolEvent(eventData)`: appends one JSON object per line to `seceoknight_events.spool`, guarded by a `MAX_SPOOL_BYTES` cap (16 MB, matching CyberSentinel's constant) so an outage that outlasts the cap stops growing the file instead of filling the disk; a `spoolFullWarned` atomic flag stops the "spool full" warning from spamming the log every single dropped event, resetting once space frees up on the next successful flush.
+- `FlushSpooledEvents()`: reads the spool file, replays up to `MAX_FLUSH_BATCH` (100) lines per call via the same `/events` POST, and **stops at the first renewed failure** (`serverGoneAgain`) rather than hammering a server that's still warming up mid-recovery. Rewrites the spool file with only the unsent tail, or deletes it entirely once everything's replayed.
+- Wired into `HeartbeatLoop()`: the moment `heartbeatOk` is true (a heartbeat that actually succeeded, using the `bool`-returning `SendHeartbeat()` from the earlier stale-connection-recovery fix in this same loop) `FlushSpooledEvents()` is called, matching CyberSentinel's own choice of "successful heartbeat" as the reconnect signal. Wrapped in its own try/catch so a flush issue can never take down the heartbeat loop itself.
+
+### Verification
+
+Brace-balance check on `agent.cpp` matches the established baseline exactly (paren=-2, brace=-5, bracket=-1), both before and after this change. `<fstream>` (needed for `std::ifstream`/`std::ofstream` in the new methods) and `std::filesystem` (`fs::exists`/`fs::file_size`/`fs::remove`) were already included and already in use by `PolicyCachePath()`/`LoadCachedPolicyBundle()`, so no new includes were needed. **Not live-tested**: no MinGW compiler and no way to simulate a real network outage/reconnect cycle in this sandbox, so the actual spool-growth-cap behavior, the batch-replay stop-on-failure logic, and the heartbeat-triggered flush haven't been exercised end-to-end. Worth a manual test before relying on this in production: kill server connectivity, generate a few blocked-transfer events, confirm they land in `seceoknight_events.spool`, restore connectivity, confirm the next heartbeat drains the file and the events appear in the dashboard.
+
+---
+
 ## 🛡️ Messaging / thick-client app attachment control -- new capability (August 6, 2026)
 
 ### Summary

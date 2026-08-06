@@ -2640,6 +2640,21 @@ static ClassificationResult Classify(const std::string& content,
      std::vector<std::string> messagingExemptTypes;      // extensions, no leading dot
      std::mutex messagingMutex;
 
+     // ── Offline event spool (task #116) ─────────────────────────────────────
+     // Ported from CyberSentinel-DLP. SendEvent() normally POSTs straight to
+     // /events; when that fails (server unreachable, non-200/201, or a thrown
+     // exception -- e.g. laptop asleep, VPN drop, server restart) the event is
+     // appended to a bounded on-disk spool instead of being silently dropped.
+     // FlushSpooledEvents() is called from HeartbeatLoop() the moment a
+     // heartbeat actually succeeds (the same "server is reachable again"
+     // signal CyberSentinel uses), replaying spooled events in capped batches
+     // so a long outage can't turn reconnection into a self-inflicted event
+     // storm against a server that may still be warming up.
+     static constexpr size_t MAX_SPOOL_BYTES = 16ull * 1024 * 1024;  // 16 MB cap
+     static constexpr int MAX_FLUSH_BATCH = 100;                    // per heartbeat
+     std::mutex spoolMutex;
+     std::atomic<bool> spoolFullWarned{false};
+
      // ── Wireless / Bluetooth transfer control (task #113) ───────────────────
      // Synced from GET /agents/{id}/wireless-policy. Ported from CyberSentinel-
      // DLP. Blocks Bluetooth file transfer (the built-in fsquirt.exe wizard)
@@ -6057,6 +6072,18 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 consecutiveFailures = 0;
                 heartbeatCount++;
 
+                // A successful heartbeat is the "server is reachable again"
+                // signal -- the same one CyberSentinel-DLP replays its spool
+                // on. Cheap no-op when nothing is spooled (SpoolFilePath()
+                // won't exist).
+                try {
+                    FlushSpooledEvents();
+                } catch (...) {
+                    // FlushSpooledEvents() already catches internally; this
+                    // is belt-and-suspenders so a flush issue never takes
+                    // down the heartbeat loop itself.
+                }
+
                 /* Log evaluation performance stats every 10 heartbeats
                  * (~5 min at default 30s interval).
                  * This proves the sub-10ms local evaluation guarantee. */
@@ -8688,7 +8715,7 @@ if (shouldMonitor) {
                  logger.Debug("Dropping event because no active policies");
                  return;
              }
-             
+
              std::pair<int, std::string> ev = GetHttpClient()->Post("/events", eventData);
              auto& [status, response] = ev;
 
@@ -8696,9 +8723,149 @@ if (shouldMonitor) {
                  logger.Debug("Event sent successfully");
              } else {
                  logger.Warning("Failed to send event: " + std::to_string(status));
+                 SpoolEvent(eventData);
              }
          } catch (...) {
              logger.Error("Error sending event");
+             SpoolEvent(eventData);
+         }
+     }
+
+     // Same directory-resolution rule as Logger / PolicyCachePath() above
+     // (SECEOKNIGHT_LOG_DIR env var, default C:\ProgramData\SeceoKnight\logs)
+     // -- NOT exe-relative, for the same non-admin-writability reason.
+     std::string SpoolFilePath() const {
+         const char* envLogDir = std::getenv("SECEOKNIGHT_LOG_DIR");
+         std::string dir = envLogDir ? envLogDir : "C:\\ProgramData\\SeceoKnight\\logs";
+         try {
+             fs::create_directories(dir);
+         } catch (...) {
+             // Best effort -- the write below will surface any real failure.
+         }
+         return dir + "\\seceoknight_events.spool";
+     }
+
+     // Append one JSON event (one object per line) to the spool file, unless
+     // the spool is already at MAX_SPOOL_BYTES -- an outage that outlasts the
+     // cap drops the oldest-unsent-but-not-yet-spooled events rather than
+     // growing without bound and filling the disk.
+     void SpoolEvent(const std::string& eventData) {
+         try {
+             std::lock_guard<std::mutex> lock(spoolMutex);
+             const std::string path = SpoolFilePath();
+
+             std::error_code ec;
+             uint64_t currentSize = 0;
+             if (fs::exists(path, ec) && !ec) {
+                 currentSize = static_cast<uint64_t>(fs::file_size(path, ec));
+                 if (ec) currentSize = 0;
+             }
+
+             if (currentSize >= MAX_SPOOL_BYTES) {
+                 if (!spoolFullWarned.exchange(true)) {
+                     logger.Warning("Event spool full (" + std::to_string(MAX_SPOOL_BYTES) +
+                                     " bytes) -- dropping events until server reconnects and flushes it");
+                 }
+                 return;
+             }
+             spoolFullWarned = false;
+
+             // Flatten to a single line -- eventData is already-built JSON with
+             // no embedded raw newlines from JsonBuilder, but guard anyway so a
+             // corrupt line can never merge with its neighbors on replay.
+             std::string line = eventData;
+             for (char& c : line) {
+                 if (c == '\n' || c == '\r') c = ' ';
+             }
+
+             std::ofstream f(path, std::ios::app | std::ios::binary);
+             if (!f.is_open()) {
+                 logger.Warning("Could not open event spool for append: " + path);
+                 return;
+             }
+             f << line << "\n";
+             logger.Debug("Event spooled (server unreachable): " + path);
+         } catch (const std::exception& e) {
+             logger.Warning(std::string("Failed to spool event: ") + e.what());
+         } catch (...) {
+             logger.Warning("Failed to spool event");
+         }
+     }
+
+     // Called from HeartbeatLoop() the moment a heartbeat succeeds -- the
+     // signal that the server is reachable again. Replays up to
+     // MAX_FLUSH_BATCH lines per call (not the whole file at once) and stops
+     // replaying as soon as one POST fails again, so a still-recovering
+     // server isn't immediately hammered with a full outage's backlog. Any
+     // unsent lines (the remainder, plus anything past the batch cap) are
+     // rewritten back to the spool file for the next successful heartbeat.
+     void FlushSpooledEvents() {
+         try {
+             std::lock_guard<std::mutex> lock(spoolMutex);
+             const std::string path = SpoolFilePath();
+
+             std::error_code existsEc;
+             if (!fs::exists(path, existsEc) || existsEc) {
+                 return;   // nothing spooled
+             }
+
+             std::ifstream in(path, std::ios::binary);
+             if (!in.is_open()) {
+                 return;
+             }
+             std::vector<std::string> lines;
+             std::string ln;
+             while (std::getline(in, ln)) {
+                 if (!ln.empty()) lines.push_back(ln);
+             }
+             in.close();
+
+             if (lines.empty()) {
+                 fs::remove(path, existsEc);
+                 return;
+             }
+
+             logger.Info("Flushing " + std::to_string(lines.size()) +
+                         " spooled event(s) after reconnect");
+
+             size_t sent = 0;
+             bool serverGoneAgain = false;
+             for (; sent < lines.size() && sent < static_cast<size_t>(MAX_FLUSH_BATCH); ++sent) {
+                 if (serverGoneAgain) break;
+                 try {
+                     std::pair<int, std::string> ev = GetHttpClient()->Post("/events", lines[sent]);
+                     auto& [status, response] = ev;
+                     if (status != 200 && status != 201) {
+                         serverGoneAgain = true;
+                         break;
+                     }
+                 } catch (...) {
+                     serverGoneAgain = true;
+                     break;
+                 }
+             }
+
+             if (sent == lines.size()) {
+                 // Everything replayed successfully -- clear the spool.
+                 fs::remove(path, existsEc);
+                 spoolFullWarned = false;
+                 logger.Info("Event spool fully flushed and cleared");
+             } else {
+                 // Rewrite only what's left unsent (the failed/unattempted tail).
+                 std::ofstream out(path, std::ios::trunc | std::ios::binary);
+                 if (out.is_open()) {
+                     for (size_t i = sent; i < lines.size(); ++i) {
+                         out << lines[i] << "\n";
+                     }
+                 }
+                 logger.Warning("Event spool flush stopped after " + std::to_string(sent) +
+                                 "/" + std::to_string(lines.size()) +
+                                 " -- server unreachable again, will retry next heartbeat");
+             }
+         } catch (const std::exception& e) {
+             logger.Warning(std::string("Failed to flush event spool: ") + e.what());
+         } catch (...) {
+             logger.Warning("Failed to flush event spool");
          }
      }
      void CleanupOldOriginalContents() {
