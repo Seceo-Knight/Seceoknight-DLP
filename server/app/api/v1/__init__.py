@@ -35,6 +35,7 @@ from app.api.v1 import (
     system,
     usb_devices,
     printers,
+    data_matching,
 )
 
 api_router = APIRouter()
@@ -77,3 +78,7 @@ api_router.include_router(taxii.router, tags=["TAXII"])
 api_router.include_router(system.router, prefix="/system", tags=["System"])
 api_router.include_router(usb_devices.router, prefix="/usb-devices", tags=["USB Device Control"])
 api_router.include_router(printers.router, prefix="/printers", tags=["Printer Control"])
+# EDM (row-level PII combinations) + fuzzy document fingerprinting (partial/
+# edited-copy detection) -- distinct from /fingerprints above, which is
+# whole-file exact-hash matching only. Ported from CyberSentinel-DLP.
+api_router.include_router(data_matching.router, prefix="/data-matching", tags=["Data Matching (EDM + Fingerprint)"])

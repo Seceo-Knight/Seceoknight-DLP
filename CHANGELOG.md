@@ -8,6 +8,58 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Second Deep-Dive vs CyberSentinel-DLP: agents/, server/, manage-windows-agent.ps1 (August 6, 2026)
+
+### Summary
+
+User asked for a second pass, this time on the `agents/` and `server/` folders plus `manage-windows-agent.ps1`. A subagent-driven comparison (read-only, no code changes) surfaced two genuine security/reliability gaps, two operational-tooling gaps, and one big missing enterprise-DLP capability -- all fixed/ported in this pass. It also confirmed several non-issues (SK already ahead in a few places, some CyberSentinel files are their own dead weight) that are worth recording so nothing gets second-guessed later.
+
+### 🚨 Critical fix: Linux agent template shipped a hardcoded `agent_id`
+
+`agents/endpoint/linux/agent_config.json` -- the template `install.sh` copies to every machine -- had a literal, committed `agent_id` GUID. `agent.py`'s config loader does `default_config.update(loaded_config)`, so that literal value silently overrode the freshly-generated `uuid.uuid4()` default on **every single install**. Every fleet-installed Linux agent from the unmodified template got the *same* `agent_id`, so they'd all collide as one agent record on the server (last heartbeat wins, events misattributed). Found while building `rollout.sh` (below) -- would have shipped broken fleet installs otherwise. Fixed by removing the `agent_id` key from the template entirely, letting `agent.py`'s existing per-machine generation take over as designed.
+
+### Ransomware early-warning detection (Windows agent) -- new capability, previously absent entirely
+
+`grep -rli ransomware` across the whole repo returned zero hits before this change. Ported CyberSentinel-DLP's two honestly-scoped heuristics into `agent.cpp` (detection/alert only -- `ReadDirectoryChangesW` carries no PID, so the agent cannot kill an encryptor; recovery still depends on EDR + offline backups):
+
+- **Burst-rate detection** (`NoteFileChangeForRansomware`): a sliding window counts every file change under a monitored tree (deliberately unfiltered by policy extension, since an encryptor rewrites whatever it finds); N changes in a configurable window fires a critical `ransomware`/`mass_file_modification` event, cooldown-gated to avoid an alert flood.
+- **Canary/tripwire files** (`PlantCanaryFile`/`IsCanaryPath`/`ReportCanaryTripped`): a hidden, non-read-only decoy file (`!!!SeceoKnightDLP-CANARY-DO-NOT-DELETE.docx`, leading `!` so it sorts first in a directory an encryptor walks alphabetically) is dropped in every monitored directory; any write/rename/delete to it fires a near-zero-false-positive critical alert.
+
+Both are config-tunable via new `agent_config.json` keys (`ransomware_detection_enabled`, `ransomware_burst_threshold`, `ransomware_window_seconds`, `ransomware_cooldown_seconds`), all optional and defaulted so an existing config keeps working unchanged. Added `"ransomware": PolicyDomain.THREAT` to `server/app/core/domains.py` so these events get correctly domain-scoped for RBAC/reporting like every other threat-category event.
+
+### Windows agent offline policy cache -- closes half of pending task #95
+
+The Linux agent already persisted its last-known-good policy bundle to disk (`policy_cache.py`); the Windows agent -- the primary, most-developed platform -- did not. Ported `LoadCachedPolicyBundle()`/`SavePolicyBundleToCache()`/`PolicyCachePath()` into `agent.cpp`: every successful policy sync now writes the bundle to `C:\ProgramData\SeceoKnight\logs\seceoknight_policies.cache` (same directory-resolution rule as the Logger, not exe-relative -- reusing the already-fixed non-admin-writable-path convention rather than risking the same bug again under a different name), and `Start()` loads it before the first sync attempt. Previously, an agent that restarted while the server was unreachable enforced **nothing** until the next successful sync -- silently turning "fail closed on API error" into "fail wide open after a restart" (kill the agent, block the server, restart == free bypass; a laptop booting off-VPN hit the same hole with no malice at all). Task #95's other half (event spool for offline audit trail) is still pending.
+
+### Linux endpoint `uninstall.sh` + `rollout.sh` -- new scripts
+
+`agents/endpoint/linux/` had no scripted uninstall (the repo-root `uninstall.sh` tears down the *server* stack, a different thing) and no fleet-deployment helper. Added both, ported from CyberSentinel-DLP and adapted to SeceoKnight's actual install.sh behavior:
+
+- **`uninstall.sh`**: data-safe by default (keeps `/etc/seceoknight` config + quarantine so a reinstall reuses the same agent identity), `--purge` to remove everything, with a 10-second warn-and-abort-window before deleting a non-empty quarantine directory (it may hold the only copy of exfiltrated data).
+- **`rollout.sh`**: SSH/scp to a list of hosts (`--hosts`/`--hosts-file`), configurable concurrency, per-host failure logs printed at the end. Simpler than CyberSentinel's equivalent because SK's `install.sh` already self-downloads its checksummed binary from GitHub on each target -- no need to ship a binary payload over scp at all, only `--from-source` needs the extra files. Also added a `--server-url` flag to `install.sh` itself (previously the only way to set the server URL was hand-editing `agent_config.json`'s `YOUR_SERVER_IP` placeholder after install) via `sed`, not a Python/JSON edit, so it still works on the no-Python prebuilt-binary install path.
+
+### Exact Data Matching (EDM) + document fingerprinting -- new server-side capability
+
+The single biggest capability gap found: SeceoKnight's only content-fingerprinting was `fingerprint_service.py`'s whole-file SHA-256 hash (exact byte-identical matches only, task #78's file-identity denylist). Ported CyberSentinel-DLP's data-matching engine, which adds two things that hash matching structurally cannot do:
+
+- **EDM (Exact Data Matching)**: upload a protected dataset (CSV or JSON rows -- e.g. real customer names+SSNs); the server indexes it as **keyed HMAC-SHA256 digests** (`derive_key`/`keyed_digest` in `data_matching_service.py`, keyed with `settings.SECRET_KEY` so a stolen index can't be brute-forced) and **discards the plaintext** immediately after indexing -- there is no "download source" endpoint, by design. Fires on **row-level field combinations** (e.g. name AND ssn from the same source record) rather than single values, which is what keeps false positives near zero.
+- **Document fingerprinting**: winnowed k-word shingle hashing (`_shingle_hashes`/`_winnow`) catches a **partial or edited copy** of a protected document -- a paragraph pasted into an email, a reformatted excerpt -- not just an identical file.
+
+New files: `app/services/data_matching_service.py` (pure, stdlib-only, no DB -- unit-tested standalone in this sandbox, see Verification), `app/services/data_match_index_service.py` (DB-backed orchestration), `app/models/data_match_source.py` (stores the keyed index only, never plaintext), `app/api/v1/data_matching.py` (REST: `POST /edm`, `POST /fingerprint`, `GET /`, `GET /{id}`, `PATCH /{id}`, `DELETE /{id}`, `POST /test`), registered at `/data-matching` (distinct from the existing `/fingerprints` whole-file-hash router). Migration `035_data_match_sources.py` adds the table. Matches CyberSentinel's own scope for this feature (management + a manual test endpoint) -- automatic wiring into the live classification pipeline is a natural follow-up, not done in this pass, same as upstream.
+
+### Non-findings (checked, confirmed not gaps)
+
+- `agents/endpoint/linux/agent_launcher.py` (CyberSentinel-only) is a PyInstaller entry point, not a crash-supervisor -- SK's `Restart=always`/`RestartSec=10` in the systemd unit already covers that.
+- `manage-windows-agent.ps1` (750 lines) vs SK's `manage-agent.ps1` (418 lines): the size difference is UI polish + CyberSentinel's own legacy-rename cleanup cruft, not missing capability. SK is already ahead in two respects: it calls the server unregister endpoint on uninstall (CyberSentinel's doesn't -- the exact "ghost agent" bug SK fixed in task #48), and it tracks all three of SK's scheduled tasks vs. CyberSentinel's one.
+- Kernel driver (`kernel/csfilter.c`) is a byte-for-byte identical skeleton in both products (only branding differs) -- SK actually has more surrounding tooling (`install_driver.ps1`, a real Visual Studio project) than CyberSentinel does.
+- `docker-compose.deploy.yml` and `GITHUB_DEPLOYMENT_COMPLETE.md` (from the prior deployment-tooling pass) are confirmed CyberSentinel-internal dead weight, not gaps.
+
+### Verification
+
+`ast.parse` clean on every new/edited `.py` file. `python3 -c "import yaml"` not needed here (no YAML changes this pass). Brace-balance check on `agent.cpp` (paren=-2, brace=-5, bracket=-1) matches the pre-existing baseline exactly across all edits in this pass -- no new imbalance introduced. The pure EDM/fingerprint engine (`data_matching_service.py`) was actually **executed and asserted against** in this sandbox (no DB needed, since it's pure stdlib): built an EDM index from 2 synthetic records, confirmed a positive match on combined fields, confirmed a negative on a single field below `min_fields`, confirmed a random SSN-shaped number NOT in the index doesn't match; built a fingerprint index from 200 synthetic words, confirmed an exact match, a 50-word partial excerpt still matching (containment 1.0), and unrelated content not matching. All 6 assertions passed. C++ changes (ransomware detection, policy cache) and the new API/model/migration are **not yet live-tested** against a real compiler/database -- no MSVC or live Postgres in this sandbox. Worth a real build + a real `alembic upgrade head` run before relying on this in production.
+
+---
+
 ## 🚨 Critical Fix: The Random Admin Password Fix Was Never Actually Live (August 6, 2026)
 
 ### Summary

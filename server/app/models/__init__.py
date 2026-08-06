@@ -33,6 +33,7 @@ from app.models.ip_allowlist import IPAllowlistEntry
 from app.models.retention_config import RetentionConfig
 from app.models.sanctioned_usb_device import SanctionedUsbDevice
 from app.models.sanctioned_printer import SanctionedPrinter
+from app.models.data_match_source import DataMatchSource
 
 __all__ = [
     "Role",
@@ -72,4 +73,5 @@ __all__ = [
     "RetentionConfig",
     "SanctionedUsbDevice",
     "SanctionedPrinter",
+    "DataMatchSource",
 ]

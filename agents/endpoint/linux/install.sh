@@ -17,10 +17,15 @@ set -e
 RAW_BASE="https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/agents/endpoint/linux"
 BINARY_NAME="seceoknight_linux_agent"
 FROM_SOURCE=false
+SERVER_URL=""
 
-for arg in "$@"; do
-    case "$arg" in
-        --from-source) FROM_SOURCE=true ;;
+# Simple positional-ish parsing: --server-url takes the next argument, every
+# other recognized flag is a standalone switch.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --from-source) FROM_SOURCE=true; shift ;;
+        --server-url) SERVER_URL="${2:-}"; shift 2 ;;
+        *) shift ;;
     esac
 done
 
@@ -113,6 +118,21 @@ else
 fi
 
 cp agent_config.json /etc/seceoknight/
+
+# --server-url lets a scripted/fleet install (see rollout.sh) point the agent
+# at the real manager instead of leaving the "YOUR_SERVER_IP" placeholder in
+# place, which would otherwise need a manual edit on every single machine.
+# Uses sed rather than a Python/JSON edit so this works on the prebuilt-binary
+# install path too, which is deliberately designed to need no Python on the
+# target at all. Only the one known line (with its known quoting) is touched.
+# Does NOT touch agent_id -- that field is intentionally absent from the
+# shipped template so agent.py generates a fresh, unique one per machine on
+# first run (a shared hardcoded agent_id here previously caused every
+# fleet-installed endpoint to collide as the same agent record on the server).
+if [ -n "$SERVER_URL" ]; then
+    sed -i "s|\"server_url\": *\"[^\"]*\"|\"server_url\": \"${SERVER_URL}\"|" /etc/seceoknight/agent_config.json
+    echo "  server_url set to $SERVER_URL"
+fi
 
 # Install systemd service. Generated here (rather than copying the static
 # seceoknight-agent.service file) because ExecStart differs depending on

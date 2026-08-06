@@ -69,6 +69,11 @@ POLICY_TYPE_DOMAIN = {
 EVENT_TYPE_DOMAIN = {
     "usb": PolicyDomain.THREAT,
     "network_exfil": PolicyDomain.THREAT,
+    # Ransomware early-warning events (canary_tripped / mass_file_modification
+    # subtypes) sent by the Windows agent's burst/canary detectors -- see
+    # NoteFileChangeForRansomware()/ReportCanaryTripped() in agent.cpp.
+    # Detection/alert only, not prevention (no agent-side kill capability).
+    "ransomware": PolicyDomain.THREAT,
     "screen_capture": PolicyDomain.THREAT,
     "print_attempt": PolicyDomain.THREAT,
     "print": PolicyDomain.THREAT,

@@ -1,6 +1,5 @@
 {
   "server_url": "https://YOUR_SERVER_IP/api/v1",
-  "agent_id": "33fb7ca4-c22a-47cf-807c-5f791be9ca4a",
   "agent_name": "Linux-Agent",
   "heartbeat_interval": 3,
   "policy_sync_interval": 60,
