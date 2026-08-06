@@ -15,6 +15,11 @@ export type PolicyType =
   | 'classification_aware_policy'
   | 'browser_upload_monitoring'
   | 'file_identity_denylist'
+  | 'network_share_transfer_control'
+  | 'application_control'
+  | 'wireless_transfer_control'
+  | 'print_content_prevention'
+  | 'messaging_app_control'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
 export type ClipboardAction = 'alert' | 'log'
@@ -128,6 +133,63 @@ export interface FileIdentityDenylistConfig {
   quarantinePath?: string
 }
 
+// ── Ported from CyberSentinel-DLP (task #118) ──────────────────────────
+// Config shapes match the server contract exactly -- see the docstrings on
+// each GET /agents/{agent_id}/<x>-policy endpoint in
+// server/app/api/v1/agents.py, which is what the Windows agent actually
+// consumes and enforces.
+
+export type NetworkShareTransferMode = 'block_all' | 'content_aware' | 'off'
+export type NetworkShareTransferAction = 'audit' | 'block'
+
+export interface NetworkShareControlConfig {
+  mode: NetworkShareTransferMode
+  action: NetworkShareTransferAction
+  exception_shares?: string[]
+  exception_users?: string[]
+  exception_paths?: string[]
+  exception_file_types?: string[]
+}
+
+export type ApplicationControlMode = 'allowlist' | 'blocklist'
+
+export interface ApplicationControlConfig {
+  mode: ApplicationControlMode
+  applications: string[]
+  channels?: string[]
+  exceptions?: {
+    applications?: string[]
+    users?: string[]
+    paths?: string[]
+    file_types?: string[]
+  }
+}
+
+export type WirelessTransferMode = 'enforce' | 'audit' | 'off'
+
+export interface WirelessTransferControlConfig {
+  mode: WirelessTransferMode
+  block_bluetooth_file_transfer: boolean
+  block_nearby_sharing: boolean
+}
+
+export type PrintContentMode = 'enforce' | 'audit'
+
+export interface PrintContentPreventionConfig {
+  mode: PrintContentMode
+}
+
+export type MessagingAppAction = 'alert' | 'block'
+
+export interface MessagingAppControlConfig {
+  action: MessagingAppAction
+  apps?: string[]
+  exceptions?: {
+    users?: string[]
+    file_types?: string[]
+  }
+}
+
 // Classification-aware policy types
 export interface PolicyCondition {
   field: string
@@ -166,6 +228,11 @@ export type PolicyConfig =
   | OneDriveCloudConfig
   | ClassificationPolicyConfig
   | FileIdentityDenylistConfig
+  | NetworkShareControlConfig
+  | ApplicationControlConfig
+  | WirelessTransferControlConfig
+  | PrintContentPreventionConfig
+  | MessagingAppControlConfig
 
 export interface Policy {
   id: string

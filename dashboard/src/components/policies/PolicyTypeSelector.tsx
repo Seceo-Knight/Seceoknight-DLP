@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield, Globe, Ban } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield, Globe, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -79,6 +79,36 @@ const policyTypes: Array<{
     label: 'File Identity Denylist',
     description: 'Block files by extension or exact hash, independent of content classification',
     icon: Ban
+  },
+  {
+    type: 'network_share_transfer_control',
+    label: 'Network Share Transfer Control',
+    description: 'Control copying files to mapped network drives (UNC shares)',
+    icon: FolderInput
+  },
+  {
+    type: 'application_control',
+    label: 'Application Control',
+    description: 'Allow/block a network upload by which application performs it',
+    icon: AppWindow
+  },
+  {
+    type: 'wireless_transfer_control',
+    label: 'Wireless / Bluetooth Transfer Control',
+    description: 'Block the Bluetooth file wizard and/or Wi-Fi Direct / Nearby Sharing',
+    icon: Bluetooth
+  },
+  {
+    type: 'print_content_prevention',
+    label: 'Print Content Prevention',
+    description: 'Inspect spooled print job text and cancel jobs with sensitive content',
+    icon: Printer
+  },
+  {
+    type: 'messaging_app_control',
+    label: 'Messaging App Attachment Control',
+    description: 'Alert or block sensitive attachments picked in Teams/WhatsApp/Slack/etc.',
+    icon: MessageSquare
   }
 ]
 

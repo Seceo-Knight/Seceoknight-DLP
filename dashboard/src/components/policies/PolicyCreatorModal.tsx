@@ -12,7 +12,12 @@ import {
   GoogleDriveLocalConfig,
   GoogleDriveCloudConfig,
   OneDriveCloudConfig,
-  FileIdentityDenylistConfig
+  FileIdentityDenylistConfig,
+  NetworkShareControlConfig,
+  ApplicationControlConfig,
+  WirelessTransferControlConfig,
+  PrintContentPreventionConfig,
+  MessagingAppControlConfig
 } from '@/types/policy'
 import { validatePolicy } from '@/utils/policyUtils'
 import PolicyTypeSelector from './PolicyTypeSelector'
@@ -25,6 +30,11 @@ import GoogleDriveLocalPolicyForm from './GoogleDriveLocalPolicyForm'
 import GoogleDriveCloudPolicyForm from './GoogleDriveCloudPolicyForm'
 import OneDriveCloudPolicyForm from './OneDriveCloudPolicyForm'
 import FileIdentityDenylistPolicyForm from './FileIdentityDenylistPolicyForm'
+import NetworkShareControlPolicyForm from './NetworkShareControlPolicyForm'
+import ApplicationControlPolicyForm from './ApplicationControlPolicyForm'
+import WirelessTransferControlPolicyForm from './WirelessTransferControlPolicyForm'
+import PrintContentPreventionPolicyForm from './PrintContentPreventionPolicyForm'
+import MessagingAppControlPolicyForm from './MessagingAppControlPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
 import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react'
@@ -37,7 +47,26 @@ interface PolicyCreatorModalProps {
   editingPolicy?: Policy | null
 }
 
-const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | GoogleDriveLocalConfig | GoogleDriveCloudConfig | OneDriveCloudConfig | FileIdentityDenylistConfig | {} => {
+// All "traditional" (type/config, as opposed to conditions/actions) policy
+// config shapes. Kept as one alias so getDefaultConfig()'s return type and
+// the config useState type below don't drift out of sync with each other.
+type TraditionalPolicyConfig =
+  | ClipboardConfig
+  | FileSystemConfig
+  | USBDeviceConfig
+  | USBTransferConfig
+  | FileTransferConfig
+  | GoogleDriveLocalConfig
+  | GoogleDriveCloudConfig
+  | OneDriveCloudConfig
+  | FileIdentityDenylistConfig
+  | NetworkShareControlConfig
+  | ApplicationControlConfig
+  | WirelessTransferControlConfig
+  | PrintContentPreventionConfig
+  | MessagingAppControlConfig
+
+const getDefaultConfig = (type: PolicyType): TraditionalPolicyConfig | {} => {
   switch (type) {
     case 'classification_aware_policy':
     case 'browser_upload_monitoring':
@@ -130,6 +159,43 @@ const getDefaultConfig = (type: PolicyType): ClipboardConfig | FileSystemConfig 
         hashes: [],
         action: 'block'
       } as FileIdentityDenylistConfig
+
+    case 'network_share_transfer_control':
+      return {
+        mode: 'block_all',
+        action: 'audit',
+        exception_shares: [],
+        exception_users: [],
+        exception_paths: [],
+        exception_file_types: []
+      } as NetworkShareControlConfig
+
+    case 'application_control':
+      return {
+        mode: 'blocklist',
+        applications: [],
+        channels: [],
+        exceptions: { applications: [], users: [], paths: [], file_types: [] }
+      } as ApplicationControlConfig
+
+    case 'wireless_transfer_control':
+      return {
+        mode: 'audit',
+        block_bluetooth_file_transfer: false,
+        block_nearby_sharing: false
+      } as WirelessTransferControlConfig
+
+    case 'print_content_prevention':
+      return {
+        mode: 'audit'
+      } as PrintContentPreventionConfig
+
+    case 'messaging_app_control':
+      return {
+        action: 'alert',
+        apps: [],
+        exceptions: { users: [], file_types: [] }
+      } as MessagingAppControlConfig
   }
 }
 
@@ -156,8 +222,8 @@ export default function PolicyCreatorModal({
   const [enabled, setEnabled] = useState(editingPolicy?.enabled ?? true)
   const [agents, setAgents] = useState<Agent[]>([])
   const [agentId, setAgentId] = useState(editingPolicy?.agentIds?.[0] || '')
-  const [config, setConfig] = useState<ClipboardConfig | FileSystemConfig | USBDeviceConfig | USBTransferConfig | FileTransferConfig | GoogleDriveLocalConfig | GoogleDriveCloudConfig | OneDriveCloudConfig | FileIdentityDenylistConfig>(
-    editingPolicy?.config || (policyType ? getDefaultConfig(policyType) : getDefaultConfig('clipboard_monitoring'))
+  const [config, setConfig] = useState<TraditionalPolicyConfig>(
+    (editingPolicy?.config || (policyType ? getDefaultConfig(policyType) : getDefaultConfig('clipboard_monitoring'))) as TraditionalPolicyConfig
   )
   const [classificationPolicy, setClassificationPolicy] = useState<ClassificationPolicy>(() => {
     // DEFENSIVE: even after transformApiPolicyToFrontend there's no
@@ -602,6 +668,41 @@ export default function PolicyCreatorModal({
                 {policyType === 'file_identity_denylist' && (
                   <FileIdentityDenylistPolicyForm
                     config={config as FileIdentityDenylistConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'network_share_transfer_control' && (
+                  <NetworkShareControlPolicyForm
+                    config={config as NetworkShareControlConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'application_control' && (
+                  <ApplicationControlPolicyForm
+                    config={config as ApplicationControlConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'wireless_transfer_control' && (
+                  <WirelessTransferControlPolicyForm
+                    config={config as WirelessTransferControlConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'print_content_prevention' && (
+                  <PrintContentPreventionPolicyForm
+                    config={config as PrintContentPreventionConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'messaging_app_control' && (
+                  <MessagingAppControlPolicyForm
+                    config={config as MessagingAppControlConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

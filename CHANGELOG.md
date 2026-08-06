@@ -8,6 +8,38 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Dashboard UI forms for 5 new policy types -- new capability (August 6, 2026)
+
+### Summary
+
+Closes task #118, the last item off the CyberSentinel-parity list from this batch of work. The previous five entries (tasks #111-115) added real Windows-agent enforcement and server-side policy endpoints for network share transfer control, application control, wireless/Bluetooth control, print content prevention, and messaging app attachment control -- but an admin had no way to actually create or edit any of those five policy types from the dashboard; the only way to set one up was a raw API call. This entry adds the missing management surface.
+
+### What was added
+
+Five new form components in `dashboard/src/components/policies/`, each matching the established `FileIdentityDenylistPolicyForm.tsx`/`FileTransferPolicyForm.tsx` conventions exactly (plain Tailwind utility classes on the existing dark `gray-900`/`indigo-500` palette, no custom design-system class names, radio-group toggles for exclusive mode/action choices, comma-separated text inputs for exception lists, a defensive `rawConfig ?? default` rebuild at the top of every component so a freshly-selected policy type never dereferences `undefined`):
+
+- `NetworkShareControlPolicyForm.tsx` -- mode (block_all/content_aware/off), action (audit/block), 4 exception-list inputs.
+- `ApplicationControlPolicyForm.tsx` -- mode (allowlist/blocklist), a quick-toggle chip row of common CLI transfer tools (curl.exe, wget.exe, powershell.exe, bitsadmin.exe, certutil.exe, rclone.exe) plus free-text add, channels, 4 exception-list inputs.
+- `WirelessTransferControlPolicyForm.tsx` -- mode (enforce/audit/off), two checkboxes for the two independently-toggleable channels (Bluetooth file transfer, Wi-Fi Direct/Nearby Sharing).
+- `PrintContentPreventionPolicyForm.tsx` -- mode (enforce/audit) only, matching the backend's minimal config shape; explicitly notes this is content-level inspection, distinct from the printer-device allowlist already managed on the Printers page.
+- `MessagingAppControlPolicyForm.tsx` -- action (alert/block, alert-first default matching the agent's own alert-first design), a quick-toggle chip row of the server's default managed-app list (teams.exe, whatsapp.exe, telegram.exe, slack.exe, discord.exe, signal.exe) plus free-text add, 2 exception-list inputs.
+
+**Wiring** (4 files, all sequential-conditional/switch additions matching the existing style, no new abstractions):
+- `types/policy.ts`: 5 new `PolicyType` literals, 5 new `XConfig` interfaces matching the server contract in `agents.py` exactly, added to the `PolicyConfig` union.
+- `components/policies/PolicyTypeSelector.tsx`: 5 new tiles with `lucide-react` icons (`FolderInput`, `AppWindow`, `Bluetooth`, `Printer`, `MessageSquare`).
+- `components/policies/PolicyCreatorModal.tsx`: 5 new form imports, 5 new `getDefaultConfig()` cases, 5 new Step-2 JSX conditional blocks. Introduced a `TraditionalPolicyConfig` type alias (the 14-member config union, up from 9) so the type doesn't have to be spelled out three times and drift.
+- `utils/policyUtils.ts`: 5 new cases each in `getPolicyTypeIcon`, `getPolicyTypeLabel`, `formatPolicyConfig` (the events-list/policy-table one-line summary), `validatePolicy` (only `application_control` and `wireless_transfer_control` have a required-field check -- the other three are always valid at their defaults), and the second/duplicate `getDefaultConfig` used by `transformApiPolicyToFrontend` when hydrating a policy fetched from the API with no `config` yet.
+
+### Design decision: `printer_control` stays separate, no changes to Printers.tsx
+
+Investigated whether `print_content_prevention` should be merged into the existing printer-device-allowlist UI on the Printers page (since the agent-facing `GET /agents/{id}/printer-policy` endpoint combines both into one response). Confirmed they're independent `Policy` rows with independent config shapes and independent admin intents -- device-level printer allowlisting vs. content-level document scanning -- and the combined endpoint is purely an agent polling-cycle convenience, not evidence they should share one form. `print_content_prevention` got its own new wizard entry; `Printers.tsx`/`printers-api.ts`/`printer_control` (which was never in the generic policy wizard to begin with -- it has its own bespoke page) were left untouched.
+
+### Verification
+
+`npx tsc --noEmit -p tsconfig.json`: 24 pre-existing type errors, confirmed by file-by-file diff that every one is in a file/line this change didn't touch (`ClassificationPolicyForm.tsx`, `ClipboardPolicyForm.tsx`, `GoogleDriveCloudPolicyForm.tsx`, `OneDriveCloudPolicyForm.tsx`, `PolicyDetailsModal.tsx`, `PolicyRow.tsx`, `RuleModal.tsx`, `lib/utils.ts`, plus 5 pre-existing `setConfig(...)` call sites in `PolicyCreatorModal.tsx` that had the identical `{} | X` / broader-`PolicyConfig` type mismatch before this change too, since `getDefaultConfig()` already returned `X | {}` and the config state type never included `ClassificationPolicyConfig`). Zero errors in any of the 5 new form files, `types/policy.ts`, or `PolicyTypeSelector.tsx`. **Not runtime-tested**: no dev server was run in this sandbox to click through the wizard end-to-end and confirm a created policy round-trips correctly through the API; worth a manual smoke test (create one of each of the 5 new types, edit it, confirm the config JSON matches what the agent/server endpoints expect) before relying on this in production.
+
+---
+
 ## 🛡️ Linux agent: local policy cache for offline restarts -- new capability (August 6, 2026)
 
 ### Summary

@@ -3,18 +3,23 @@
  * Helper functions for policy operations and formatting
  */
 
-import { 
-  Policy, 
+import {
+  Policy,
   PolicyType,
   PolicySeverity,
-  ClipboardConfig, 
-  FileSystemConfig, 
-  USBDeviceConfig, 
+  ClipboardConfig,
+  FileSystemConfig,
+  USBDeviceConfig,
   USBTransferConfig,
   FileTransferConfig,
-  FileIdentityDenylistConfig
+  FileIdentityDenylistConfig,
+  NetworkShareControlConfig,
+  ApplicationControlConfig,
+  WirelessTransferControlConfig,
+  PrintContentPreventionConfig,
+  MessagingAppControlConfig
 } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare } from 'lucide-react'
 
 /**
  * Get icon component for policy type
@@ -39,6 +44,16 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return Cloud
     case 'file_identity_denylist':
       return Ban
+    case 'network_share_transfer_control':
+      return FolderInput
+    case 'application_control':
+      return AppWindow
+    case 'wireless_transfer_control':
+      return Bluetooth
+    case 'print_content_prevention':
+      return Printer
+    case 'messaging_app_control':
+      return MessageSquare
     default:
       return FileText
   }
@@ -67,6 +82,16 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Browser Upload Monitoring'
     case 'file_identity_denylist':
       return 'File Identity Denylist'
+    case 'network_share_transfer_control':
+      return 'Network Share Transfer Control'
+    case 'application_control':
+      return 'Application Control'
+    case 'wireless_transfer_control':
+      return 'Wireless / Bluetooth Transfer Control'
+    case 'print_content_prevention':
+      return 'Print Content Prevention'
+    case 'messaging_app_control':
+      return 'Messaging App Attachment Control'
     default:
       return 'Unknown'
   }
@@ -167,6 +192,37 @@ export const formatPolicyConfig = (policy: Policy): string => {
         const extCount = (c.extensions || []).length
         const hashCount = (c.hashes || []).length
         return `Extensions: ${extCount} | Hashes: ${hashCount} | Action: ${c.action || 'block'}`
+      }
+
+      case 'network_share_transfer_control': {
+        const c = config as NetworkShareControlConfig
+        return `Mode: ${c.mode || 'block_all'} | Action: ${c.action || 'audit'}`
+      }
+
+      case 'application_control': {
+        const c = config as ApplicationControlConfig
+        const appCount = (c.applications || []).length
+        return `Mode: ${c.mode || 'blocklist'} | Applications: ${appCount}`
+      }
+
+      case 'wireless_transfer_control': {
+        const c = config as WirelessTransferControlConfig
+        const channels = [
+          c.block_bluetooth_file_transfer ? 'Bluetooth' : null,
+          c.block_nearby_sharing ? 'Nearby Sharing' : null,
+        ].filter(Boolean).join(', ') || 'None'
+        return `Mode: ${c.mode || 'audit'} | Blocking: ${channels}`
+      }
+
+      case 'print_content_prevention': {
+        const c = config as PrintContentPreventionConfig
+        return `Mode: ${c.mode || 'audit'}`
+      }
+
+      case 'messaging_app_control': {
+        const c = config as MessagingAppControlConfig
+        const appCount = (c.apps || []).length
+        return `Action: ${c.action || 'alert'} | Apps: ${appCount > 0 ? appCount : 'default list'}`
       }
 
       default:
@@ -297,6 +353,27 @@ export const validatePolicy = (policy: Partial<Policy>): { valid: boolean; error
         }
         break
       }
+
+      case 'application_control': {
+        const c = policy.config as ApplicationControlConfig
+        if ((c.applications || []).length === 0) {
+          errors.push('At least one application is required')
+        }
+        break
+      }
+
+      case 'wireless_transfer_control': {
+        const c = policy.config as WirelessTransferControlConfig
+        if (c.mode !== 'off' && !c.block_bluetooth_file_transfer && !c.block_nearby_sharing) {
+          errors.push('Select at least one channel to block (Bluetooth or Nearby Sharing), or set mode to Off')
+        }
+        break
+      }
+
+      // network_share_transfer_control, print_content_prevention and
+      // messaging_app_control have no required fields beyond mode/action
+      // (both already default to a sensible value), so no case is needed
+      // here -- getDefaultConfig() alone is always a valid policy.
     }
   }
 
@@ -550,6 +627,36 @@ const getDefaultConfig = (type: PolicyType): any => {
       }
     case 'file_identity_denylist':
       return { extensions: [], hashes: [], action: 'block' }
+    case 'network_share_transfer_control':
+      return {
+        mode: 'block_all',
+        action: 'audit',
+        exception_shares: [],
+        exception_users: [],
+        exception_paths: [],
+        exception_file_types: []
+      }
+    case 'application_control':
+      return {
+        mode: 'blocklist',
+        applications: [],
+        channels: [],
+        exceptions: { applications: [], users: [], paths: [], file_types: [] }
+      }
+    case 'wireless_transfer_control':
+      return {
+        mode: 'audit',
+        block_bluetooth_file_transfer: false,
+        block_nearby_sharing: false
+      }
+    case 'print_content_prevention':
+      return { mode: 'audit' }
+    case 'messaging_app_control':
+      return {
+        action: 'alert',
+        apps: [],
+        exceptions: { users: [], file_types: [] }
+      }
     default:
       return {}
   }
