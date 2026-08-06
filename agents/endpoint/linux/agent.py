@@ -82,6 +82,40 @@ logging.basicConfig(
 logger = logging.getLogger('SeceoKnightAgent')
 
 
+def _resolve_policy_cache_path() -> str:
+    """Resolve where the last-known-good policy bundle is persisted.
+
+    Ported from CyberSentinel-DLP (closes task #95/#117 for Linux -- the
+    Windows agent already does this via PolicyCachePath()/
+    LoadCachedPolicyBundle()/SavePolicyBundleToCache(), see task #107).
+    Before this, the Linux agent's self.policy_bundle lived only in
+    memory: an agent restarted while the server was unreachable (VPN
+    down, server mid-deploy, laptop just booted off-network) enforced
+    NOTHING until the next successful sync -- the exact same
+    fail-closed-becomes-fail-open-on-restart gap task #107 fixed for
+    Windows.
+
+    Prefers /var/lib/seceoknight (the FHS-correct location for persistent
+    application state, and writable by the root user the systemd service
+    always runs as -- see seceoknight-agent.service's User=root and the
+    matching rationale in _resolve_log_path() above), falling back to the
+    invoking user's home directory only if that isn't writable (e.g.
+    running manually, unprivileged, for local testing).
+    """
+    primary_dir = "/var/lib/seceoknight"
+    try:
+        os.makedirs(primary_dir, exist_ok=True)
+        test_path = os.path.join(primary_dir, ".write_test")
+        with open(test_path, "a"):
+            pass
+        os.remove(test_path)
+        return os.path.join(primary_dir, "policy_bundle.cache")
+    except Exception:
+        fallback_dir = os.path.expanduser("~/.seceoknight")
+        os.makedirs(fallback_dir, exist_ok=True)
+        return os.path.join(fallback_dir, "policy_bundle.cache")
+
+
 class AgentConfig:
     """Agent configuration"""
     def __init__(self, config_path: str = None):
@@ -309,6 +343,15 @@ class DLPAgent:
 
         # Register agent with server
         self.register_agent()
+
+        # Load cached policies FIRST so we are already enforcing if the
+        # server is unreachable right after boot. A successful sync below
+        # replaces them; an "up_to_date" reply just keeps them. Ported from
+        # the Windows agent's LoadCachedPolicyBundle() (task #95/#107) --
+        # see _resolve_policy_cache_path()'s docstring for the full
+        # rationale (task #117).
+        self._load_cached_policy_bundle()
+
         self.sync_policies(initial=True)
         self.fetch_usb_allowlist()
         if self.policy_sync_interval:
@@ -545,6 +588,10 @@ class DLPAgent:
                 extra={"version": self.active_policy_version, "count": data.get("policy_count")}
             )
             self._apply_policy_bundle()
+            # Persist the authoritative bundle so a restart while the server
+            # is unreachable still enforces the last known policy instead of
+            # enforcing nothing at all (task #95/#117).
+            self._save_policy_bundle_to_cache(data)
         except Exception as e:
             log_method = logger.error if initial else logger.debug
             log_method(f"Failed to sync policies: {e}")
@@ -582,6 +629,60 @@ class DLPAgent:
 
         # Reconcile monitoring based on current policies
         self._reconcile_monitors()
+
+    def _save_policy_bundle_to_cache(self, bundle: Dict[str, Any]) -> None:
+        """Persist the last server-confirmed policy bundle to disk.
+
+        Ported from the Windows agent's SavePolicyBundleToCache() (task
+        #107); mirrors it exactly -- same trigger (right after a
+        successfully-applied sync response), same "best effort, never
+        raise" behavior so a full disk or permissions issue degrades to a
+        logged warning instead of taking down policy sync.
+        """
+        try:
+            path = _resolve_policy_cache_path()
+            tmp_path = path + ".tmp"
+            with open(tmp_path, "w") as f:
+                json.dump(bundle, f)
+            os.replace(tmp_path, path)  # atomic on POSIX -- no truncated-read window
+            logger.debug(f"Policy bundle cached to {path}")
+        except Exception as e:
+            logger.warning(f"Failed to cache policy bundle: {e}")
+
+    def _load_cached_policy_bundle(self) -> None:
+        """Load the last bundle the server gave us, so the agent starts
+        enforcing BEFORE (or without) a successful sync.
+
+        Ported from the Windows agent's LoadCachedPolicyBundle() (task
+        #107). The server already versions bundles (active_policy_version
+        -> "up_to_date" on the next sync), so a cached bundle costs one
+        comparison on the next sync and is replaced the moment the server
+        answers -- there's no staleness risk beyond one sync interval.
+        """
+        try:
+            path = _resolve_policy_cache_path()
+            if not os.path.exists(path):
+                logger.info(
+                    "No cached policy bundle (first run?) -- the agent cannot "
+                    "enforce until it reaches the server at least once"
+                )
+                return
+
+            with open(path, "r") as f:
+                bundle = json.load(f)
+            if not bundle:
+                return
+
+            logger.info(f"Loading cached policy bundle from {path}")
+            self.policy_bundle = bundle
+            self.active_policy_version = bundle.get("version")
+            self._apply_policy_bundle()
+            if self.allow_events:
+                logger.info("Enforcing CACHED policies until the server confirms a newer bundle")
+            else:
+                logger.warning("Cached policy bundle contained no active policies")
+        except Exception as e:
+            logger.warning(f"Could not load cached policy bundle: {e}")
 
     def _restart_file_monitoring(self):
         logger.info("Restarting file monitors with updated policies")

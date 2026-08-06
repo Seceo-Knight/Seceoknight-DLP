@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Linux agent: local policy cache for offline restarts -- new capability (August 6, 2026)
+
+### Summary
+
+Closes task #95/#117 -- the other half of a misstatement made earlier in this session. An earlier CHANGELOG entry for the Windows agent's policy cache (task #107) claimed "the Linux agent already persisted its last-known-good policy bundle to disk." That was wrong (confirmed by direct grep, no `policy_cache` references anywhere in the Linux agent) and was corrected explicitly when caught. This entry actually closes that gap: before this change, `self.policy_bundle` lived only in Python-process memory -- an agent restarted while the server was unreachable (VPN down, server mid-deploy, laptop just booted off-network) enforced **nothing** until the next successful sync, the identical fail-closed-becomes-fail-open-on-restart hole task #107 fixed on Windows.
+
+### Design note: CyberSentinel's own `policy_cache.py` is unused dead code
+
+CyberSentinel-DLP does ship a `policy_cache.py` on Linux, but it's a much broader module (decision cache with TTL + full policy bundle persistence + an offline event queue + fail-open decision logic) that its own `agent.py` **never imports** -- confirmed via `agent_launcher.py`'s own comment: *"policy_cache and print_monitor are not imported by the current agent... forced in as hidden imports at build time"* purely so the PyInstaller self-test can prove the module is bundled. It's shipped but dead. Porting it wholesale would mean shipping SK's own dead code. Instead, this port takes only the piece that's actually needed and wires it in for real: persist-last-known-good-bundle-to-disk, matching the already-shipped, already-verified Windows `PolicyCachePath()`/`SavePolicyBundleToCache()`/`LoadCachedPolicyBundle()` pattern from task #107. (SK's own offline-queue equivalent was ported separately and correctly wired in the previous entry, task #96/#116.)
+
+### What was added
+
+**`agent.py`**: `_resolve_policy_cache_path()` (module-level, mirrors the existing `_resolve_log_path()` pattern) resolves the cache file to `/var/lib/seceoknight/policy_bundle.cache` -- the FHS-correct location for persistent application state, writable by the root user the systemd service always runs as -- falling back to `~/.seceoknight/policy_bundle.cache` only if that isn't writable (manual/unprivileged runs).
+
+- `Agent._save_policy_bundle_to_cache(bundle)`: writes to a `.tmp` file and `os.replace()`s it into place (atomic on POSIX -- a slight improvement over the Windows version's plain truncate-and-write, since it removes the truncated-read window if a read raced a write). Called from `sync_policies()` right after a successfully-applied sync response, mirroring the Windows call site.
+- `Agent._load_cached_policy_bundle()`: reads the cache file, sets `self.policy_bundle`/`self.active_policy_version`, and calls the existing `_apply_policy_bundle()` immediately -- so the agent is enforcing from cache before its first network call, not just holding the bundle in reserve. Called from `start()` right after `register_agent()` and before `sync_policies(initial=True)`, matching the Windows `Start()` call order exactly.
+
+**`uninstall.sh`**: added `CACHE_DIR="/var/lib/seceoknight"`, treated the same as `CONFIG_DIR`/`QUARANTINE_DIR` -- kept by default so a reinstall resumes enforcing immediately from the cached bundle, removed only with `--purge`.
+
+### Verification
+
+`ast.parse` clean on `agent.py`. `bash -n` clean on `uninstall.sh`. Traced the call graph by hand: `_load_cached_policy_bundle()` is called from `start()` after `self.running = True` and after `__init__` has already constructed `self.print_monitor`/`self.usb_monitor`/`self.clipboard_monitor` (all needed transitively by `_apply_policy_bundle()` → `_reconcile_monitors()` → `start_file_monitoring()`), so calling it early doesn't hit any not-yet-initialized attribute. **Not live-tested**: no Linux runtime in this sandbox to actually kill server connectivity, restart the agent, and confirm it enforces from the cached bundle before the first sync completes. Worth a manual test before relying on this in production.
+
+---
+
 ## 🛡️ Offline event spool + replay on reconnect -- new capability (August 6, 2026)
 
 ### Summary

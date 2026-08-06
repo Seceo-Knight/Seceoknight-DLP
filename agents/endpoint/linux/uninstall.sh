@@ -22,6 +22,12 @@ INSTALL_DIR="/opt/seceoknight/agent"
 CONFIG_DIR="/etc/seceoknight"
 LOG_FILE="/var/log/seceoknight_agent.log"
 QUARANTINE_DIR="/opt/seceoknight/quarantine"
+# Last-known-good policy bundle cache (task #95/#117), written by
+# _save_policy_bundle_to_cache() so a restart while the server is
+# unreachable still enforces the last confirmed policy. Treated the same
+# as CONFIG_DIR: kept by default so a reinstall starts enforcing
+# immediately from cache instead of wide-open until the first sync.
+CACHE_DIR="/var/lib/seceoknight"
 SERVICE_NAME="seceoknight-agent"
 PURGE=0
 
@@ -29,11 +35,13 @@ usage() {
   cat <<EOF
 Usage: sudo ./uninstall.sh [--purge] [--service-name NAME]
 
-  --purge            Also remove config (agent identity), logs and quarantine.
+  --purge            Also remove config (agent identity), logs, quarantine
+                      and the cached policy bundle.
   --service-name     systemd unit name (default: $SERVICE_NAME)
 
-Without --purge, $CONFIG_DIR and $QUARANTINE_DIR are left in place so that
-reinstalling reuses the same agent identity on the manager.
+Without --purge, $CONFIG_DIR, $QUARANTINE_DIR and $CACHE_DIR are left in
+place so that reinstalling reuses the same agent identity on the manager
+and resumes enforcing the last known policy immediately.
 EOF
 }
 
@@ -69,15 +77,16 @@ if [ "$PURGE" -eq 1 ]; then
     echo "           press Ctrl-C to abort and back them up first."
     sleep 10
   fi
-  rm -rf "$CONFIG_DIR" "$QUARANTINE_DIR"
+  rm -rf "$CONFIG_DIR" "$QUARANTINE_DIR" "$CACHE_DIR"
   rm -f "$LOG_FILE"
-  echo "  config, log and quarantine removed (--purge)"
+  echo "  config, log, quarantine and policy cache removed (--purge)"
   echo
   echo "Fully removed. The agent record remains on the manager — delete it there too."
 else
-  echo "  config kept:     $CONFIG_DIR"
-  echo "  log kept:        $LOG_FILE"
-  echo "  quarantine kept: $QUARANTINE_DIR"
+  echo "  config kept:        $CONFIG_DIR"
+  echo "  log kept:           $LOG_FILE"
+  echo "  quarantine kept:    $QUARANTINE_DIR"
+  echo "  policy cache kept:  $CACHE_DIR"
   echo
   echo "Uninstalled. Re-running install.sh will reuse the existing agent identity."
 fi
