@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Managed-application file control -- new capability (August 6, 2026)
+
+### Summary
+
+Second item off the "why aren't you porting these" list. CyberSentinel-DLP's `application_control` feature -- initially assumed to be IFEO-based (it isn't; IFEO in that codebase is scoped only to the Bluetooth-wizard block, see the next entry) -- turned out to be a policy consulted by the network-exfil CLI-transfer-tool interceptor to block an upload by the identity of the acting process, independent of what the file actually contains. Ported it as a real callback wired into the existing blocking decision, not a bolt-on.
+
+### What was added
+
+**Server** (`server/app/api/v1/agents.py`): new `GET /agents/{agent_id}/application-control` endpoint (same `X-Agent-Key` auth pattern as network-share-policy above), driven by a `Policy` row of `type="application_control"` -- `mode` (`allowlist` | `blocklist`), `applications` (managed exe names), `channels` (empty = all), and an `exceptions` object (`applications` / `users` / `paths` / `file_types`). Registered `application_control` in `server/app/core/domains.py` as `PolicyDomain.THREAT`.
+
+**`network_exfil_monitor.h`/`.cpp`**: added an optional `AppActionFn appAction` callback to `Config` -- given the acting process exe, file path, and extension, returns `true` to force a BLOCK regardless of content classification. Wired into the existing CLI-transfer-tool blocking decision (the same suspend -> classify -> terminate path that already catches `curl`/`wget`/PowerShell/`bitsadmin`/`certutil` uploading sensitive content): the decision is now `if (sensitive || appBlocked)`, and the emitted event's `reason`/`matchedRule` distinguish an app-control block ("Blocked curl.exe upload by application control") from a content-sensitivity block, so the dashboard shows which control actually fired. Purely additive -- when the callback is unset or returns false, behavior is byte-for-byte unchanged from before this pass.
+
+**`agent.cpp`**: `FetchApplicationControl()` polls the new endpoint on the policy-sync cadence (own try/catch, same pattern as `FetchNetworkSharePolicy()`). `IsAppActionAllowed(channel, process, user, path, ext)` is the local verdict function -- fails open (allowed) when no policy is active, checks channel coverage then exceptions then allowlist/blocklist membership. Wired into `NetworkExfilMonitor::Config::appAction` at the existing `NetworkExfilMonitor::Start()` call site: `nemCfg.appAction = [this](proc, path, ext) { return !IsAppActionAllowed("network", proc, GetUsername(), path, ext); }`.
+
+### Scope note
+
+Same as network-share monitoring above: no dashboard UI in this pass, configurable via `POST /api/v1/policies` with `type: "application_control"` and a `config` of `{mode, applications, channels, exceptions: {applications, users, paths, file_types}}`. Also note this only covers the network/CLI-upload channel today (the one channel CyberSentinel itself wires `appAction` into) -- extending `IsAppActionAllowed()`'s `channel` coverage to USB/print/clipboard would need those handlers to call it too, not done here.
+
+### Verification
+
+`ast.parse` clean on `agents.py`/`domains.py`. Brace-balance check on `agent.cpp` (paren=-2, brace=-5, bracket=-1) matches the established baseline exactly. `network_exfil_monitor.h`'s balance is 0/0/0 (perfectly balanced) both before and after. `network_exfil_monitor.cpp` doesn't have a saved pre-edit baseline in this sandbox (no git history available for it locally), so its balance was verified by hand instead: every brace/paren/bracket introduced by this diff (`if (g_cfg.appAction) { try { ... } catch (...) {} }`, the `if (appBlocked && !sensitive) {...} else {...}` reason branch, and the ternary in the `LogWarn` call) was traced token-by-token and confirmed to net to zero, so the file's overall balance is unchanged by this edit regardless of what it was before. **Not live-tested**: no MinGW compiler in this sandbox to actually build `network_exfil_monitor.cpp` with the new callback wired in.
+
+---
+
 ## 🛡️ Network share (UNC drive) exfiltration monitoring -- new capability (August 6, 2026)
 
 ### Summary

@@ -2598,6 +2598,26 @@ static ClassificationResult Classify(const std::string& content,
      std::set<std::string> netShareSeededDrives;      // drives whose pre-existing files have
                                                         // already been baselined this agent run
 
+     // ── Managed-application file control (task #112) ────────────────────────
+     // Synced from GET /agents/{id}/application-control. Ported from
+     // CyberSentinel-DLP. Allow/block a file ACTION (currently: network
+     // upload -- CLI transfer tools intercepted by network_exfil_monitor.cpp)
+     // based on the APPLICATION performing it, independent of content -- e.g.
+     // block curl.exe entirely regardless of what it's uploading, or restrict
+     // uploads to only an approved allowlist of tools. IsAppActionAllowed()
+     // is consulted via the NetworkExfilMonitor::Config::appAction callback
+     // wired up where NetworkExfilMonitor::Start() is called. All values
+     // lowercase except paths (kept as given for prefix matching).
+     std::atomic<bool> appControlEnforced{false};
+     std::string appControlMode;                         // "allowlist" | "blocklist" | "off"
+     std::set<std::string> appControlApps;               // managed app exe names
+     std::set<std::string> appControlChannels;           // covered channels; empty = all
+     std::set<std::string> appControlExceptApps;
+     std::set<std::string> appControlExceptUsers;
+     std::vector<std::string> appControlExceptPaths;     // path prefixes
+     std::set<std::string> appControlExceptTypes;        // extensions, no leading dot
+     std::mutex appControlMutex;
+
      // Policy storage
      std::vector<PolicyRule> filePolicies;
      std::vector<PolicyRule> clipboardPolicies;
@@ -4336,6 +4356,17 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  else                         logger.Info(msg);
              };
 
+             // Managed-application file control for the network channel: block an
+             // upload when application_control disallows the acting process. When no
+             // application_control policy is active IsAppActionAllowed() returns true,
+             // so this is a no-op and existing exfil behaviour is unchanged. Ported
+             // from CyberSentinel-DLP.
+             nemCfg.appAction = [this](const std::string& proc,
+                                       const std::string& path,
+                                       const std::string& ext) {
+                 return !IsAppActionAllowed("network", proc, GetUsername(), path, ext);
+             };
+
              if (NetworkExfilMonitor::Start(nemCfg)) {
                  logger.Info("Network Exfiltration Monitor started");
              } else {
@@ -4509,6 +4540,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          SyncUsbAllowlist();
          // Network file-share transfer control -- same reasoning, own endpoint.
          FetchNetworkSharePolicy();
+         // Managed-application file control -- same reasoning, own endpoint.
+         FetchApplicationControl();
      }
 
      // Pulls GET /agents/{id}/network-share-policy and caches it locally.
@@ -4551,6 +4584,79 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          } catch (...) {
              logger.Debug("FetchNetworkSharePolicy failed");
          }
+     }
+
+     // Pulls GET /agents/{id}/application-control and caches it locally. Ported
+     // from CyberSentinel-DLP. Mirrors FetchNetworkSharePolicy() above: polled
+     // on the policy-sync cadence, own try/catch, keeps last-known-good on a
+     // transient error/outage rather than failing open or closed on every blip.
+     void FetchApplicationControl() {
+         try {
+             std::pair<int, std::string> resp = GetHttpClient()->Get(
+                 "/agents/" + config.agentId + "/application-control");
+             auto& [status, response] = resp;
+             if (status != 200) return;   // keep last-known-good on error/outage
+
+             bool enforced = ExtractJsonBool(response, "enforced");
+             std::string mode = ToLower(config.ExtractJsonValue(response, "mode"));
+
+             auto lc = [](std::vector<std::string> v) { for (auto& s : v) s = ToLower(s); return v; };
+             auto apps    = lc(ExtractJsonArray(response, "applications"));
+             auto chans   = lc(ExtractJsonArray(response, "channels"));
+             auto exApps  = lc(ExtractJsonArray(response, "exception_applications"));
+             auto exUsers = lc(ExtractJsonArray(response, "exception_users"));
+             auto exPaths = lc(ExtractJsonArray(response, "exception_paths"));
+             auto exTypes = lc(ExtractJsonArray(response, "exception_file_types"));
+
+             {
+                 std::lock_guard<std::mutex> lock(appControlMutex);
+                 appControlMode         = mode;
+                 appControlApps         = std::set<std::string>(apps.begin(), apps.end());
+                 appControlChannels     = std::set<std::string>(chans.begin(), chans.end());
+                 appControlExceptApps   = std::set<std::string>(exApps.begin(), exApps.end());
+                 appControlExceptUsers  = std::set<std::string>(exUsers.begin(), exUsers.end());
+                 appControlExceptPaths  = exPaths;
+                 appControlExceptTypes  = std::set<std::string>(exTypes.begin(), exTypes.end());
+             }
+             appControlEnforced.store(enforced);
+             logger.Debug("Application control: enforced=" + std::string(enforced ? "true" : "false") +
+                         " mode=" + (mode.empty() ? "off" : mode) +
+                         " apps=" + std::to_string(apps.size()) +
+                         " channels=" + std::to_string(chans.size()));
+         } catch (const std::exception& e) {
+             logger.Debug(std::string("FetchApplicationControl failed: ") + e.what());
+         } catch (...) {
+             logger.Debug("FetchApplicationControl failed");
+         }
+     }
+
+     // Local verdict for the managed-application file control. Returns true if
+     // the action is ALLOWED, false if it must be BLOCKED. A channel handler
+     // (currently: the network_exfil_monitor appAction callback below) calls
+     // this with the acting process exe, current user, target path and file
+     // extension. Any single exception match allows; otherwise allowlist
+     // allows only listed apps and blocklist blocks listed apps. Fails open
+     // (allowed) when no application_control policy is active.
+     bool IsAppActionAllowed(const std::string& channel, const std::string& processName,
+                             const std::string& userName, const std::string& filePath,
+                             const std::string& fileExt) {
+         if (!appControlEnforced.load()) return true;
+         std::string ch = ToLower(channel), proc = ToLower(processName),
+                     usr = ToLower(userName), ext = ToLower(fileExt), path = ToLower(filePath);
+         if (!ext.empty() && ext[0] == '.') ext.erase(0, 1);
+         std::lock_guard<std::mutex> lock(appControlMutex);
+         // 1) channel coverage -- empty list means "all channels"
+         if (!appControlChannels.empty() && appControlChannels.count(ch) == 0) return true;
+         // 2) exceptions -- any match allows
+         if (!proc.empty() && appControlExceptApps.count(proc)) return true;
+         if (!usr.empty() && appControlExceptUsers.count(usr)) return true;
+         if (!ext.empty()  && appControlExceptTypes.count(ext)) return true;
+         for (const auto& pfx : appControlExceptPaths)
+             if (!pfx.empty() && path.rfind(pfx, 0) == 0) return true;
+         // 3) mode
+         bool listed = appControlApps.count(proc) > 0;
+         if (appControlMode == "blocklist") return !listed;   // block listed apps
+         return listed;                                       // allowlist: allow only listed
      }
 
      // Same directory-resolution rule as Logger (SECEOKNIGHT_LOG_DIR env var,

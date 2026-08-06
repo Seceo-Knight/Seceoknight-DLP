@@ -1172,6 +1172,75 @@ async def get_network_share_policy(
     }
 
 
+@router.get("/{agent_id}/application-control")
+async def get_application_control(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(verify_agent_key),
+):
+    """
+    The managed-application file-control policy the agent enforces locally.
+    Ported from CyberSentinel-DLP -- allows/blocks a file ACTION (currently:
+    network upload, via the CLI-transfer-tool interception in
+    network_exfil_monitor.cpp) based on the APPLICATION performing it,
+    independent of file content. E.g. block curl.exe entirely regardless of
+    what it's uploading, or restrict uploads to only an approved allowlist of
+    tools -- catches exfiltration attempts a pure content-classification
+    check can miss (an unapproved tool moving data that doesn't happen to
+    match any sensitive-data pattern).
+
+    Driven by a Policy row with type="application_control" (same pattern as
+    network_share_transfer_control above) -- no dedicated table, just a
+    mode/applications/channels/exceptions config.
+
+    Agent-side enforcement, for an action on <channel> by process P (user U,
+    path F, type T):
+      1. if channels is non-empty and <channel> not in channels -> not
+         covered, ALLOW;
+      2. if P in exception_applications, or U in exception_users, or F starts
+         with any exception_paths, or T in exception_file_types -> exempt,
+         ALLOW;
+      3. else mode == "allowlist": BLOCK if P not in applications;
+              mode == "blocklist": BLOCK if P in applications.
+
+    The agent polls this on the same cadence as policy sync and caches the
+    result (works offline, no per-file server round trip). Requires
+    ``X-Agent-Key`` header.
+    """
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "application_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+
+    enforced = policy is not None
+    cfg = (policy.config or {}) if enforced else {}
+    mode = str(cfg.get("mode") or "allowlist").lower()
+    if mode not in ("allowlist", "blocklist"):
+        mode = "allowlist"
+    exc = cfg.get("exceptions") or {}
+
+    def _str_list(v):
+        return [str(x) for x in (v or []) if str(x).strip()] if isinstance(v, list) else []
+
+    return {
+        "enforced": enforced,
+        "mode": mode if enforced else "off",
+        "applications": [s.lower() for s in _str_list(cfg.get("applications"))],
+        "channels": [s.lower() for s in _str_list(cfg.get("channels"))],
+        "exception_applications": [s.lower() for s in _str_list(exc.get("applications"))],
+        "exception_users": [s.lower() for s in _str_list(exc.get("users"))],
+        "exception_paths": _str_list(exc.get("paths")),
+        "exception_file_types": [s.lower().lstrip(".") for s in _str_list(exc.get("file_types"))],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 class DeviceAuthorizeRequest(BaseModel):
     """Device identity the agent reports when a USB storage device connects.
     This is a visibility/audit-trail call, logged as an event — the block/

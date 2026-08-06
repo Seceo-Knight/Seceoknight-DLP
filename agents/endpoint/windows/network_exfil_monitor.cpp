@@ -882,15 +882,32 @@ void HandleCandidateProcess(DWORD pid,
     f.labels = cls.labels;
     f.evasion = evasionMarker;
 
-    if (sensitive) {
+    // Managed-application file control (additive): block this process's upload when
+    // an application_control policy disallows the acting exe -- independent of
+    // content. No-op when the callback is unset or no such policy is active.
+    // Ported from CyberSentinel-DLP.
+    bool appBlocked = false;
+    if (g_cfg.appAction) {
+        std::string ext = firstPath.empty() ? std::string()
+                                            : fs::path(firstPath).extension().string();
+        try { appBlocked = g_cfg.appAction(exeName, firstPath, ext); } catch (...) {}
+    }
+
+    if (sensitive || appBlocked) {
         // BLOCK: terminate and emit
         bool killed = TerminatePid(pid);
         f.action   = "BLOCK";
         f.severity = (catLower == "restricted") ? "critical" : "high";
-        f.reason   = "Blocked " + exeName + " transfer of sensitive data ("
-                   + cls.category + ")" + (killed ? "" : " [terminate failed]");
-        LogWarn("NETWORK_BLOCKED pid=" + std::to_string(pid) +
-                " exe=" + exeName + " category=" + cls.category);
+        if (appBlocked && !sensitive) {
+            f.reason = "Blocked " + exeName + " upload by application control"
+                     + (killed ? "" : " [terminate failed]");
+            if (f.matchedRule.empty()) f.matchedRule = "Application Control";
+        } else {
+            f.reason = "Blocked " + exeName + " transfer of sensitive data ("
+                     + cls.category + ")" + (killed ? "" : " [terminate failed]");
+        }
+        LogWarn("NETWORK_BLOCKED pid=" + std::to_string(pid) + " exe=" + exeName +
+                (appBlocked && !sensitive ? " reason=app_control" : (" category=" + cls.category)));
         LogInfo("POLICY_DECISION pid=" + std::to_string(pid) + " decision=BLOCK");
         EmitEvent(f);
     } else if (!cls.category.empty()) {

@@ -37,6 +37,14 @@ using ClassifyFn  = std::function<ClassifyResult(const std::string& content,
 using SendEventFn = std::function<void(const std::string& jsonPayload)>;
 using LogFn       = std::function<void(const std::string& level,
                                        const std::string& message)>;
+// Optional: managed-application file control. Given the acting process exe, the
+// target file path and its extension, return TRUE to BLOCK the transfer regardless
+// of content. Unset (or returning false) => no app-based block. Additive -- leaves
+// the content-classification block path (ClassifyFn above) completely intact.
+// Ported from CyberSentinel-DLP.
+using AppActionFn = std::function<bool(const std::string& processName,
+                                       const std::string& filePath,
+                                       const std::string& fileExt)>;
 
 struct Config {
     // Identity fields copied into every emitted event
@@ -49,6 +57,7 @@ struct Config {
     ClassifyFn  classify;       // MUST be set
     SendEventFn sendEvent;      // MUST be set
     LogFn       log;            // MUST be set (level: "INFO"/"WARNING"/"ERROR"/"DEBUG")
+    AppActionFn appAction;      // optional -- managed-application file control (by acting exe)
 
     // Safety caps
     size_t maxFileBytes = 50ull * 1024 * 1024;   // Do not read files larger than this

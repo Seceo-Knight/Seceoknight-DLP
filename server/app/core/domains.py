@@ -43,6 +43,12 @@ POLICY_TYPE_DOMAIN = {
     # exfiltration path distinct from USB (copy to \\server\share instead of
     # a USB stick). Ported from CyberSentinel-DLP.
     "network_share_transfer_control": PolicyDomain.THREAT,
+    # Managed-application file control -- block/allow a network-upload action
+    # by the acting process (e.g. deny curl.exe/rclone.exe entirely, or
+    # restrict to an approved allowlist), independent of content. Wired into
+    # the same network_exfil_monitor block path as the CLI-transfer-tool
+    # interception above. Ported from CyberSentinel-DLP.
+    "application_control": PolicyDomain.THREAT,
     # Data Protection — content handling
     "clipboard_monitoring": PolicyDomain.DATA_PROTECTION,
     "clipboard": PolicyDomain.DATA_PROTECTION,
