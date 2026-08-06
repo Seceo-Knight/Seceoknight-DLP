@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🪟 Watchdog Console Flash, Take 3: Stop Spawning powershell.exe At All (August 6, 2026)
+
+### Summary
+
+After the "Take 2" fix (VBScript wrapper + `LogonType S4U`) shipped, a user did a full reinstall, confirmed via diagnostics that the scheduled task really was running the new `wscript.exe watchdog_launcher.vbs` action with `S4U` — exactly the fixed configuration — and the console still flashed every 5 minutes. Two prior fixes in a row looked correct on paper and both failed to fully stop it on a real endpoint.
+
+### Root cause
+
+`WScript.Shell.Run`'s third argument (`0` = `SW_HIDE`) asks a **newly created** console window to start hidden. That is not the same guarantee as `CREATE_NO_WINDOW`, a `CreateProcess` flag that tells Windows not to allocate a console **at all**. `WScript.Shell.Run` has no way to request `CREATE_NO_WINDOW`. `powershell.exe` is a console-subsystem executable, so launching it from `wscript.exe` (itself console-less) still allocates it a brand-new console — and on current Windows, where Windows Terminal is the default console host, that allocation can paint a visible frame before the hide is honored, unlike the old lightweight `conhost.exe`. No amount of "hide it after creating it" trickery fully closes that gap; the only way to make the risk zero is to never create the console-subsystem process in the first place.
+
+### Fix (`install-agent.ps1`)
+
+`watchdog_launcher.vbs` no longer calls `watchdog.ps1` via `powershell.exe`. It now re-implements the entire staleness check directly in VBScript, running inside the already console-less `wscript.exe` host: `Schedule.Service` (COM) reads the main agent task's `State`/`LastRunTime` in place of `Get-ScheduledTask`/`Get-ScheduledTaskInfo`, and `Scripting.FileSystemObject` reads the log file's last-write timestamp in place of `Get-Item`. No process is spawned at all on a healthy cycle — there's nothing left to flash. Only on the rare path where a hang is actually detected does it spawn anything, and even then it's `taskkill.exe`/`schtasks.exe` (native, near-instant console utilities, not PowerShell) rather than a fresh `powershell.exe`. `watchdog.ps1` is still written to disk with the same logic, kept for manual/diagnostic runs, but the scheduled task no longer executes it automatically.
+
+### Verification
+
+Custom PowerShell brace/paren/bracket balance script (quote/comment/here-string aware, including `@'...'@`/`@"..."@`) against a fresh clone of the pre-edit file: identical (0/0/0) in both. No PowerShell or VBScript interpreter available in this sandbox — the VBScript body was reviewed by hand line by line, with particular attention to quote-embedding in the `schtasks.exe` command line (built via `Chr(34)` instead of nested `""` escaping specifically to avoid a subtle, hard-to-verify-without-execution escaping bug) and to explicit `Err.Clear` calls after every `On Error Resume Next`-guarded COM call, since VBScript does not reliably auto-clear `Err` between statements. **Not yet live-tested** — this is the third attempt at this exact bug; next step is confirming on the same endpoint that already saw two prior "fixes" fail.
+
+---
+
 ## ⏱️ USB Content-Aware Quarantine: Reduce (Not Eliminate) the Race Window Against Fast Exfiltration (August 4, 2026)
 
 ### The gap
