@@ -1241,6 +1241,67 @@ async def get_application_control(
     }
 
 
+@router.get("/{agent_id}/wireless-policy")
+async def get_wireless_policy(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(verify_agent_key),
+):
+    """
+    The wireless-transfer control policy the agent enforces locally. Ported
+    from CyberSentinel-DLP. Blocks Bluetooth file transfer (the built-in
+    fsquirt.exe wizard, via an Image File Execution Options redirect to the
+    agent itself -- see SetIFEODebugger()/ApplyWirelessControls() in
+    agent.cpp) and/or Wi-Fi Direct / Windows Nearby Sharing (via the
+    Connected Devices Platform group policy), while leaving Bluetooth audio
+    (A2DP/HFP headphones) and input (HID mice/keyboards) devices untouched --
+    those profiles are never disabled by this control.
+
+    mode: "enforce" (agent applies the OS-level disables) | "audit" (agent
+    only logs what it would have blocked, no registry changes) | "off".
+    block_bluetooth_file_transfer / block_nearby_sharing let each channel be
+    toggled independently -- a site with a legitimate Bluetooth workflow can
+    block only Nearby Sharing, for instance.
+
+    The agent polls this on the same cadence as policy sync and only touches
+    the registry when the effective enforcement actually changes (a
+    reconciliation signature, not a write every sync tick). Requires
+    ``X-Agent-Key`` header.
+    """
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "wireless_transfer_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+
+    if not policy:
+        return {
+            "enforced": False,
+            "mode": "off",
+            "block_bluetooth_file_transfer": False,
+            "block_nearby_sharing": False,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    cfg = policy.config or {}
+    mode = str(cfg.get("mode") or "enforce").lower()
+    if mode not in ("enforce", "audit"):
+        mode = "enforce"
+
+    return {
+        "enforced": True,
+        "mode": mode,
+        "block_bluetooth_file_transfer": bool(cfg.get("block_bluetooth_file_transfer", True)),
+        "block_nearby_sharing": bool(cfg.get("block_nearby_sharing", True)),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 class DeviceAuthorizeRequest(BaseModel):
     """Device identity the agent reports when a USB storage device connects.
     This is a visibility/audit-trail call, logged as an event — the block/

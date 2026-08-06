@@ -49,6 +49,10 @@ POLICY_TYPE_DOMAIN = {
     # the same network_exfil_monitor block path as the CLI-transfer-tool
     # interception above. Ported from CyberSentinel-DLP.
     "application_control": PolicyDomain.THREAT,
+    # Wireless / Bluetooth transfer control -- blocks the Bluetooth file
+    # wizard (fsquirt.exe, via IFEO) and/or Wi-Fi Direct / Nearby Sharing.
+    # Ported from CyberSentinel-DLP.
+    "wireless_transfer_control": PolicyDomain.THREAT,
     # Data Protection — content handling
     "clipboard_monitoring": PolicyDomain.DATA_PROTECTION,
     "clipboard": PolicyDomain.DATA_PROTECTION,
@@ -85,6 +89,9 @@ EVENT_TYPE_DOMAIN = {
     # Detection/alert only, not prevention (no agent-side kill capability).
     "ransomware": PolicyDomain.THREAT,
     "network_share_transfer": PolicyDomain.THREAT,
+    # Emitted by HandleBlockedLaunch() when a user attempts a Bluetooth file
+    # transfer while wireless_transfer_control blocks it (see agent.cpp).
+    "bluetooth_file_transfer": PolicyDomain.THREAT,
     "screen_capture": PolicyDomain.THREAT,
     "print_attempt": PolicyDomain.THREAT,
     "print": PolicyDomain.THREAT,

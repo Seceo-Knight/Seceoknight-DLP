@@ -2618,6 +2618,16 @@ static ClassificationResult Classify(const std::string& content,
      std::set<std::string> appControlExceptTypes;        // extensions, no leading dot
      std::mutex appControlMutex;
 
+     // ── Wireless / Bluetooth transfer control (task #113) ───────────────────
+     // Synced from GET /agents/{id}/wireless-policy. Ported from CyberSentinel-
+     // DLP. Blocks Bluetooth file transfer (the built-in fsquirt.exe wizard)
+     // and/or Wi-Fi Direct / Nearby Sharing while leaving audio (headphones)
+     // and input (mouse/keyboard) devices working. Reconciled each policy
+     // sync via a change signature (lastWirelessSig) so ApplyWirelessControls()
+     // only touches the registry when the effective enforcement actually
+     // changed, not on every sync tick.
+     std::string lastWirelessSig;
+
      // Policy storage
      std::vector<PolicyRule> filePolicies;
      std::vector<PolicyRule> clipboardPolicies;
@@ -4542,6 +4552,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          FetchNetworkSharePolicy();
          // Managed-application file control -- same reasoning, own endpoint.
          FetchApplicationControl();
+         // Wireless / Bluetooth transfer control -- same reasoning, own endpoint.
+         FetchWirelessPolicy();
      }
 
      // Pulls GET /agents/{id}/network-share-policy and caches it locally.
@@ -4657,6 +4669,107 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          bool listed = appControlApps.count(proc) > 0;
          if (appControlMode == "blocklist") return !listed;   // block listed apps
          return listed;                                       // allowlist: allow only listed
+     }
+
+     // ── Wireless / Bluetooth transfer control ──────────────────────────────
+     // Ported from CyberSentinel-DLP. Set (block=true) or clear an Image File
+     // Execution Options "Debugger" that prevents <exeName> from launching.
+     // Used to block the built-in Bluetooth file transfer wizard (fsquirt.exe)
+     // without touching audio/HID profiles. This is the one genuinely
+     // IFEO-based control in the agent (application_control above is NOT
+     // IFEO -- see task #112's CHANGELOG entry).
+     void SetIFEODebugger(const std::string& exeName, const std::string& debuggerValue, bool block) {
+         std::string sub = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\"
+                           "Image File Execution Options\\" + exeName;
+         if (block) {
+             HKEY k;
+             if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
+                                 REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr) == ERROR_SUCCESS) {
+                 RegSetValueExA(k, "Debugger", 0, REG_SZ,
+                                reinterpret_cast<const BYTE*>(debuggerValue.c_str()),
+                                (DWORD)debuggerValue.size() + 1);
+                 RegCloseKey(k);
+             }
+         } else {
+             HKEY k;
+             if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+                 RegDeleteValueA(k, "Debugger");
+                 RegCloseKey(k);
+             }
+         }
+     }
+
+     // Set a policy DWORD under HKLM when `set`, else delete it (restore default).
+     void SetPolicyDword(const std::string& sub, const std::string& name, DWORD value, bool set) {
+         HKEY k;
+         if (set) {
+             if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
+                                 REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr) == ERROR_SUCCESS) {
+                 RegSetValueExA(k, name.c_str(), 0, REG_DWORD,
+                                reinterpret_cast<const BYTE*>(&value), sizeof(value));
+                 RegCloseKey(k);
+             }
+         } else {
+             if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+                 RegDeleteValueA(k, name.c_str());
+                 RegCloseKey(k);
+             }
+         }
+     }
+
+     // Apply/reconcile the wireless-transfer controls. Reconciled both ways so
+     // clearing the policy restores the channels. NOTE: covers the built-in
+     // Bluetooth file wizard + the Nearby Sharing/CDP policy; validate on
+     // real hardware before relying on this in production.
+     void ApplyWirelessControls(bool enforce, bool blockBt, bool blockNearby) {
+         // Bluetooth file transfer -- redirect the fsquirt.exe wizard (via IFEO) to
+         // THIS agent with --blocked-launch, so each attempt is logged + raised as a
+         // dashboard event and fsquirt never runs. Audio (A2DP/HFP) and input (HID)
+         // profiles are untouched, so headphones, keyboards and mice keep working.
+         char selfPath[MAX_PATH] = {0};
+         GetModuleFileNameA(nullptr, selfPath, MAX_PATH);
+         std::string dbg = std::string("\"") + selfPath + "\" --blocked-launch";
+         SetIFEODebugger("fsquirt.exe", dbg, enforce && blockBt);
+
+         // Wi-Fi Direct / Nearby Sharing -- disable the Connected Devices Platform
+         // policy the feature relies on.
+         SetPolicyDword("SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+                        "EnableCdp", 0, enforce && blockNearby);
+     }
+
+     // Pulls GET /agents/{id}/wireless-policy and reconciles enforcement each
+     // sync. Ported from CyberSentinel-DLP. Only touches the registry when the
+     // effective enforcement signature actually changed (lastWirelessSig), so
+     // a routine policy-sync tick with no change is a no-op, not a registry
+     // write every cycle.
+     void FetchWirelessPolicy() {
+         try {
+             std::pair<int, std::string> resp = GetHttpClient()->Get(
+                 "/agents/" + config.agentId + "/wireless-policy");
+             auto& [status, response] = resp;
+             if (status != 200) return;   // keep last-known-good on error/outage
+
+             bool enforced    = ExtractJsonBool(response, "enforced");
+             std::string mode = ToLower(config.ExtractJsonValue(response, "mode"));
+             bool blockBt      = ExtractJsonBool(response, "block_bluetooth_file_transfer");
+             bool blockNearby  = ExtractJsonBool(response, "block_nearby_sharing");
+             bool enforce      = enforced && mode == "enforce";   // audit => don't apply
+
+             std::string sig = std::string(enforce ? "1" : "0") +
+                               (blockBt ? "b" : "-") + (blockNearby ? "n" : "-");
+             if (sig != lastWirelessSig) {
+                 ApplyWirelessControls(enforce, blockBt, blockNearby);
+                 lastWirelessSig = sig;
+             }
+             logger.Debug("Wireless control: enforced=" + std::string(enforced ? "true" : "false") +
+                         " mode=" + (mode.empty() ? "off" : mode) +
+                         " bt_file_transfer=" + std::string(blockBt ? "block" : "allow") +
+                         " nearby_sharing=" + std::string(blockNearby ? "block" : "allow"));
+         } catch (const std::exception& e) {
+             logger.Debug(std::string("FetchWirelessPolicy failed: ") + e.what());
+         } catch (...) {
+             logger.Debug("FetchWirelessPolicy failed");
+         }
      }
 
      // Same directory-resolution rule as Logger (SECEOKNIGHT_LOG_DIR env var,
@@ -10239,8 +10352,89 @@ void ShowUsage() {
     std::cout << "  seceoknight_agent.exe -background\n";
     std::cout << "  seceoknight_agent.exe --bg\n\n";
 }
- 
+
+// Resolve a filename relative to THIS executable's own directory, not the
+// current working directory. Needed by HandleBlockedLaunch() below: it may
+// run with an unpredictable CWD (launched via the IFEO Debugger mechanism in
+// place of fsquirt.exe, not by our own service/scheduled-task launcher that
+// normally sets the working directory), so the plain relative
+// "agent_config.json" default AgentConfig() otherwise uses cannot be trusted
+// here. Ported from CyberSentinel-DLP's equivalent helper.
+std::string ExeRelativePath(const std::string& filename) {
+    char exePath[MAX_PATH] = {0};
+    DWORD len = GetModuleFileNameA(nullptr, exePath, MAX_PATH);
+    if (len == 0 || len == MAX_PATH) return filename;   // fall back to relative
+    std::string path(exePath, len);
+    size_t slash = path.find_last_of("\\/");
+    if (slash == std::string::npos) return filename;
+    return path.substr(0, slash + 1) + filename;
+}
+
+// Invoked when Windows launches us in place of fsquirt.exe (the Bluetooth file
+// transfer wizard) via the IFEO Debugger set by the wireless-control policy
+// (see ApplyWirelessControls()/SetIFEODebugger() above). That means a user
+// tried a Bluetooth file transfer while it is blocked. Log it + raise a
+// dashboard event, then return WITHOUT running fsquirt so the transfer is
+// blocked. Runs briefly as the user who launched fsquirt; must never hang or
+// crash -- any failure here should silently fall through to "blocked, no
+// event" rather than let fsquirt run. Ported from CyberSentinel-DLP.
+int HandleBlockedLaunch(int argc, char* argv[]) {
+    try {
+        // Everything after --blocked-launch is the original fsquirt path + args.
+        std::string attempt;
+        for (int i = 1; i < argc; i++) {
+            if (std::string(argv[i]) == "--blocked-launch") {
+                for (int j = i + 1; j < argc; j++) { if (!attempt.empty()) attempt += " "; attempt += argv[j]; }
+                break;
+            }
+        }
+        char uname[256]; DWORD un = sizeof(uname);
+        std::string username = GetUserNameA(uname, &un) ? std::string(uname) : "unknown";
+
+        // Local audit line (best-effort -- may be unwritable for a standard user).
+        try {
+            Logger logger;
+            logger.Warning("BLUETOOTH_TRANSFER_BLOCKED user=" + username +
+                           " attempt=" + (attempt.empty() ? "fsquirt" : attempt));
+        } catch (...) {}
+
+        // Dashboard event (the reliable audit record -- HTTP needs no file perms).
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);   // GenerateUUID -> CoCreateGuid
+        AgentConfig cfg(ExeRelativePath("agent_config.json"));
+        JsonBuilder json;
+        json.AddString("event_id", GenerateUUID());
+        json.AddString("event_type", "bluetooth_file_transfer");
+        json.AddString("event_subtype", "bluetooth_file_transfer");
+        json.AddString("severity", "high");
+        json.AddString("agent_id", cfg.agentId);
+        json.AddString("source_type", "endpoint");
+        json.AddString("action", "blocked");
+        json.AddString("block_reason", "wireless_control");
+        json.AddString("destination_type", "bluetooth");
+        json.AddString("user_email", username);
+        json.AddString("description",
+                       "Bluetooth file transfer blocked by wireless control policy (user " + username + ")");
+        try {
+            HttpClient client(cfg.serverUrl);
+            client.Post("/events", json.Build());
+        } catch (...) {}
+        CoUninitialize();
+    } catch (...) {}
+    return 0;   // never run fsquirt
+}
+
 int main(int argc, char* argv[]) {
+    // Blocked-launch hook: we were run in place of fsquirt.exe (Bluetooth file
+    // transfer) because the wireless policy blocks it. Log + emit an event,
+    // then exit without running fsquirt. Handle this BEFORE any normal
+    // startup (help flag, background-mode detection, the whole DLPAgent
+    // lifecycle) -- this invocation isn't a real agent run at all.
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--blocked-launch") {
+            return HandleBlockedLaunch(argc, argv);
+        }
+    }
+
     // Check for help flag
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];

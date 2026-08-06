@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Wireless / Bluetooth transfer control -- new capability (August 6, 2026)
+
+### Summary
+
+Third item off the list. This is the one genuinely IFEO-based control CyberSentinel-DLP has (application_control, ported in the previous entry, is not IFEO -- this is). Blocks the built-in Bluetooth file-transfer wizard (`fsquirt.exe`) and/or Wi-Fi Direct / Windows Nearby Sharing, an exfiltration channel none of SeceoKnight's existing controls (USB, network share, print, screen capture, network-exfil CLI interception) touched at all -- a user could always just Bluetooth a file to their phone.
+
+### What was added
+
+**Server** (`server/app/api/v1/agents.py`): new `GET /agents/{agent_id}/wireless-policy` endpoint (`X-Agent-Key` auth), driven by a `Policy` row of `type="wireless_transfer_control"` -- `mode` (`enforce` | `audit` | `off`), `block_bluetooth_file_transfer`, `block_nearby_sharing` (independently toggleable). Registered `wireless_transfer_control` (policy type) and `bluetooth_file_transfer` (event type, emitted when a blocked attempt fires) in `server/app/core/domains.py` as `PolicyDomain.THREAT`.
+
+**Windows agent** (`agent.cpp`):
+- `SetIFEODebugger(exeName, debuggerValue, block)` sets or clears an Image File Execution Options `Debugger` registry value under `HKLM\...\Image File Execution Options\<exeName>` -- when set, Windows launches the debugger process instead of the named exe. Used to redirect `fsquirt.exe` to the agent itself (`"<agent.exe path>" --blocked-launch`) instead of letting the Bluetooth wizard run. Audio (A2DP/HFP) and input (HID) Bluetooth profiles are untouched -- headphones, mice, keyboards keep working, since those don't go through `fsquirt.exe`.
+- `SetPolicyDword` / `ApplyWirelessControls` sets the `EnableCdp` (Connected Devices Platform) group policy DWORD to disable Wi-Fi Direct / Nearby Sharing, reconciled both directions so clearing the policy restores the channel.
+- `FetchWirelessPolicy()` polls the new endpoint on the policy-sync cadence and only touches the registry when the effective enforcement signature (`lastWirelessSig`) actually changed -- a routine sync tick with no policy change is a no-op, not a registry write every cycle.
+- `HandleBlockedLaunch()` (new top-level function, plus a `--blocked-launch` argv hook checked at the very top of `main()`, before help-flag parsing or the normal agent lifecycle): when Windows launches the agent binary in fsquirt's place, this logs the attempt locally and POSTs a `bluetooth_file_transfer` event to `/events` directly (its own minimal `HttpClient`/`AgentConfig`/`JsonBuilder` usage, not the full running agent), then exits without ever running fsquirt. Added `ExeRelativePath()` (new helper) so this invocation resolves `agent_config.json` next to the actual executable rather than trusting the current working directory, which is unpredictable when launched via the IFEO Debugger mechanism instead of the agent's own service/scheduled-task launcher.
+
+### Scope note
+
+Same as the previous two entries: no dashboard UI in this pass, configurable via `POST /api/v1/policies` with `type: "wireless_transfer_control"`. Also: this covers the *built-in Windows* Bluetooth file wizard and Nearby Sharing specifically -- a third-party Bluetooth file-transfer utility that doesn't go through `fsquirt.exe` would not be caught by this control. That limitation is inherited directly from CyberSentinel-DLP's own implementation, not something narrowed in this port. Validate on real Bluetooth hardware before relying on this in production -- this sandbox has none.
+
+### Verification
+
+`ast.parse` clean on `agents.py`/`domains.py`. Brace-balance check on `agent.cpp` (paren=-2, brace=-5, bracket=-1) matches the established baseline exactly, both after the mid-class additions (`SetIFEODebugger`/`SetPolicyDword`/`ApplyWirelessControls`/`FetchWirelessPolicy`) and after the standalone pre-`main()` additions (`ExeRelativePath`/`HandleBlockedLaunch`). All new registry/COM/HTTP calls (`RegCreateKeyExA`, `RegOpenKeyExA`, `RegDeleteValueA`, `RegSetValueExA`, `CoInitializeEx`/`CoUninitialize`, `HttpClient`, `AgentConfig`, `JsonBuilder`, `Logger`) reuse functions/classes already used elsewhere in this exact file, confirmed by grep before use, not assumed. **Not live-tested**: no MinGW compiler and no Bluetooth hardware in this sandbox, so the actual IFEO redirect and the `EnableCdp` policy effect haven't been exercised end-to-end. Worth a real build + a manual Bluetooth-transfer-attempt test before relying on this in production.
+
+---
+
 ## 🛡️ Managed-application file control -- new capability (August 6, 2026)
 
 ### Summary
