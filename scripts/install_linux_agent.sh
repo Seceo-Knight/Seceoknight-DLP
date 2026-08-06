@@ -8,7 +8,7 @@ MANAGER_URL="${MANAGER_URL:-http://localhost:55000/api/v1}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/seceoknight/agent}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/seceoknight}"
 VENV_DIR="${VENV_DIR:-}"
-REPO_URL="${REPO_URL:-https://github.com/seceoknight-06/Data-Loss-Prevention.git}"
+REPO_URL="${REPO_URL:-https://github.com/Seceo-Knight/Seceoknight-DLP.git}"
 BRANCH="${BRANCH:-main}"
 REF="${REF:-}"
 SERVICE_NAME="${SERVICE_NAME:-seceoknight-agent}"
@@ -23,7 +23,7 @@ Usage: install_linux_agent.sh [options]
   --install-dir PATH        Agent install dir (default: /opt/seceoknight/agent)
   --config-dir PATH         Config dir (default: /etc/seceoknight)
   --venv-dir PATH           Virtualenv dir (default: <install-dir>/.venv)
-  --repo-url URL            Git repo URL (default: https://github.com/YOUR_ORG/Data-Loss-Prevention.git)
+  --repo-url URL            Git repo URL (default: https://github.com/Seceo-Knight/Seceoknight-DLP.git)
   --branch NAME             Git branch (default: main)
   --ref REF                 Optional commit/tag
   --service-name NAME       Systemd service name (default: seceoknight-agent)

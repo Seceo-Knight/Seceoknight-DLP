@@ -527,11 +527,20 @@ back to the same Settings section and click the trash-can icon next to it.
 
 ```bash
 cd /opt/seceoknight
+curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/docker-compose.prod.yml -o docker-compose.prod.yml
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-This pulls the latest pre-built images from GHCR and restarts all services with zero downtime.
+`docker compose pull` only refreshes the *images* — it does not pick up changes to the compose file itself (new services, new env vars, changed healthchecks). Re-fetch `docker-compose.prod.yml` first if the release notes mention deployment-tooling changes, or you'll be running new images against an old compose definition.
+
+If the release includes a database schema change (check `CHANGELOG.md`), run the pending Alembic migration after `up -d`:
+
+```bash
+docker compose -f docker-compose.prod.yml exec manager alembic upgrade head
+```
+
+Fresh installs don't need this step — `install.sh` builds the schema directly on first boot. It only applies when updating an existing deployment across a release that changed the schema.
 
 ---
 

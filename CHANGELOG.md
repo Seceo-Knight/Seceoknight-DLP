@@ -8,6 +8,67 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🚨 Critical Fix: The Random Admin Password Fix Was Never Actually Live (August 6, 2026)
+
+### Summary
+
+Chasing a smaller deployment-tooling comparison against CyberSentinel-DLP surfaced something far more serious: the random-per-deployment admin password fix from earlier today (the `_generate_admin_password()` / `DLP_ADMIN_PASSWORD` change in `server/app/main.py`) **never actually took effect in a real Docker deployment.** `server/entrypoint.sh` was running `python scripts/seed_admin.py` on every manager container start, *before* `exec uvicorn app.main:app` — and `scripts/seed_admin.py` independently creates the admin account with a hardcoded default password (`Admin@1234` via `SEED_ADMIN_PASSWORD`) if no users exist yet. Since it ran first, it always won the race: by the time `app.main:app`'s own startup logic (`_auto_init_schema_and_admin()`, containing the fix) got a chance to check "does an admin exist yet," `seed_admin.py` had already created one with the weak, publicly-known password. The earlier fix was real, correct code — it just never ran, in any deployment that used the documented `install.sh` → `docker compose up -d` path, which is effectively all of them.
+
+### Fix
+
+Removed the `python scripts/seed_admin.py` call from `server/entrypoint.sh`. `_auto_init_schema_and_admin()` in `app/main.py` already does the identical job — create the first admin only if zero users exist — correctly (random CSPRNG password, `DLP_ADMIN_PASSWORD` support, `ON CONFLICT`-safe against concurrent uvicorn workers) via FastAPI's lifespan startup handler, so there's no gap left by removing the redundant call. `scripts/seed_admin.py` itself is left in the repo (for a non-standard deployment that might invoke it manually) but its docstring now explains it's unused by the normal path, and its own hardcoded-password fallback was replaced with the same CSPRNG random-password generation as `main.py`, so even a manual run no longer reintroduces the weak default.
+
+### Verification
+
+`ast.parse` clean on `seed_admin.py` and `main.py`. `bash -n` clean on `entrypoint.sh`. Traced the full startup order by reading `entrypoint.sh` → `alembic upgrade head` → (old: `seed_admin.py`) → `exec uvicorn app.main:app` → `lifespan()` → `_auto_init_schema_and_admin()`, confirming the ordering claim above rather than assuming it. Not yet live-tested against a real container rebuild — worth confirming with a genuinely fresh `docker compose up -d` (empty volumes) that `docker logs seceoknight-manager | grep generated_password` shows a real random password and that no `[seed_admin]` log lines appear at all.
+
+---
+
+## 🚀 Deployment Tooling Parity Pass vs CyberSentinel-DLP (August 6, 2026)
+
+### Summary
+
+User pointed out CyberSentinel-DLP had recent changes to `DEPLOYMENT.md`, `README.md`, `docker-compose.yml`/`docker-compose-prod.yml`, and `install.sh` worth checking. A deep comparison (full file diffs, not just filenames) turned up several real gaps and one latent correctness bug, on top of the admin-password issue above.
+
+### Fixes
+
+- **`docker-compose.prod.yml` — manager was missing `ENVIRONMENT`/`DEBUG`/`DLP_ADMIN_PASSWORD` env vars entirely.** Without `ENVIRONMENT=production` being passed into the container, the app defaulted to `ENVIRONMENT=development` — which silently disables the fail-closed behavior in `server/app/core/security.py` and `server/app/api/v1/auth.py`'s Redis-outage token-blacklist checks (they only fail closed with a `503` when `ENVIRONMENT=="production"`; otherwise a Redis outage lets a possibly-revoked token through with just a warning). Also, `DLP_ADMIN_PASSWORD` was never forwarded into the container, so even setting it in `.env` had no effect. Added all three.
+- **OpenSearch healthcheck was missing `curl -f`.** Without `-f`, curl exits `0` on an HTTP 401 (wrong `OPENSEARCH_PASSWORD`), so a cluster rejecting our own credentials could still report "healthy" to Docker. One-flag fix.
+- **`install.sh` printed a hardcoded `Admin@1234` in its completion banner**, which (now that the seed_admin.py issue above is fixed) is simply wrong — the real password is either pinned via `DLP_ADMIN_PASSWORD` or randomly generated and logged once. The banner now reads the actual password: checks `.env` for a pinned `DLP_ADMIN_PASSWORD` first, then falls back to grepping `docker compose logs manager` for the `generated_password` line the server logs on first boot, and clearly states which source it came from (or how to retrieve it manually if neither applies, e.g. a re-run against an existing DB).
+- **`install.sh` never stamped the Alembic migration state on a fresh install.** Added a step (adapted from CyberSentinel-DLP's equivalent) that runs `alembic current` inside the manager container after health passes; if empty (fresh install), stamps `alembic stamp head` so a later real upgrade can apply cleanly via `alembic upgrade head` instead of either failing (tables already exist) or silently applying nothing.
+- **Added `uninstall.sh`** (new file, repo root) — SeceoKnight had no scripted teardown at all. Ported from CyberSentinel-DLP's design: `docker compose down` (no `-v`) by default so data volumes survive and a reinstall restores over them; `--purge` for full volume + install-dir deletion, gated behind typing the literal word `DELETE` at a real TTY (or `--yes` to skip non-interactively); falls back to `docker compose ls`/name-prefix matching if the compose file was moved. Added one thing beyond the straight port: an optional `--backup` flag that `pg_dump`/`mongodump`s both databases to `/var/backups/seceoknight/<timestamp>/` before a purge, since DLP audit/incident data may carry retention requirements a generic product's uninstaller wouldn't need to consider. Backup failures warn but never block the teardown itself.
+- **`DEPLOYMENT.md` and `README.md` had stale port/architecture documentation** — a leftover from before the Nginx reverse-proxy was added. They documented the manager as directly reachable on host port `55000` and the dashboard on `80 → 3000`, but the actual `docker-compose.prod.yml` only exposes `seceoknight-nginx` on `80`/`443`; manager and dashboard are both internal-only (`expose:`, no `ports:`). `install.sh` and `install-agent.ps1` already correctly health-check through Nginx — only the docs disagreed. Fixed the container/port table, the health-check description, the agent-installer connectivity description, and the firewall-troubleshooting row. Also added an "Updating to a New Version" caveat to `README.md`: `docker compose pull` only refreshes images, not the compose file itself, and a schema-changing release needs `docker compose exec manager alembic upgrade head` after `up -d` (which the new install.sh stamp step above makes safe to run).
+
+### Non-findings (checked, no action needed)
+
+- `docker-compose.deploy.yml` (CyberSentinel-only) — confirmed via their own `SECURITY.md` to be a legacy/superseded file with two previously-patched vulnerabilities, not their canonical path. Nothing to port.
+- `GITHUB_DEPLOYMENT_COMPLETE.md` (CyberSentinel-only) — a one-time internal setup report, stale even within their own repo (wrong repo name, wrong ports). Not worth porting as a file; the underlying "first-time GHCR package visibility" gotcha may be worth a short `CONTRIBUTING.md` note later, but that's a nice-to-have.
+- `docker-compose.yml` (CyberSentinel's dev-tier compose, source-mounted, DB ports exposed) — SeceoKnight has no equivalent. Flagged as a possible future addition for local dev ergonomics, not an operational-risk item like the ones above, so not done in this pass.
+
+### Verification
+
+`ast.parse` clean on `main.py`/`seed_admin.py`, `bash -n` clean on `install.sh`/`uninstall.sh`/`entrypoint.sh`, `yaml.safe_load` clean on `docker-compose.prod.yml`. Not yet live-tested end-to-end (no Docker host in this sandbox) — worth a real `install.sh` run against empty volumes, followed by `uninstall.sh --purge --backup` and a re-`install.sh`, before relying on this for a production rollout.
+
+---
+
+## 🔗 Linux Installers Pointed at the Wrong Repo, Plus Download Sanity Checks (August 6, 2026)
+
+### Summary
+
+While looking for CyberSentinel-parity gaps in deployment tooling (checksum verification on their Linux install, since SeceoKnight's Linux path downloads raw source instead of a signed release binary), found something more urgent: both `install_linux_agent.py` (`REPO_OWNER="seceoknight-06"`, `REPO_NAME="Data-Loss-Prevention"`) and `scripts/install_linux_agent.sh` (`REPO_URL` default `.../seceoknight-06/Data-Loss-Prevention.git`) pointed at a **wrong/stale repository**. Every other installer in the project (`install.sh`, `install-agent.ps1`, `manage-agent.ps1`) already correctly used `Seceo-Knight/Seceoknight-DLP`. Anyone running either Linux installer with default settings would have pulled from a repo that isn't this project — either failing outright (404) or, worse, silently succeeding against unrelated/stale content if that URL ever resolved to something.
+
+### Fix
+
+- `install_linux_agent.py`: corrected `REPO_OWNER`/`REPO_NAME` (and the two doc/help-text URL examples) to `Seceo-Knight`/`Seceoknight-DLP`.
+- `scripts/install_linux_agent.sh`: corrected the `REPO_URL` default and its usage help text to `https://github.com/Seceo-Knight/Seceoknight-DLP.git`.
+- `install_linux_agent.py`: added `_download_looks_bad()`, run against every downloaded agent file (`agent.py`, `requirements.txt`, etc.) right after `download_file()` writes it to disk, before install proceeds. Catches a download that's suspiciously tiny, that looks like an HTML error/rate-limit page instead of raw source, or (for `.py` files) that doesn't contain any `def`/`class` at all — cases where `urllib`'s `HTTPError` wouldn't fire because the CDN returned 200 with the wrong body. This is a content sanity check, not a cryptographic one: unlike CyberSentinel's versioned, CI-published binary (which has one stable checksum per release to pin against), these are individual source files that legitimately change on every commit to the target branch, so per-commit hash pinning isn't meaningful here without a separate checksum-publishing step server-side — tracked as a follow-up idea, not done in this pass.
+
+### Verification
+
+`python3 -c "import ast; ast.parse(...)"` clean on `install_linux_agent.py`. `bash -n scripts/install_linux_agent.sh` clean. Grepped both files afterward to confirm no remaining reference to the old `seceoknight-06/Data-Loss-Prevention` URL. Not yet live-tested against a real target host (no Linux VM in this sandbox) — worth a real run of both installers before relying on them for a fresh deployment.
+
+---
+
 ## 🚨 Critical Fix: Windows Agent Failed OPEN on Every DLP Server Error (August 6, 2026)
 
 ### Summary

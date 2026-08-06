@@ -11,7 +11,7 @@ Usage:
     sudo python3 install_linux_agent.py --server-url http://10.0.0.5:55000/api/v1 --no-start
 
 One-liner (download and run):
-    curl -sLO https://raw.githubusercontent.com/seceoknight-06/Data-Loss-Prevention/main/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
+    curl -sLO https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
 """
 
 import argparse
@@ -31,8 +31,8 @@ import uuid
 # Configuration
 # ──────────────────────────────────────────────
 
-REPO_OWNER = "seceoknight-06"
-REPO_NAME = "Data-Loss-Prevention"
+REPO_OWNER = "Seceo-Knight"
+REPO_NAME = "Seceoknight-DLP"
 DEFAULT_BRANCH = "main"
 DEFAULT_INSTALL_DIR = "/opt/seceoknight/agent"
 DEFAULT_CONFIG_DIR = "/etc/seceoknight"
@@ -150,6 +150,33 @@ def download_file(url, dest):
         return False
 
 
+def _download_looks_bad(local_name, data):
+    """Best-effort sanity check that a download is real agent source, not a
+    GitHub/CDN error page or truncated response silently treated as success.
+
+    This is a content check, not a cryptographic one -- unlike CyberSentinel's
+    installer for its versioned, CI-published *binary* artifact (which has a
+    stable per-release checksum to pin against), these are individual source
+    files that legitimately change on every commit to `branch`, so there's no
+    fixed hash to verify without also standing up a separate per-commit
+    checksum publication step. What this DOES catch: urllib.error.HTTPError
+    already covers a real 404/5xx status, but raw.githubusercontent.com (or
+    any CDN/proxy in front of it) can occasionally return 200 with an HTML
+    body instead of the raw file (rate-limit page, outage page, a typo'd
+    path that 404s at a layer urllib doesn't see as an HTTPError) -- that
+    previously got written to disk and installed/run as if it were real
+    agent code. Returns a reason string if the download looks bad, else None.
+    """
+    if len(data) < 32:
+        return f"suspiciously small ({len(data)} bytes)"
+    head = data[:512].decode("utf-8", errors="replace").lstrip().lower()
+    if head.startswith("<!doctype") or head.startswith("<html"):
+        return "looks like an HTML error page, not source"
+    if local_name.endswith(".py") and b"def " not in data and b"class " not in data:
+        return "doesn't look like Python source (no def/class found)"
+    return None
+
+
 def download_agent_files(install_dir, branch):
     """Download all agent files into install_dir."""
     print(f"\n{Color.BOLD}[2/5] Downloading agent files{Color.RESET}\n")
@@ -158,11 +185,18 @@ def download_agent_files(install_dir, branch):
     for remote_path, local_name in AGENT_FILES:
         url = f"{RAW_BASE}/{branch}/{remote_path}"
         dest = os.path.join(install_dir, local_name)
-        if download_file(url, dest):
-            ok(f"  {local_name}")
-        else:
+        if not download_file(url, dest):
             err(f"  Failed to download {remote_path}")
             sys.exit(1)
+
+        with open(dest, "rb") as f:
+            bad_reason = _download_looks_bad(local_name, f.read())
+        if bad_reason:
+            err(f"  {local_name} failed verification: {bad_reason}")
+            err(f"  (downloaded from {url} -- check the URL/branch are correct)")
+            sys.exit(1)
+
+        ok(f"  {local_name}")
 
     ok(f"Agent files saved to {install_dir}/")
 
@@ -508,7 +542,7 @@ def main():
               sudo python3 install_linux_agent.py --server-url http://myserver:55000/api/v1 --force
 
             One-liner:
-              curl -sLO https://raw.githubusercontent.com/seceoknight-06/Data-Loss-Prevention/main/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
+              curl -sLO https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
         """),
     )
     parser.add_argument(

@@ -203,13 +203,57 @@ if ! curl -fsSk https://localhost/api/v1/health >/dev/null 2>&1; then
     exit 1
 fi
 
+# ─── 8b. Mark the migration state ─────────────────────────────────────
+# The manager auto-creates the whole schema at startup (Base.metadata.create_all
+# in server/app/main.py), so on a fresh install `alembic upgrade head` would
+# fail (e.g. "relation already exists") — the tables are already there, they
+# just were never recorded as being at a specific Alembic revision. We stamp
+# instead, which records the DB as being at the latest revision without
+# re-running any migration SQL, so future updates can apply cleanly.
+#
+# Only stamp when the DB has never been stamped. If this is a re-run against
+# an existing install, stamping would silently mark any pending migrations as
+# done and skip them — that case is a real upgrade and must use
+# `alembic upgrade head` instead. `alembic current` prints the revision on
+# stdout when stamped and nothing when it isn't, so non-empty stdout is the
+# signal — don't try to detect this any other way.
+if [ -n "$(docker exec seceoknight-manager alembic current 2>/dev/null | tr -d '[:space:]')" ]; then
+    say "Alembic revision already stamped — leaving migration state untouched"
+    c_yellow "  (upgrading an existing install? run: docker exec seceoknight-manager alembic upgrade head)"
+else
+    say "Stamping database at the latest Alembic revision (fresh install)"
+    docker exec seceoknight-manager alembic stamp head >/dev/null 2>&1 \
+        && say "Migration state stamped" \
+        || c_yellow "[!] Could not stamp Alembic revision — run it manually: docker exec seceoknight-manager alembic stamp head"
+fi
+
 # ─── 9. Print connection details ──────────────────────────────────────
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)"
 
-# Admin bootstrap password is fixed: Admin@1234.
-# Operators are expected to change it after first login via
-# Settings -> Profile -> Change Password.
-ADMIN_PASS="Admin@1234"
+# Admin bootstrap password is NOT fixed — the server generates a random
+# CSPRNG password per deployment (server/app/main.py::_generate_admin_password)
+# unless DLP_ADMIN_PASSWORD is pinned in .env, and logs it exactly once on
+# first boot. Figure out which case we're in so the banner below is accurate
+# instead of printing a password that no longer works.
+ADMIN_PASS=""
+ADMIN_PASS_SOURCE=""
+
+# Case 1: operator pinned it in .env — read that value directly.
+PINNED_ADMIN_PASS="$(grep -E '^DLP_ADMIN_PASSWORD=' "${ENV_FILE}" 2>/dev/null | head -1 | cut -d= -f2-)"
+if [ -n "${PINNED_ADMIN_PASS}" ]; then
+    ADMIN_PASS="${PINNED_ADMIN_PASS}"
+    ADMIN_PASS_SOURCE="pinned via DLP_ADMIN_PASSWORD in ${ENV_FILE}"
+else
+    # Case 2: server auto-generated it — pull it back out of the manager's
+    # first-boot log line (logged exactly once, only on a brand-new DB).
+    GENERATED_ADMIN_PASS="$(docker compose -f "${COMPOSE_FILE}" logs manager 2>/dev/null \
+        | grep -oE '"generated_password"[[:space:]]*:[[:space:]]*"[^"]+"' \
+        | head -1 | sed -E 's/.*"generated_password"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+    if [ -n "${GENERATED_ADMIN_PASS}" ]; then
+        ADMIN_PASS="${GENERATED_ADMIN_PASS}"
+        ADMIN_PASS_SOURCE="auto-generated on first boot"
+    fi
+fi
 
 echo
 c_green "================================================================"
@@ -235,8 +279,15 @@ c_yellow "        bash ${INSTALL_DIR}/scripts/generate-certs.sh --domain yourdom
 echo
 c_blue "First-login credentials:"
 echo "  Username : admin"
-echo "  Password : ${ADMIN_PASS}"
-c_yellow "  → Change this password after first login (Settings → Profile → Change Password)."
+if [ -n "${ADMIN_PASS}" ]; then
+    echo "  Password : ${ADMIN_PASS}  (${ADMIN_PASS_SOURCE})"
+    c_yellow "  → Change this password after first login (Settings → Profile → Change Password)."
+else
+    c_yellow "  Password : could not be read automatically (this only happens on a re-run"
+    c_yellow "             against an existing database, where no first-boot line was logged)."
+    c_yellow "             Retrieve it with:"
+    c_yellow "             docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} logs manager | grep generated_password"
+fi
 echo
 c_blue "Database tier (internal-only — no host port binding):"
 echo "  postgres / mongodb / redis / opensearch are reachable only on the"

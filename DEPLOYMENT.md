@@ -65,7 +65,8 @@ What this does, in order:
    cert later if you front the deployment with a TLS-terminating proxy.
 6. `docker compose pull` — fetches all images from GHCR and Docker Hub.
 7. `docker compose up -d` — starts all services.
-8. Polls `http://localhost:55000/health` for up to 3 minutes.
+8. Polls `https://localhost/api/v1/health` (through Nginx) for up to 3 minutes.
+   Manager port 55000 is internal-only and not reachable from the host directly.
 9. Prints connection details and the bootstrap admin password from
    the manager log.
 
@@ -89,15 +90,20 @@ Containers running after install:
 | `seceoknight-postgres` | `postgres:16-alpine` | _none_ | Users, RBAC, audit logs |
 | `seceoknight-mongodb` | `mongo:7.0` | _none_ | DLP events, alerts, incidents |
 | `seceoknight-redis` | `redis:7-alpine` | _none_ | Token blacklist, rate limit, cache |
-| `seceoknight-opensearch` | `opensearchproject/opensearch:2.11.0` | _none_ | Event search index |
-| `seceoknight-manager` | `ghcr.io/seceo-knight/seceoknight-dlp/dlp-manager:latest` | **55000** | FastAPI API |
-| `seceoknight-dashboard` | `ghcr.io/seceo-knight/seceoknight-dlp/dlp-dashboard:latest` | **80** → 3000 | React SPA + nginx |
+| `seceoknight-opensearch` | `opensearchproject/opensearch:2.19.6` | _none_ | Event search index |
+| `seceoknight-manager` | `ghcr.io/seceo-knight/seceoknight-dlp/dlp-manager:latest` | _none_ (internal only) | FastAPI API |
+| `seceoknight-dashboard` | `ghcr.io/seceo-knight/seceoknight-dlp/dlp-dashboard:latest` | _none_ (internal only) | React SPA |
+| `seceoknight-nginx` | `nginx:1.27-alpine` | **80, 443** | Reverse proxy — the only host-facing service |
 | `seceoknight-celery-worker` | (same manager image) | _none_ | Async event processing |
 | `seceoknight-celery-beat` | (same manager image) | _none_ | Scheduled tasks |
 
-> **Database tier is internal-only** since the security audit. Postgres,
-> Mongo, Redis, and OpenSearch are no longer published to `0.0.0.0`. For
-> ops use `docker compose exec` (e.g.
+> **Database tier AND the app tier are both internal-only.** Postgres,
+> Mongo, Redis, OpenSearch, the manager API, and the dashboard are not
+> published to the host at all — only `seceoknight-nginx` binds host ports
+> (80/443), and proxies to the manager (`/api/v1/...`) and dashboard
+> internally. Agents and browsers talk to `https://<server>/api/v1` — never
+> `<server>:55000` directly, since that port isn't reachable from outside
+> the Docker network. For DB ops use `docker compose exec` (e.g.
 > `docker compose -f /opt/seceoknight/docker-compose.prod.yml exec postgres psql -U seceoknight`).
 
 ### First-time login
@@ -227,7 +233,8 @@ What it does:
 1. **Step 1 — Configuration.** Prompts for the server hostname/IP
    (`localhost`, an IPv4 literal, or an RFC1123 FQDN like
    `dlp.corp.local`), agent name, heartbeat interval, and policy sync
-   interval. Tests `http://<server>:55000/health` before continuing.
+   interval. Tests `http://<server>/api/v1/health` (through Nginx) before
+   continuing — not port 55000, which isn't exposed on the host.
 2. **Step 2 — Cleanup.** Stops the existing scheduled task / process /
    service if present. Safe to re-run on an already-installed endpoint.
 3. **Step 3 — Directories.** Creates `C:\Program Files\SeceoKnight`
@@ -282,7 +289,7 @@ Get-Process seceoknight_agent | Select-Object Id, StartTime, Path
 Get-Content "C:\Program Files\SeceoKnight\seceoknight_agent.log" -Tail 50
 
 # Confirm the dashboard sees the agent
-# (open http://<server>:80/ in a browser → Agents page)
+# (open http://<server>/ in a browser -- redirects to https:// -- → Agents page)
 ```
 
 ### Re-install / update an existing endpoint
@@ -410,7 +417,7 @@ Enable-ScheduledTask -TaskName "SeceoKnight DLP Agent"
 | Manager unhealthy on first boot | OpenSearch still initialising | Wait 90s, check `docker logs seceoknight-opensearch`. |
 | Manager 500s on `/auth/login` | `SECRET_KEY` not set / changed | Check `.env`. Restart manager. |
 | Endpoint installer: `CRITICAL: SHA-256 mismatch` | Repo binary doesn't match its sidecar | Rebuild + regenerate sidecar (Section 2). |
-| Endpoint can't reach manager | Firewall on port 55000 | `Test-NetConnection -ComputerName <server> -Port 55000` |
+| Endpoint can't reach manager | Firewall on port 80/443 (agents connect through Nginx, not 55000 directly) | `Test-NetConnection -ComputerName <server> -Port 443` |
 | Dashboard shows 0 agents | Agent not sending heartbeat | Tail `seceoknight_agent.log` for HTTP errors. |
 
 ### Verification commands (all the security fixes from the audit)

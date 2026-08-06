@@ -74,7 +74,11 @@ services:
         reservations:
           memory: 2G
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -u admin:${OPENSEARCH_PASSWORD:?Set this password in .env file} https://localhost:9200/_cluster/health || exit 1"]
+      # -f is required: without it, curl exits 0 on an HTTP 401 (wrong
+      # OPENSEARCH_PASSWORD), so a cluster rejecting our own credentials
+      # still reported "healthy" to Docker/compose. -f makes curl itself
+      # return non-zero on any 4xx/5xx response.
+      test: ["CMD-SHELL", "curl -f -k -u admin:${OPENSEARCH_PASSWORD:?Set this password in .env file} https://localhost:9200/_cluster/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -178,6 +182,25 @@ services:
       - PORT=55000
       - WORKERS=4
       - VERSION=2.0.0
+
+      # Deployment mode. Without this the app defaults to ENVIRONMENT=development
+      # (see server/app/core/config.py), which silently weakens two fail-closed
+      # security checks in a production deploy: the Redis-outage token-blacklist
+      # check (server/app/core/security.py) and its refresh-token counterpart
+      # (server/app/api/v1/auth.py) both only fail CLOSED (503) when
+      # ENVIRONMENT=="production" -- otherwise a Redis outage lets a possibly
+      # revoked token through with just a warning log. Found via a parity scan
+      # against CyberSentinel-DLP's compose file, which sets this explicitly.
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - DEBUG=${DEBUG:-False}
+
+      # Pins the first-boot admin password (see server/app/core/config.py /
+      # main.py::_generate_admin_password). Leave unset to let the server
+      # generate and log a random CSPRNG password on first boot instead.
+      # Without this line the DLP_ADMIN_PASSWORD setting can never reach the
+      # container even if it's set in .env -- it was a dead env var until
+      # this line was added.
+      - DLP_ADMIN_PASSWORD=${DLP_ADMIN_PASSWORD:-}
 
       # OpenSearch
       - OPENSEARCH_HOST=opensearch
