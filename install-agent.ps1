@@ -801,14 +801,36 @@ End If
         -RepetitionInterval (New-TimeSpan -Minutes 5) `
         -RepetitionDuration (New-TimeSpan -Days 3650)
 
-    # LogonType S4U (not Interactive, unlike the main agent task below). The
-    # main agent needs Interactive because clipboard/keyboard hooks require
-    # running in the same session as the desktop -- but this watchdog script
-    # only ever calls Get-Process/Stop-Process/Start-ScheduledTask, none of
-    # which need desktop access, so there's no reason to run it inside the
-    # interactive session at all. Kept alongside the VBScript wrapper above
-    # as defense in depth, not as the sole fix for the window flash.
-    $watchdogPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType S4U -RunLevel Limited
+    # Take 4 on the console flash -- and this one turned out to be a
+    # completely different bug from the first three. Live diagnostics
+    # (Microsoft-Windows-TaskScheduler/Operational event log) on a real
+    # endpoint with an Azure AD / Entra ID-joined Windows account showed the
+    # task had NEVER actually run since being switched to LogonType S4U --
+    # every single attempt failed at the logon step itself:
+    #   Event 104: "Task Scheduler failed to log on... Failure occurred in
+    #   LogonUserS4U... Error Value: 2147943712" (0x80070520,
+    #   ERROR_NO_SUCH_LOGON_SESSION)
+    # S4U depends on a traditional cached local/domain credential it can
+    # silently re-authenticate with -- Azure AD accounts authenticate via
+    # Web Account Manager/Primary Refresh Token instead, which S4U can't
+    # hook into, so it reliably fails for this (increasingly common)
+    # account type. This means every earlier fix aimed at the task's
+    # ACTION (which powershell.exe, which wrapper, SW_HIDE vs
+    # CREATE_NO_WINDOW) was chasing the wrong stage entirely -- the task
+    # was failing at logon, before it ever reached the action. The visible
+    # flash was very likely Task Scheduler's own handling of this repeated
+    # failed logon, not anything our action did.
+    #
+    # Fix: LogonType ServiceAccount running as SYSTEM instead of a
+    # per-user S4U logon -- the same pattern the USB-block task below
+    # already uses successfully. SYSTEM sidesteps user credential logon
+    # entirely (no S4U, no dependency on account type), works whether or
+    # not anyone is logged into the desktop, and still has more than
+    # enough rights for everything this script does (read a ProgramData
+    # log file, query/kill the agent process by name, query and re-trigger
+    # the main agent task via Schedule.Service/schtasks -- none of that
+    # requires being the specific logged-on user).
+    $watchdogPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 
     $watchdogSettings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `

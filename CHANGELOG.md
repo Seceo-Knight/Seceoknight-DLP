@@ -8,6 +8,33 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🪟 Watchdog Console Flash, Take 4: It Was Never About the Action — S4U Logon Was Failing (August 6, 2026)
+
+### Summary
+
+After Take 3 shipped (VBScript-only launcher, no `powershell.exe` spawned at all on the healthy path) a user reinstalled and still saw the flash every 5 minutes. Given three consecutive fixes to the task's *action* had all failed, this round used live diagnostics on the actual endpoint instead of another theoretical fix — and it turned out none of the first three fixes could ever have worked, because the task was failing at a completely different, earlier stage.
+
+### Root cause
+
+`Get-ScheduledTaskInfo` showed the watchdog's `LastRunTime` stuck at Windows' classic "never run" placeholder (`30-11-1999`) with `LastTaskResult 267011` (`SCHED_S_TASK_HAS_NOT_RUN`). Enabling and reading the `Microsoft-Windows-TaskScheduler/Operational` event log confirmed why:
+
+```
+Event 104: Task Scheduler failed to log on "\SeceoKnight DLP Watchdog".
+Failure occurred in "LogonUserS4U". Error Value: 2147943712.
+```
+
+`2147943712` is `0x80070520` — `ERROR_NO_SUCH_LOGON_SESSION`. The account on this endpoint is Azure AD / Entra ID-joined (`AzureAD\VaibhavHandekar`). `LogonType S4U` depends on being able to silently re-authenticate using a traditional cached local/domain credential — Azure AD accounts authenticate through Web Account Manager / Primary Refresh Token instead, which S4U has no way to hook into, so the logon step itself reliably fails for this (increasingly common) account type. The task never once reached its action across any of the last three fix attempts — every change to *how the action launches* (which process, which wrapper, `SW_HIDE` vs `CREATE_NO_WINDOW`) was chasing a stage the task never got to. The flash was very likely Task Scheduler's own handling of the repeated failed logon, not anything in our launcher.
+
+### Fix (`install-agent.ps1`)
+
+Changed the watchdog task's principal from a per-user `LogonType S4U` to `LogonType ServiceAccount` running as `SYSTEM` — the same pattern the existing USB-block task already uses successfully. Running as SYSTEM sidesteps user-credential logon entirely (no S4U, no dependency on account type — local, on-prem AD, or Azure AD all work identically), and still has more than enough rights for everything the watchdog does: reading a `ProgramData` log file, finding/killing the agent process by name, and querying/re-triggering the main agent task via `Schedule.Service`/`schtasks`. None of that requires being the specific logged-on user.
+
+### Verification
+
+PowerShell balance script against a fresh clone baseline: identical (0/0/0) in both. No PowerShell interpreter in this sandbox to actually execute a test logon. **Not yet live-tested** — this is the fourth attempt at this bug, but the first one backed by a confirmed root cause from real event-log evidence rather than a plausible theory; next step is reinstalling on the same endpoint and confirming both that the task's `LastRunTime`/`LastTaskResult` finally show a real, successful execution, and that the flash stops.
+
+---
+
 ## 🪟 Watchdog Console Flash, Take 3: Stop Spawning powershell.exe At All (August 6, 2026)
 
 ### Summary
