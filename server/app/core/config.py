@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 1  # 24 hours — enterprise security policy
     PASSWORD_MIN_LENGTH: int = 7
 
+    # First-boot admin seed. Leave unset for a fresh deployment to generate
+    # and log a random, policy-compliant password once (see main.py's
+    # _auto_init_schema_and_admin) instead of a fixed default. Set this from
+    # a secrets manager for automated/scripted deployments so nothing is
+    # logged at all. Only consulted when seeding a brand-new database with
+    # zero existing users — never rotates an existing admin password.
+    DLP_ADMIN_PASSWORD: str = Field(default="")
+
     # SSO — shared secret for verifying exchange tokens from the SIEM.
     # If empty/unset, the /auth/sso/exchange endpoint returns 503 (SSO disabled).
     # This is NOT the same as SECRET_KEY. The SIEM signs its exchange token

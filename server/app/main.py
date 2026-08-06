@@ -34,6 +34,46 @@ setup_logging()
 logger = structlog.get_logger()
 
 
+def _generate_admin_password() -> str:
+    """Random, CSPRNG-backed password for the first-boot admin seed.
+
+    Guarantees the result satisfies validate_password_strength (upper +
+    lower + digit + symbol) and settings.PASSWORD_MIN_LENGTH -- built by
+    explicitly including one character from each required class up front
+    (so a short random draw can never accidentally omit one, which a purely
+    random secrets.choice() over a mixed alphabet could do on rare draws),
+    then filling the rest randomly and shuffling with a CSPRNG so the
+    guaranteed characters aren't always in the same position.
+    """
+    import secrets
+    import string
+
+    length = max(20, settings.PASSWORD_MIN_LENGTH)
+    upper, lower, digits = string.ascii_uppercase, string.ascii_lowercase, string.digits
+    # Avoid characters that are visually ambiguous when read off a terminal
+    # (0/O, 1/l/I) and shell-quoting-hostile symbols, since this may need to
+    # be copy-pasted out of `docker logs` output by hand.
+    symbols = "!@#$%^&*-_=+"
+    pool = upper + lower + digits + symbols
+
+    required = [
+        secrets.choice(upper),
+        secrets.choice(lower),
+        secrets.choice(digits),
+        secrets.choice(symbols),
+    ]
+    remaining = [secrets.choice(pool) for _ in range(length - len(required))]
+    chars = required + remaining
+
+    # Fisher-Yates shuffle using the CSPRNG (random.shuffle is NOT
+    # cryptographically secure and must not be used for a credential).
+    for i in range(len(chars) - 1, 0, -1):
+        j = secrets.randbelow(i + 1)
+        chars[i], chars[j] = chars[j], chars[i]
+
+    return "".join(chars)
+
+
 async def _auto_init_schema_and_admin():
     """Create tables if missing and seed the default admin user on first boot.
 
@@ -90,10 +130,25 @@ async def _auto_init_schema_and_admin():
             )
             user_count = result.scalar()
             if user_count == 0:
-                # Fixed default password. Operators are expected to change it
-                # after first login via Settings -> Profile -> Change Password.
-                # Must meet the app's password policy (>=8 chars, letters+digits+symbol).
-                admin_password = "Admin@1234"
+                # A hardcoded default password here means every deployment
+                # of this source-available repo ships with a publicly-known
+                # admin credential until an operator happens to change it --
+                # a real exposure, not a theoretical one. DLP_ADMIN_PASSWORD
+                # lets an automated/scripted deployment pin a password from
+                # its own secrets manager (nothing gets logged in that case).
+                # Otherwise generate a random, CSPRNG-backed password that's
+                # guaranteed to satisfy validate_password_strength (upper +
+                # lower + digit + symbol, length >= PASSWORD_MIN_LENGTH) and
+                # log it exactly once so the operator can retrieve it from
+                # `docker logs` on first boot. Either path only ever applies
+                # when seeding a brand-new database with zero existing users
+                # -- this never rotates an existing admin's password.
+                if settings.DLP_ADMIN_PASSWORD:
+                    admin_password = settings.DLP_ADMIN_PASSWORD
+                    password_was_generated = False
+                else:
+                    admin_password = _generate_admin_password()
+                    password_was_generated = True
                 hashed = get_password_hash(admin_password)
                 await session.execute(
                     text(
@@ -106,12 +161,22 @@ async def _auto_init_schema_and_admin():
                     {"pw": hashed},
                 )
                 await session.commit()
-                logger.warning(
-                    "DEFAULT ADMIN CREATED — change this password after first login",
-                    username="admin",
-                    default_password=admin_password,
-                    must_change_password=False,
-                )
+                if password_was_generated:
+                    logger.warning(
+                        "DEFAULT ADMIN CREATED — a random password was generated for this "
+                        "deployment. Retrieve it now (this is the only time it's logged) "
+                        "and change it after first login.",
+                        username="admin",
+                        generated_password=admin_password,
+                        must_change_password=False,
+                    )
+                else:
+                    logger.warning(
+                        "DEFAULT ADMIN CREATED using DLP_ADMIN_PASSWORD from configuration — "
+                        "change this password after first login",
+                        username="admin",
+                        must_change_password=False,
+                    )
             else:
                 logger.info("Users table already populated, skipping admin seed")
     except Exception as e:

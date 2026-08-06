@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔐 Random Per-Deployment Admin Password (August 6, 2026)
+
+### Summary
+
+Checking CyberSentinel-DLP's changelog for updates worth porting surfaced their v2.1.1 fix — and this repo had the exact same bug: `server/app/main.py` seeded the first admin account with a **fixed** password, `Admin@1234`, written directly in source. Since this repo is source-available, every deployment shipped with a publicly-known admin credential until an operator happened to change it.
+
+### Fix
+
+`_auto_init_schema_and_admin()` now generates a random 20-character password per deployment via `secrets` (CSPRNG) — `_generate_admin_password()` explicitly includes one character from each required class (upper/lower/digit/symbol) before filling the rest and Fisher-Yates shuffling with `secrets.randbelow`, guaranteeing every generated password passes `validate_password_strength` (never relying on chance from a flat random draw). Logged exactly once on first boot:
+
+```bash
+docker logs seceoknight-manager 2>&1 | grep generated_password
+```
+
+A new `DLP_ADMIN_PASSWORD` setting lets an automated/scripted deployment pin the password from its own secrets manager instead — nothing is logged in that case. Either path only applies when seeding a brand-new database with zero existing users; it never rotates an existing admin's password.
+
+### Verification
+
+`python3 -c "import ast; ast.parse(...)"` clean on `main.py` and `config.py`. Standalone 20,000-sample test of the password generator (mirroring `validate_password_strength`'s exact rules outside the app, since the full app isn't importable in this sandbox without live Postgres/Mongo/Redis connections): 20,000/20,000 valid, 20,000/20,000 unique. Not yet tested against a live database seed.
+
+---
+
 ## 🪟 Watchdog Console Flash, Take 4: It Was Never About the Action — S4U Logon Was Failing (August 6, 2026)
 
 ### Summary
