@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Network share (UNC drive) exfiltration monitoring -- new capability (August 6, 2026)
+
+### Summary
+
+User pushed back on the "here are the remaining gaps" answer given after the second deep-dive pass, pointing out CyberSentinel-DLP already has these capabilities and asking why they weren't being ported given full read access to the source. This starts working through that list -- network share monitoring first, since it's a real exfiltration path USB device-control and content DLP entirely missed: copying a file to a mapped network drive (`\\server\share`) instead of a USB stick never touched either control.
+
+### What was added
+
+**Server** (`server/app/api/v1/agents.py`): new `GET /agents/{agent_id}/network-share-policy` endpoint (same auth as the existing USB-allowlist endpoint, `X-Agent-Key` header). Driven by a `Policy` row of `type="network_share_transfer_control"` -- no dedicated table, since (unlike USB device allowlisting) there's no per-share identity to track, just a mode/action/exception config. Two modes: `block_all` (any file copied to any mapped network drive) and `content_aware` (only files the classification engine scores as sensitive, same real-time evaluation path USB transfer uses). Two actions: `audit` (log/event only) and `block` (quarantine + remove from the share). Registered `network_share_transfer_control` / `network_share_transfer` in `server/app/core/domains.py` as `PolicyDomain.THREAT`, same category as USB/print/screen-capture.
+
+**Windows agent** (`agent.cpp`): `FetchNetworkSharePolicy()` polls the new endpoint on the same cadence as the main policy sync (own try/catch, isolated from it, same pattern as `SyncUsbAllowlist()`). `NetworkShareTransferMonitor()` runs as its own worker thread, polling `GetLogicalDrives()`/`GetDriveTypeA()` for `DRIVE_REMOTE` drives every 750ms and diffing against a per-drive known-files set (pre-existing files on a drive are baselined on first sight, not treated as new transfers -- only files that appear *after* the agent starts watching a share are enforced). `ResolveDriveUnc()` calls `WNetGetConnectionA` to resolve a mapped drive letter to its real `\\server\share` UNC path for logging/exceptions/events. `HandleNetworkShareNewFile()` checks exceptions (share prefix, user, source-path prefix, file extension) then dispatches by mode -- `block_all` acts immediately per the configured action, `content_aware` calls the existing `EvaluatePolicyRealtime()` (same classification call USB transfer uses) and dispatches on its verdict. `QuarantineNetworkShareFile()` does copy-then-delete (not `fs::rename`), reusing the cross-volume-safe pattern already fixed for USB quarantine (`fs::rename` maps to `MoveFileExW` without `MOVEFILE_COPY_ALLOWED` on this MinGW build and fails across volumes/shares).
+
+### 🔧 Build-system fix: MinGW/g++ needs an explicit `-lmpr`, not just a header include
+
+Confirmed this project's Windows agent is compiled by `.github/workflows/build-windows-agent.yml` via **MinGW-w64 g++**, not MSVC -- every `#pragma comment(lib, ...)` already in `agent.cpp` is a **silent no-op** under this toolchain; the real link dependencies are the explicit `-l<name>` flags baked into the workflow's `g++` invocation. `WNetGetConnectionA` lives in `Mpr.dll`/`mpr.lib`, so it needed a real linker-flag addition, not a source-level `#pragma comment`. Added `-lmpr` to `build-windows-agent.yml`'s link line and to the top-of-file MinGW build-instruction comment, and added `mpr` to the "expected DLL" allowlist in the post-build `objdump` sanity check so it doesn't get flagged as an unexpected dependency. This is now a standing rule for any future WinAPI-dependent agent feature: check `build-windows-agent.yml`'s flag list, don't assume a `#pragma comment` is doing anything.
+
+### Scope note
+
+No dashboard UI was built for authoring this policy in this pass -- it's configurable today via `POST /api/v1/policies` with `type: "network_share_transfer_control"` and a `config` of `{mode, action, exception_shares, exception_users, exception_paths, exception_file_types}`. Building/testing new React form UI wasn't attempted here (no browser or dev server in this sandbox); a `PolicyCreatorModal.tsx` form is a reasonable, low-risk follow-up.
+
+### Verification
+
+`ast.parse` clean on `agents.py` and `domains.py`. `yaml.safe_load` clean on `build-windows-agent.yml`. Brace-balance check on `agent.cpp` (paren=-2, brace=-5, bracket=-1) matches the established baseline exactly -- no new imbalance introduced by any of these edits. **Not live-tested**: no MinGW compiler or live server available in this sandbox, so the actual build and a real mapped-drive transfer haven't been exercised end-to-end. Worth a real CI build (watch for the new `-lmpr` link) and a manual test against a real `net use`-mapped drive before relying on this in production.
+
+---
+
 ## 🛡️ Second Deep-Dive vs CyberSentinel-DLP: agents/, server/, manage-windows-agent.ps1 (August 6, 2026)
 
 ### Summary

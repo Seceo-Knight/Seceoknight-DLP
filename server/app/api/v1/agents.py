@@ -1109,6 +1109,69 @@ async def get_usb_allowlist(
     }
 
 
+@router.get("/{agent_id}/network-share-policy")
+async def get_network_share_policy(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(verify_agent_key),
+):
+    """
+    The network-share (mapped/UNC drive) transfer-control policy the agent
+    enforces locally. Ported from CyberSentinel-DLP -- covers a real
+    exfiltration path USB device-control and content DLP entirely missed:
+    copying a file to a mapped network drive instead of a USB stick.
+
+    Driven by a Policy row with type="network_share_transfer_control" (same
+    pattern as usb_device_control above), rather than a dedicated table --
+    there's no separate per-share allowlist identity to track the way there
+    is for USB device serials, just a mode/action/exceptions config.
+
+    mode: "block_all" (any file copied to any mapped network drive) |
+    "content_aware" (only files the classification engine scores as
+    Confidential/Restricted) | "off". action: "audit" (log/event only, never
+    deletes) | "block" (quarantine + remove from the share). Any exception
+    list match always allows regardless of mode.
+
+    The agent polls this on the same cadence as policy sync and caches the
+    result, same reasoning as usb-allowlist above (works offline, no
+    per-file server round trip). Requires ``X-Agent-Key`` header.
+    """
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "network_share_transfer_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+
+    enforced = policy is not None
+    cfg = (policy.config or {}) if enforced else {}
+    mode = str(cfg.get("mode") or "off").lower()
+    if mode not in ("block_all", "content_aware", "off"):
+        mode = "off"
+    action = str(cfg.get("action") or "audit").lower()
+    if action != "block":
+        action = "audit"   # default safe -- never delete without an explicit opt-in
+
+    def _str_list(key: str):
+        v = cfg.get(key) or []
+        return [str(x) for x in v] if isinstance(v, list) else []
+
+    return {
+        "enforced": enforced,
+        "mode": mode,
+        "action": action,
+        "exception_shares": _str_list("exception_shares"),
+        "exception_users": _str_list("exception_users"),
+        "exception_paths": _str_list("exception_paths"),
+        "exception_file_types": _str_list("exception_file_types"),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 class DeviceAuthorizeRequest(BaseModel):
     """Device identity the agent reports when a USB storage device connects.
     This is a visibility/audit-trail call, logged as an event — the block/

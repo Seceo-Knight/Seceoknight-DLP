@@ -95,13 +95,14 @@ jobs:
             -lfltlib \
             -lcrypt32 \
             -lwtsapi32 \
+            -lmpr \
             -static-libgcc \
             -static-libstdc++ \
             -static -lpthread \
             2>&1
 
           echo "=== Checking runtime dependencies ==="
-          objdump -p seceoknight_agent.exe | grep "DLL Name" | grep -iv "kernel32\|user32\|advapi32\|ole32\|oleaut32\|winhttp\|ws2_32\|setupapi\|cfgmgr32\|shell32\|uuid\|comdlg32\|gdi32\|winspool\|wbemuuid\|ntdll\|msvcrt" || echo "No unexpected DLL dependencies"
+          objdump -p seceoknight_agent.exe | grep "DLL Name" | grep -iv "kernel32\|user32\|advapi32\|ole32\|oleaut32\|winhttp\|ws2_32\|setupapi\|cfgmgr32\|shell32\|uuid\|comdlg32\|gdi32\|winspool\|wbemuuid\|ntdll\|msvcrt\|mpr" || echo "No unexpected DLL dependencies"
           echo "Exit code: $?"
           ls -lh seceoknight_agent.exe
 

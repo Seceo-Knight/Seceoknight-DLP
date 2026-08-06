@@ -39,6 +39,10 @@ POLICY_TYPE_DOMAIN = {
     "screen_capture_monitoring": PolicyDomain.THREAT,
     "print": PolicyDomain.THREAT,
     "print_monitoring": PolicyDomain.THREAT,
+    # Network share (mapped/UNC drive) transfer control -- covers a real
+    # exfiltration path distinct from USB (copy to \\server\share instead of
+    # a USB stick). Ported from CyberSentinel-DLP.
+    "network_share_transfer_control": PolicyDomain.THREAT,
     # Data Protection — content handling
     "clipboard_monitoring": PolicyDomain.DATA_PROTECTION,
     "clipboard": PolicyDomain.DATA_PROTECTION,
@@ -74,6 +78,7 @@ EVENT_TYPE_DOMAIN = {
     # NoteFileChangeForRansomware()/ReportCanaryTripped() in agent.cpp.
     # Detection/alert only, not prevention (no agent-side kill capability).
     "ransomware": PolicyDomain.THREAT,
+    "network_share_transfer": PolicyDomain.THREAT,
     "screen_capture": PolicyDomain.THREAT,
     "print_attempt": PolicyDomain.THREAT,
     "print": PolicyDomain.THREAT,
