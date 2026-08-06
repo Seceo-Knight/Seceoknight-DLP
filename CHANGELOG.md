@@ -8,6 +8,22 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🚨 Critical Fix: Windows Agent Failed OPEN on Every DLP Server Error (August 6, 2026)
+
+### Summary
+
+A parity scan against CyberSentinel-DLP's changelog turned up their `block_on_dlp_error` fix and prompted checking whether SeceoKnight had the same gap. It did — worse, in every error path, not just one: `EvaluatePolicyRealtime()` (the function real-time USB file-transfer content classification runs through) reported `evaluationSucceeded=true, action=allow` on a file over 10MB, a base64 encoding failure, any non-200 response from the classification API, and any thrown exception. In plain terms: **if the DLP server was unreachable, slow, or returned an error, USB content inspection silently let the file through** — stopping the server (intentionally or via an outage) was a full, live bypass of content-aware blocking with no indication anything had failed to enforce.
+
+### Fix (`agents/endpoint/windows/agent.cpp`)
+
+Added `ClassificationConfig::blockOnDlpError` (default `true`, overridable via `SECEOKNIGHT_BLOCK_ON_DLP_ERROR=0`/`false` for an operator who explicitly wants the old behavior, e.g. during a planned outage). All four fail-open sites in `EvaluatePolicyRealtime()` now set `result.evaluationSucceeded = !config.GetClassification().blockOnDlpError` instead of unconditionally `true`. This isn't a new code path — both call sites (`CheckUSBDriveForMonitoredFiles` and the classification-based USB transfer handler) already had a correct `!evaluationSucceeded` fallback branch that defers to the policy's own configured action (block/quarantine/alert); the bug was that the error paths were deliberately routing around that safer fallback and forcing `action=allow` instead. Flipping the flag routes errors through the fallback that was already there and already correct, rather than introducing new blocking logic.
+
+### Verification
+
+Brace-balance check (same script used throughout this project) against a fresh clone of the pre-change file confirms identical depth (paren=-2, brace=-5, bracket=-1). No C++ compiler in this sandbox. **Not yet live-tested** — worth confirming by pointing the agent at a deliberately-unreachable server URL and verifying a policy configured to block still blocks (not "allow") for a file that can't be classified.
+
+---
+
 ## 🔐 Random Per-Deployment Admin Password (August 6, 2026)
 
 ### Summary

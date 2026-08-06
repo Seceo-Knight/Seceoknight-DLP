@@ -1437,6 +1437,19 @@ void Log(const std::string& level, const std::string& message) {
  struct ClassificationConfig {
      bool enabled = true;
      int maxFileSizeMB = 10;
+     // What EvaluatePolicyRealtime() should do when it CAN'T get a real
+     // answer from the server (unreachable, non-200, timeout, oversized
+     // file, encoding failure, any exception) -- true (default) fails
+     // CLOSED: the caller falls back to this policy's own configured
+     // action (block/quarantine/alert) instead of silently letting the
+     // file through. Before this existed, every one of those error paths
+     // unconditionally reported "evaluation succeeded, action=allow" --
+     // meaning stopping or blocking the DLP server silently disabled USB
+     // content inspection entirely, a live enforcement bypass. Settable to
+     // false via SECEOKNIGHT_BLOCK_ON_DLP_ERROR=0/false for an operator
+     // who explicitly wants the old fail-open behavior (e.g. to avoid
+     // disrupting users during a known, planned server outage).
+     bool blockOnDlpError = true;
  };
  
  class AgentConfig {
@@ -1532,6 +1545,11 @@ void Log(const std::string& level, const std::string& message) {
             // Classification config
             classification.enabled = true;
             classification.maxFileSizeMB = 10;
+            {
+                const char* envBlockOnError = std::getenv("SECEOKNIGHT_BLOCK_ON_DLP_ERROR");
+                classification.blockOnDlpError = !envBlockOnError ||
+                    (std::string(envBlockOnError) != "0" && std::string(envBlockOnError) != "false");
+            }
         }
 
         bool LoadFromFile(const std::string& path) {
@@ -1686,6 +1704,11 @@ void Log(const std::string& level, const std::string& message) {
 
                 classification.enabled = true;
                 classification.maxFileSizeMB = 10;
+                {
+                    const char* envBlockOnError = std::getenv("SECEOKNIGHT_BLOCK_ON_DLP_ERROR");
+                    classification.blockOnDlpError = !envBlockOnError ||
+                        (std::string(envBlockOnError) != "0" && std::string(envBlockOnError) != "false");
+                }
 
                 return true;
                 
@@ -8274,8 +8297,12 @@ if (shouldMonitor) {
             if (fileSize > MAX_FILE_SIZE) {
                 logger.Warning("File too large for classification: " + std::to_string(fileSize) + " bytes");
                 result.reason = "File too large (>10MB)";
-                // For large files, fail-open (allow) but log
-                result.evaluationSucceeded = true;
+                // evaluationSucceeded=false lets the caller fall back to
+                // this policy's own configured action (block/quarantine/
+                // alert) instead of the file automatically being let
+                // through just because it couldn't be inspected. See
+                // ClassificationConfig::blockOnDlpError's comment.
+                result.evaluationSucceeded = !config.GetClassification().blockOnDlpError;
                 return result;
             }
 
@@ -8320,9 +8347,12 @@ if (shouldMonitor) {
 
                 fileContentB64 = Base64Encode(fileContent);
                 if (fileContentB64.empty() && !fileContent.empty()) {
-                    logger.Warning("Base64 encoding failed for: " + filePath + " — falling back to fail-open");
+                    logger.Warning("Base64 encoding failed for: " + filePath +
+                                   " — " + (config.GetClassification().blockOnDlpError
+                                            ? "falling back to this policy's configured action"
+                                            : "falling back to fail-open"));
                     result.reason = "Base64 encoding failed";
-                    result.evaluationSucceeded = true;
+                    result.evaluationSucceeded = !config.GetClassification().blockOnDlpError;
                     return result;
                 }
             }
@@ -8355,8 +8385,13 @@ if (shouldMonitor) {
                 logger.Warning("Classification API returned status " + std::to_string(statusCode));
                 logger.Debug("Response: " + responseBody);
                 result.reason = "API error: " + std::to_string(statusCode);
-                // Fail-open: allow on API error
-                result.evaluationSucceeded = true;
+                // The DLP server being unreachable/erroring used to mean
+                // "evaluationSucceeded=true, action=allow" here -- i.e.
+                // stopping or blocking the server silently disabled USB
+                // content inspection entirely. Now defaults to fail CLOSED
+                // (evaluationSucceeded=false), so the caller falls back to
+                // this policy's own configured action instead.
+                result.evaluationSucceeded = !config.GetClassification().blockOnDlpError;
                 return result;
             }
 
@@ -8435,7 +8470,7 @@ if (shouldMonitor) {
         } catch (const std::exception& e) {
             logger.Error("Error in real-time evaluation: " + std::string(e.what()));
             result.reason = "Evaluation error: " + std::string(e.what());
-            result.evaluationSucceeded = true;  // Fail-open
+            result.evaluationSucceeded = !config.GetClassification().blockOnDlpError;
             return result;
         }
     }
