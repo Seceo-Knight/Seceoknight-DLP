@@ -674,6 +674,67 @@ std::vector<std::string> ExtractFilePathsFromCmdline(const std::string& exeLower
         }
     }
 
+    // --- cloud-storage / secure-copy CLIs --------------------------------
+    //   aws s3 cp <src> s3://...        aws s3 sync <dir> s3://...
+    //   aws s3api put-object --body <file> ...
+    //   rclone copy <src> remote:       s3cmd put <file> s3://...
+    //   azcopy copy <src> https://...   scp/pscp <src> user@host:path
+    // The local source is whatever argv token resolves to an existing local
+    // path. Remote endpoints (s3://, gs://, https://, remote:, user@host:)
+    // never resolve to a local file, so pushIfExists() drops them for free.
+    // Explicit --body / --file / --source flags are honored too. Ported
+    // from CyberSentinel-DLP (task #121) -- closes the biggest gap found in
+    // the final parity audit: none of these CLI exfil paths (SSH secure
+    // copy, every major cloud-CLI upload tool) were previously suspended,
+    // inspected, or blocked at all -- IsMonitoredExe() below didn't even
+    // recognize the process names, so a `aws s3 cp secret.xlsx s3://...`
+    // sailed straight through with zero visibility.
+    if (exeLower == "aws.exe"   || exeLower == "rclone.exe" ||
+        exeLower == "s3cmd.exe" || exeLower == "azcopy.exe" ||
+        exeLower == "scp.exe"   || exeLower == "pscp.exe"   ||
+        exeLower == "winscp.com") {
+        static const char* valFlags[] = {"--body", "--file", "--source", "--src"};
+        for (size_t i = 1; i < tokens.size(); ++i) {
+            std::string t  = StripQuotes(tokens[i]);
+            if (t.empty()) continue;
+            std::string lc = ToLower(t);
+
+            // --body/--file/--source <next>  and  --flag=<value> forms.
+            bool handledFlag = false;
+            for (const char* vf : valFlags) {
+                if (lc == vf && i + 1 < tokens.size()) {
+                    pushIfExists(StripQuotes(tokens[i + 1]));
+                    handledFlag = true;
+                    break;
+                }
+                std::string pre = std::string(vf) + "=";
+                if (lc.rfind(pre, 0) == 0) {
+                    pushIfExists(t.substr(pre.size()));
+                    handledFlag = true;
+                    break;
+                }
+            }
+            if (handledFlag) continue;
+
+            // Skip option flags and obvious remote endpoints.
+            if (t[0] == '-') continue;
+            if (lc.rfind("s3://", 0) == 0 || lc.rfind("gs://", 0) == 0 ||
+                lc.rfind("http://", 0) == 0 || lc.rfind("https://", 0) == 0 ||
+                lc.rfind("azure://", 0) == 0 || lc.rfind("b2://", 0) == 0) {
+                continue;
+            }
+            // scp/pscp remote "user@host:path" -- has both '@' and ':' and is not
+            // a bare "C:\..." drive path. rclone "remote:path" simply fails to
+            // resolve locally, so it needs no special case.
+            if (t.find('@') != std::string::npos &&
+                t.find(':') != std::string::npos) {
+                continue;
+            }
+
+            pushIfExists(t);
+        }
+    }
+
     return results;
 }
 
@@ -728,7 +789,10 @@ bool IsMonitoredExe(const std::string& exeLower) {
         "curl.exe", "wget.exe",
         "powershell.exe", "pwsh.exe", "powershell_ise.exe",
         "python.exe", "python3.exe", "pythonw.exe", "py.exe",
-        "bitsadmin.exe", "certutil.exe"
+        "bitsadmin.exe", "certutil.exe",
+        // Cloud-CLI / SSH secure-copy exfil paths (task #121).
+        "aws.exe", "rclone.exe", "s3cmd.exe", "azcopy.exe",
+        "scp.exe", "pscp.exe", "winscp.com"
     };
     return targets.count(exeLower) > 0;
 }

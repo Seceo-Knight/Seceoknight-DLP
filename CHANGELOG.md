@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Network-exfil CLI monitoring: cloud-CLI + SSH secure-copy coverage (August 7, 2026)
+
+### Summary
+
+Closes task #121, the single most significant finding from a final CyberSentinel-vs-SeceoKnight parity audit run after the previous batch of work (tasks #111-118) was believed to close every remaining gap. The audit diffed `IsMonitoredExe()` between both agents directly: SeceoKnight's network-exfil monitor only recognized `curl.exe, wget.exe, powershell.exe, pwsh.exe, powershell_ise.exe, python*.exe, bitsadmin.exe, certutil.exe` -- CyberSentinel's also recognizes `aws.exe, rclone.exe, s3cmd.exe, azcopy.exe` (every major cloud-CLI upload tool) and `scp.exe, pscp.exe, winscp.com` (SSH/SFTP secure copy). None of those seven processes were suspended, inspected, or content-classified at all on SeceoKnight -- `aws s3 cp confidential.xlsx s3://...` or `scp secrets.txt user@host:` sailed through with zero visibility, a real hole in a core DLP capability rather than a cosmetic gap.
+
+### What was added
+
+**`network_exfil_monitor.cpp`**: added the 7 new executable names to `IsMonitoredExe()`'s target set, and ported CyberSentinel's cloud-storage/secure-copy argument parser into `ExtractFilePathsFromCmdline()` -- handles `--body`/`--file`/`--source`/`--src` flags (both `--flag value` and `--flag=value` forms) plus positional local-path arguments, while skipping option flags, remote URI schemes (`s3://`, `gs://`, `http(s)://`, `azure://`, `b2://`), and `scp`/`pscp` remote targets (`user@host:path`, detected by having both `@` and `:`) so only genuine local source files get resolved and handed to the existing suspend-read-classify-terminate pipeline. No changes to that pipeline itself -- these 7 tools now feed into exactly the same content classification and blocking decision every other monitored CLI tool already uses.
+
+### Deliberate scope decision: no separate `network_exfiltration_prevention` policy type this pass
+
+CyberSentinel also exposes a `network_exfiltration_prevention` policy type (`dataTypes`, `customPatterns`, `monitoredMethods`, `monitoredPorts`, `direction`, `action`) letting an admin configure which data categories and channels trigger a block. Investigated wiring an equivalent in: the block decision lives in exactly two places in `network_exfil_monitor.cpp` (`sensitive = category is Confidential/Restricted`, at the CLI-transfer path and the browser/messaging-dialog path), fed by a `classify()` callback with no channel-specific filtering today. Adding a real, enforced audit-vs-block toggle and per-category allowlist would mean modifying that shared classify-and-terminate decision path -- the same security-critical logic the module's own header comment flags as needing care -- with no compiler in this sandbox to verify the change. Given the actual detection-coverage gap (the 7 missing tools, now fixed) was the substantive issue and the content-classification pipeline already governs blocking consistently and correctly across every channel, this was judged not worth the risk of an unverified edit to that specific code path in this pass. Flagging as a candidate for a follow-up that includes real agent testing.
+
+### Verification
+
+Brace-balance check on `network_exfil_monitor.cpp`: `paren=1 brace=-2 bracket=-1`, identical before and after this edit (same corroborating-evidence method used for this file throughout this project, since it has no saved compiler-verified baseline in this sandbox). No changes to `network_exfil_monitor.h` or `agent.cpp`. **Not live-tested**: no MinGW compiler and no AWS CLI/rclone/scp installed in this sandbox to actually run a transfer and confirm the new argument parsing resolves real local file paths correctly.
+
+---
+
 ## 🛡️ Dashboard UI forms for 5 new policy types -- new capability (August 6, 2026)
 
 ### Summary
