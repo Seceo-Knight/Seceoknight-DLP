@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Printer device control -- new policy type (August 7, 2026)
+
+### Summary
+
+Closes task #122. The final parity audit found that `printer_control` mode/scope enforcement -- both the server endpoint (`GET /agents/{id}/printer-policy`) and the Windows agent's enforcement (`ShouldBlockPrinter()`, wired up in task #114) -- were already fully built and reading a `Policy` row of `type="printer_control"`, but there was no way to actually create that policy row from the dashboard. `Printers.tsx` only exposes an allowlist on/off toggle; the coarser controls (block printing entirely, network-only, local-only) were configurable in the database but not in the UI.
+
+### What was added
+
+**`PrinterControlPolicyForm.tsx`**: new form, `mode` (enforce/audit) and `scope` (block_all/block_network/block_local/allowlist) as radio groups, matching the conventions from task #118's five forms exactly. Explicitly notes it's additive to and independent of `print_content_prevention` (device-level vs. content-level control) and that the allowlist itself is still managed on the Printers page -- this policy only controls whether/how that allowlist (and the coarser scopes) get enforced.
+
+**Wiring**: `printer_control` added to `types/policy.ts`'s `PolicyType`/`PolicyConfig` (config shape matches the server's `agents.py` `printer-policy` endpoint exactly: `{mode, scope}`), a new `PolicyTypeSelector.tsx` tile, `PolicyCreatorModal.tsx` import/default-config-case/JSX-block, and `utils/policyUtils.ts` icon/label/summary/default-config cases -- no `validatePolicy` case needed since both fields already default to a valid combination.
+
+This is dashboard-only: zero agent or server changes, since both already existed and were simply unreachable from the UI.
+
+### Verification
+
+`npx tsc --noEmit -p tsconfig.json`: same 24 pre-existing errors as before this change (confirmed via diff), zero in `PrinterControlPolicyForm.tsx` or any line this change touched. Not runtime-tested -- no dev server run in this sandbox.
+
+---
+
 ## 🛡️ Network-exfil CLI monitoring: cloud-CLI + SSH secure-copy coverage (August 7, 2026)
 
 ### Summary

@@ -20,6 +20,7 @@ export type PolicyType =
   | 'wireless_transfer_control'
   | 'print_content_prevention'
   | 'messaging_app_control'
+  | 'printer_control'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
 export type ClipboardAction = 'alert' | 'log'
@@ -190,6 +191,14 @@ export interface MessagingAppControlConfig {
   }
 }
 
+export type PrinterControlMode = 'enforce' | 'audit'
+export type PrinterControlScope = 'block_all' | 'block_network' | 'block_local' | 'allowlist'
+
+export interface PrinterControlConfig {
+  mode: PrinterControlMode
+  scope: PrinterControlScope
+}
+
 // Classification-aware policy types
 export interface PolicyCondition {
   field: string
@@ -233,6 +242,7 @@ export type PolicyConfig =
   | WirelessTransferControlConfig
   | PrintContentPreventionConfig
   | MessagingAppControlConfig
+  | PrinterControlConfig
 
 export interface Policy {
   id: string

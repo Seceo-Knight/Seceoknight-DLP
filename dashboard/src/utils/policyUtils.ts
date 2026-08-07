@@ -17,7 +17,8 @@ import {
   ApplicationControlConfig,
   WirelessTransferControlConfig,
   PrintContentPreventionConfig,
-  MessagingAppControlConfig
+  MessagingAppControlConfig,
+  PrinterControlConfig
 } from '@/types/policy'
 import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare } from 'lucide-react'
 
@@ -54,6 +55,8 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return Printer
     case 'messaging_app_control':
       return MessageSquare
+    case 'printer_control':
+      return Printer
     default:
       return FileText
   }
@@ -92,6 +95,8 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Print Content Prevention'
     case 'messaging_app_control':
       return 'Messaging App Attachment Control'
+    case 'printer_control':
+      return 'Printer Device Control'
     default:
       return 'Unknown'
   }
@@ -223,6 +228,11 @@ export const formatPolicyConfig = (policy: Policy): string => {
         const c = config as MessagingAppControlConfig
         const appCount = (c.apps || []).length
         return `Action: ${c.action || 'alert'} | Apps: ${appCount > 0 ? appCount : 'default list'}`
+      }
+
+      case 'printer_control': {
+        const c = config as PrinterControlConfig
+        return `Mode: ${c.mode || 'enforce'} | Scope: ${c.scope || 'block_network'}`
       }
 
       default:
@@ -657,6 +667,8 @@ const getDefaultConfig = (type: PolicyType): any => {
         apps: [],
         exceptions: { users: [], file_types: [] }
       }
+    case 'printer_control':
+      return { mode: 'enforce', scope: 'block_network' }
     default:
       return {}
   }

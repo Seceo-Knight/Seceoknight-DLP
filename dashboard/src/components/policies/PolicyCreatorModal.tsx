@@ -17,7 +17,8 @@ import {
   ApplicationControlConfig,
   WirelessTransferControlConfig,
   PrintContentPreventionConfig,
-  MessagingAppControlConfig
+  MessagingAppControlConfig,
+  PrinterControlConfig
 } from '@/types/policy'
 import { validatePolicy } from '@/utils/policyUtils'
 import PolicyTypeSelector from './PolicyTypeSelector'
@@ -35,6 +36,7 @@ import ApplicationControlPolicyForm from './ApplicationControlPolicyForm'
 import WirelessTransferControlPolicyForm from './WirelessTransferControlPolicyForm'
 import PrintContentPreventionPolicyForm from './PrintContentPreventionPolicyForm'
 import MessagingAppControlPolicyForm from './MessagingAppControlPolicyForm'
+import PrinterControlPolicyForm from './PrinterControlPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
 import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react'
@@ -65,6 +67,7 @@ type TraditionalPolicyConfig =
   | WirelessTransferControlConfig
   | PrintContentPreventionConfig
   | MessagingAppControlConfig
+  | PrinterControlConfig
 
 const getDefaultConfig = (type: PolicyType): TraditionalPolicyConfig | {} => {
   switch (type) {
@@ -196,6 +199,12 @@ const getDefaultConfig = (type: PolicyType): TraditionalPolicyConfig | {} => {
         apps: [],
         exceptions: { users: [], file_types: [] }
       } as MessagingAppControlConfig
+
+    case 'printer_control':
+      return {
+        mode: 'enforce',
+        scope: 'block_network'
+      } as PrinterControlConfig
   }
 }
 
@@ -703,6 +712,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'messaging_app_control' && (
                   <MessagingAppControlPolicyForm
                     config={config as MessagingAppControlConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'printer_control' && (
+                  <PrinterControlPolicyForm
+                    config={config as PrinterControlConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

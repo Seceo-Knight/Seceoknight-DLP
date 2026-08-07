@@ -109,6 +109,12 @@ const policyTypes: Array<{
     label: 'Messaging App Attachment Control',
     description: 'Alert or block sensitive attachments picked in Teams/WhatsApp/Slack/etc.',
     icon: MessageSquare
+  },
+  {
+    type: 'printer_control',
+    label: 'Printer Device Control',
+    description: 'Block printing entirely, or restrict to local/network/allowlisted printers',
+    icon: Printer
   }
 ]
 
