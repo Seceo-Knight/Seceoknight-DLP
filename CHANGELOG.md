@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Fix update.sh silently filling the disk with dangling image layers (August 7, 2026)
+
+### Summary
+
+Hit live in production immediately after deploying task #127: `sudo bash update.sh` failed with `dependency failed to start: container seceoknight-mongodb is unhealthy`. `docker logs seceoknight-mongodb` showed WiredTiger hard-crashing (`WT_PANIC`) on `No space left on device`, and `df -h /` confirmed the root filesystem was at 100% (0 bytes free). `docker system df` showed why: **30.54GB of Docker images, 24GB (78%) of it reclaimable** — dangling layers left behind by every previous `docker compose pull` across every past deployment on this server. Every update re-tags `:latest` to a new digest and leaves the old digest on disk, untagged; nothing was ever cleaning those up, so usage only ever grew until it took the database down with it.
+
+This was an infrastructure gap in `update.sh` itself, not a one-off — every server running this script would eventually hit the same wall as more CI builds accumulate.
+
+### Fix (`update.sh`)
+
+Two changes, both using `docker image prune -f` (dangling images only — never touches an image any current container is actually using, so this can't remove real data or an in-use image):
+
+1. **Before pulling** (new step 1.5): checks free space on the filesystem holding `INSTALL_DIR`; if under 5GB, proactively prunes and reports the new free space, so a long-neglected server doesn't run out of room mid-pull the way this one did.
+2. **After a confirmed-healthy update** (new step 6): always prunes the now-superseded image digest(s) from the update that just completed, so usage stays flat across routine updates instead of growing indefinitely.
+
+### Verification
+
+`bash -n update.sh` clean. Not independently live-tested beyond the manual recovery already performed on the affected server (`docker image prune -a -f` reclaimed 24GB, restoring `df -h /` to 22GB free / 40% used, after which `update.sh` completed successfully end-to-end).
+
+### Deployment
+
+`cd /opt/seceoknight && sudo bash update.sh` picks up this fix on its own next run (it re-syncs nothing new here since `update.sh` isn't one of the two files it re-syncs from GitHub — re-download it directly: `curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/update.sh -o update.sh`).
+
+---
+
 ## 🛡️ Fix USB block/quarantine file-lock race + dashboard mislabeling (August 7, 2026)
 
 ### Summary

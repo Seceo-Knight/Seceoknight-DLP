@@ -98,6 +98,27 @@ c_yellow "    diff ${COMPOSE_FILE}.bak.* ${COMPOSE_FILE}"
 c_yellow "    diff nginx/nginx.conf.bak.* nginx/nginx.conf"
 echo
 
+# ─── 1.5 Guard against the disk filling up before we pull more images ──
+# Every update re-tags "latest" to a new image digest, which leaves the
+# PREVIOUS digest dangling (untagged, but still on disk) -- `docker compose
+# pull` alone never cleans these up. Left unattended across enough updates
+# this silently eats the entire disk: hit in production, where dangling
+# image layers alone had grown to 24GB/38GB (63% of the whole root
+# filesystem) with zero warning, until MongoDB's WiredTiger engine got
+# "No space left on device" mid-write and hard-crashed (WT_PANIC), taking
+# the update down with it. Proactively prune here, before pulling anything
+# new, so a long-neglected server doesn't run out of room for this update's
+# own image pull.
+AVAIL_KB=$(df -Pk "${INSTALL_DIR}" | awk 'NR==2 {print $4}')
+AVAIL_GB=$((AVAIL_KB / 1024 / 1024))
+if [ "${AVAIL_GB}" -lt 5 ]; then
+    c_yellow "[!] Only ${AVAIL_GB}GB free on the filesystem holding ${INSTALL_DIR}."
+    say "Pruning unused Docker images to free space before pulling..."
+    docker image prune -f || true
+    NEW_AVAIL_KB=$(df -Pk "${INSTALL_DIR}" | awk 'NR==2 {print $4}')
+    say "Free space now: $((NEW_AVAIL_KB / 1024 / 1024))GB"
+fi
+
 # ─── 2. Pull new images ─────────────────────────────────────────────────
 say "Pulling latest images from ghcr.io/${GITHUB_REPO}"
 docker compose -f "${COMPOSE_FILE}" pull
@@ -145,6 +166,15 @@ if curl -fsSk https://localhost/api/v1/health >/dev/null 2>&1; then
     c_green "  Update complete — API is healthy"
     c_green "================================================================"
     docker compose -f "${COMPOSE_FILE}" ps
+    echo
+    # ─── 6. Routine cleanup ─────────────────────────────────────────────
+    # This update's own containers are confirmed healthy above, so the
+    # image digest(s) they replaced are now safely unused. Prune them
+    # here, every time, so dangling layers never get the chance to build
+    # up to a disk-filling problem again -- rather than relying on someone
+    # noticing and running this by hand after the fact.
+    say "Pruning superseded image layers"
+    docker image prune -f || true
 else
     c_red "[!] API did not come up healthy after the update."
     c_red "Check:"
