@@ -18,6 +18,7 @@ import {
   ClipboardList,
   Usb,
   Printer,
+  Fingerprint,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/hooks/usePermission'
@@ -53,6 +54,10 @@ const navigation: NavItem[] = [
   // who can view policies can reasonably see these too.
   { name: 'USB Devices',     to: '/usb-devices',   icon: Usb,             requires: ['create_policy', 'update_policy'] },
   { name: 'Printers',        to: '/printers',      icon: Printer,         requires: ['create_policy', 'update_policy'] },
+  // Data Matching (EDM + fingerprinting) -- writes are admin-only server-side
+  // (require_role("admin")), reads/test are analyst-level, matching the same
+  // reasoning as USB Devices/Printers above.
+  { name: 'Data Matching',   to: '/data-matching', icon: Fingerprint,     requires: ['create_policy', 'update_policy'] },
   { name: 'Reports',         to: '/reports',       icon: BarChart2,       requires: ['view_events'] },
   { name: 'Threat Intel',    to: '/threat-intel',  icon: Radar,           requires: [], adminOnly: true },
   // /audit-logs/ is also require_role("admin") server-side (audit_logs.py) —

@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Data Matching (EDM + fingerprint) -- dashboard page (August 7, 2026)
+
+### Summary
+
+Closes task #123. The Exact Data Matching + document fingerprinting server API (`server/app/api/v1/data_matching.py`, `data_match_index_service.py`, `data_match_source.py`) was already fully ported in an earlier pass (task #109) and is mounted at `/data-matching` -- but nobody had built a dashboard page for it, so admins could only create a protected-data source or test content against one via raw API calls. The final parity audit caught this as a real, if narrower-than-it-first-looked, gap: the hard part (the matching engine itself) was done; only the management UI was missing.
+
+### What was added
+
+**`lib/data-matching-api.ts`**: new API client (`listSources`, `createEdm`, `createFingerprint`, `updateSource`, `deleteSource`, `testContent`, `fileToBase64`), typed against the exact response shape `DataMatchSource.to_dict()`/`match_content()` already return server-side -- confirmed field-for-field before writing this (`row_count`/`shingle_count`/`columns`/`min_fields`/`min_shingles`/`min_containment`/`classification`/`enabled` on sources; `source_id`/`name`/`type`/`classification`/`matched_rows` or `overlap`+`containment` on match results).
+
+**`pages/DataMatching.tsx`**: new page -- a sources table (name, type badge, indexed-record/shingle counts, match threshold, resulting classification, enabled toggle, delete), a "New source" modal with EDM (CSV upload or paste) and Fingerprint (document upload or paste text) tabs, and a "Test content" modal that dry-runs pasted text against all enabled sources without creating an event. A trust banner states plainly what the backend already guarantees: plaintext is discarded after indexing, only keyed HMAC digests are stored. Added table pagination (`usePagination`/`DataPagination`) matching the established convention from task #80, which CyberSentinel's own version of this page doesn't have.
+
+**Wiring**: new route (`/data-matching`) in `App.tsx`, new sidebar entry (between Printers and Reports, `Fingerprint` icon) in `Sidebar.tsx`, gated the same way as USB Devices/Printers (`create_policy`/`update_policy`) since the server enforces admin-only writes and analyst-level reads on this router too.
+
+Reused SeceoKnight's own existing `cs-`-prefixed design tokens (`cs-panel`, `cs-hair`, `cs-indigo`, `btn`/`input`/`badge`/`table` utility classes) -- confirmed these already exist in SK's dashboard (shared with CyberSentinel's own convention, unlike the raw-Tailwind style used by the newer policy-wizard forms), so this page is a close, low-risk adaptation rather than a rewrite.
+
+### Verification
+
+`npx tsc --noEmit -p tsconfig.json`: same 24 pre-existing errors as before this change (confirmed via diff), zero in `data-matching-api.ts`, `DataMatching.tsx`, `App.tsx`, or `Sidebar.tsx`. Not runtime-tested -- no dev server run in this sandbox to click through creating an EDM source, a fingerprint source, and running a test match.
+
+---
+
 ## 🛡️ Printer device control -- new policy type (August 7, 2026)
 
 ### Summary

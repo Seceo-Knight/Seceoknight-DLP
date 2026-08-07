@@ -19,6 +19,7 @@ import ThreatIntelligence from './pages/ThreatIntelligence'
 import AuditTrail from './pages/AuditTrail'
 import UsbDevices from './pages/UsbDevices'
 import Printers from './pages/Printers'
+import DataMatching from './pages/DataMatching'
 
 function App() {
   const { isAuthenticated } = useAuthStore()
@@ -43,6 +44,7 @@ function App() {
           <Route path="audit-trail" element={<AuditTrail />} />
           <Route path="usb-devices" element={<UsbDevices />} />
           <Route path="printers" element={<Printers />} />
+          <Route path="data-matching" element={<DataMatching />} />
           <Route path="admin/users" element={<UserManagement />} />
           <Route path="settings" element={<Settings />} />
         </Route>
