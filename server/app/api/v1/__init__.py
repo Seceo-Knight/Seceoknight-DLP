@@ -36,6 +36,7 @@ from app.api.v1 import (
     usb_devices,
     printers,
     data_matching,
+    risk_scoring,
 )
 
 api_router = APIRouter()
@@ -82,3 +83,6 @@ api_router.include_router(printers.router, prefix="/printers", tags=["Printer Co
 # edited-copy detection) -- distinct from /fingerprints above, which is
 # whole-file exact-hash matching only. Ported from CyberSentinel-DLP.
 api_router.include_router(data_matching.router, prefix="/data-matching", tags=["Data Matching (EDM + Fingerprint)"])
+# Behavioral risk scoring -- SeceoKnight-original, not in CyberSentinel-DLP.
+# See risk_scoring_service.py's module docstring for the rationale.
+api_router.include_router(risk_scoring.router, prefix="/risk-scoring", tags=["Risk Scoring"])

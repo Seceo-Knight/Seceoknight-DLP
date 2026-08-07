@@ -19,6 +19,7 @@ import {
   Usb,
   Printer,
   Fingerprint,
+  Gauge,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { usePermission } from '@/hooks/usePermission'
@@ -46,6 +47,10 @@ const navigation: NavItem[] = [
   { name: 'Events',          to: '/events',        icon: FileText,        requires: ['view_events'] },
   { name: 'Alerts',          to: '/alerts',        icon: AlertCircle,     requires: ['view_alerts'] },
   { name: 'Incidents',       to: '/incidents',     icon: AlertTriangle,   requires: ['view_alerts'] },
+  // Behavioral risk scoring -- SeceoKnight-original (task #120), not in
+  // CyberSentinel-DLP. Read-level gate matches view_alerts since this is a
+  // triage-priority signal, same audience as Alerts/Incidents.
+  { name: 'Risk Scoring',    to: '/risk-scoring',  icon: Gauge,           requires: ['view_alerts'] },
   { name: 'Log Explorer',    to: '/log-explorer',  icon: Search,          requires: ['view_events'] },
   { name: 'Rules',           to: '/rules',         icon: List,            requires: ['create_policy', 'update_policy'] },
   { name: 'Policies',        to: '/policies',      icon: Shield,          requires: ['create_policy', 'update_policy'] },

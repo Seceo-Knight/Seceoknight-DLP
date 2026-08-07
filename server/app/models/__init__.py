@@ -34,6 +34,7 @@ from app.models.retention_config import RetentionConfig
 from app.models.sanctioned_usb_device import SanctionedUsbDevice
 from app.models.sanctioned_printer import SanctionedPrinter
 from app.models.data_match_source import DataMatchSource
+from app.models.user_risk_score import UserRiskScore
 
 __all__ = [
     "Role",
@@ -74,4 +75,5 @@ __all__ = [
     "SanctionedUsbDevice",
     "SanctionedPrinter",
     "DataMatchSource",
+    "UserRiskScore",
 ]

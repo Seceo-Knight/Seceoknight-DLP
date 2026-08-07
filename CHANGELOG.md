@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Behavioral risk scoring -- new capability, not ported from CyberSentinel (August 7, 2026)
+
+### Summary
+
+Closes task #120. After the final parity audit (task #119) confirmed 100% feature parity with CyberSentinel-DLP, the user asked for SeceoKnight to go beyond parity, specifically prioritizing smarter detection over other directions. Both products currently score *events*, not *people*: every detection (USB copy, clipboard paste, upload, print job) is classified and actioned in isolation, with severity coming from content/context of that one event alone. Neither product has ever looked at a user's pattern of activity over time or across channels. A user who touches USB, email, cloud upload, and printing all in the same afternoon, or who is unusually active at 2am, looks identical in both products' event streams to a user who did any one of those things once. This is a real blind spot in both, not just SeceoKnight -- so it's an area where SeceoKnight can become genuinely more advanced rather than just catching up.
+
+### What was added
+
+**Algorithm (`server/app/services/risk_scoring_service.py`)**: a transparent, statistically-grounded 0-100 per-user score over a rolling window (default 14 days), built from five weighted components -- `volume` (z-score of the user's event count against the population, 15%), `channel_diversity` (how many distinct channels -- USB, clipboard, print, browser upload, email, cloud, etc. -- the user touched, weighted highest at 25% since breadth-across-channels is the strongest behavioral tell), `off_hours` (share of events outside 07:00-19:00 or on weekends, 15%), `block_ratio` (share of events that were actually blocked/quarantined, 25%), and `severity_mix` (share of critical/high-severity events, 20%). Risk level buckets: critical ≥75, high ≥50, medium ≥25, low otherwise. Deliberately built as auditable statistical baselining (z-scores, ratios, weighted sums) rather than a black-box ML model -- there's no labelled training data or way to validate a model's accuracy in this sandbox, and a security product's risk scores need to be explainable to an analyst, not just accurate.
+
+**Data model + migration**: `server/app/models/user_risk_score.py` (new `UserRiskScore` model, one current row per `user_email`, storing the score, level, full component breakdown as JSON, raw counts, and `score_previous`/`trend` for week-over-week movement) and `server/alembic/versions/036_user_risk_scores.py` (new `user_risk_scores` table + two indexes, `down_revision` chained onto `035_data_match_sources`).
+
+**API (`server/app/api/v1/risk_scoring.py`, mounted at `/risk-scoring`)**: `GET /users` (paginated, filterable by minimum level, analyst-role), `GET /users/{user_email}` (full detail + recent events, analyst-role), `POST /recompute` (admin-role, recomputes all users over a configurable window). No scheduler is wired up yet -- `POST /recompute` is the interim manual/external trigger; a cron-style periodic recompute would be a natural follow-up.
+
+**Dashboard (`lib/risk-scoring-api.ts`, `pages/RiskScoring.tsx`)**: new "Risk Scoring" page (new sidebar entry between Incidents and Log Explorer, `view_alerts`-gated to match the Alerts/Incidents audience) -- a ranked, filterable, paginated table of every scored user with a score bar, risk badge, trend arrow, event/block/channel counts, and a Recompute button; clicking a row opens a detail modal showing the full component breakdown (so an analyst can see exactly why a score is what it is) plus that user's recent events. An explainability banner states directly that this is statistical baselining, not a black box.
+
+### Verification
+
+`python3 -c "import ast; ast.parse(...)"`: clean on all 6 new/modified Python files (`user_risk_score.py`, `models/__init__.py`, `036_user_risk_scores.py`, `risk_scoring_service.py`, `risk_scoring.py`, `api/v1/__init__.py`). `npx tsc --noEmit -p tsconfig.json`: same 24 pre-existing errors as before this change (confirmed via diff), zero in `risk-scoring-api.ts`, `RiskScoring.tsx`, or the lines touched in `App.tsx`/`Sidebar.tsx`.
+
+**Not live-tested.** This is a brand-new feature with no runtime testing in this sandbox -- no database to run the migration against, no live event data to run `recompute_all()` over, and no dev server to click through the dashboard page. The SQL query shape, the z-score/ratio math, the upsert-by-`user_email` logic, and the dashboard's rendering of live API responses are all unverified beyond static analysis and type-checking. This should be smoke-tested against a real database with real event data before being relied on in production: run the migration, POST `/risk-scoring/recompute`, and confirm the scores and component breakdowns look sane for a few known users.
+
+---
+
 ## 🛡️ Data Matching (EDM + fingerprint) -- dashboard page (August 7, 2026)
 
 ### Summary
