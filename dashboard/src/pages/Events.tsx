@@ -271,12 +271,15 @@ function EventDetailModal({
             </span>
             <span className={cn(
               'inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium',
+              (event.action_taken === 'block_failed' || event.action_taken === 'quarantine_failed') ? tone('red') :
               event.action_taken === 'blocked' ? tone('red') :
               event.action_taken === 'alerted' ? tone('yellow') :
               (event.action_taken === 'quarantined' || event.quarantined) ? tone('blue') : tone('gray'),
             )}>
               {getActionIcon(event.action_taken || event.action || (event.quarantined ? 'quarantined' : 'logged'))}
-              {event.action_taken || (event.quarantined ? 'quarantined' : event.action) || 'Logged'}
+              {event.action_taken === 'block_failed' ? 'Block Failed — file still present'
+                : event.action_taken === 'quarantine_failed' ? 'Quarantine Failed — file still present'
+                : event.action_taken || (event.quarantined ? 'quarantined' : event.action) || 'Logged'}
             </span>
             {event.quarantined && (
               <span className={cn('inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium uppercase', tone('blue'))}>
@@ -696,6 +699,21 @@ export default function Events() {
     typeof event.action === 'string' &&
     event.action.startsWith(prefix)
 
+  // The endpoint agent reports "block_failed"/"quarantine_failed" when it
+  // decided to block/quarantine a USB transfer but the filesystem operation
+  // itself threw (e.g. Windows Explorer/AV still holding the file handle
+  // right after a copy -- a real, reproducible race, not a rare edge case).
+  // Previously the server's background policy re-evaluation silently
+  // overwrote this back to "blocked" (see events.py `_process_event_background`
+  // fix), so the file stayed on the USB drive while the dashboard showed a
+  // green "blocked" badge. That server bug is fixed, but this check stays
+  // as defense in depth so a failure is NEVER visually indistinguishable
+  // from a success, regardless of what any other layer reports.
+  const usbTransferFailed = (event: Event) =>
+    event.event_subtype === 'usb_file_transfer' &&
+    typeof event.action === 'string' &&
+    event.action.endsWith('_failed')
+
   const handleSearch = () => setActiveQuery(kqlQuery)
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSearch()
@@ -954,7 +972,8 @@ export default function Events() {
                 <div className="flex items-start gap-4">
                   <div className={cn(
                     'p-2 rounded-lg border',
-                    (event.blocked || usbTransferOutcome(event, 'blocked')) ? tone('red')
+                    usbTransferFailed(event) ? tone('red')
+                      : (event.blocked || usbTransferOutcome(event, 'blocked')) ? tone('red')
                       : (event.quarantined || usbTransferOutcome(event, 'quarantined')) ? tone('blue')
                       : event.severity === 'critical' ? tone('red') : event.severity === 'high' ? tone('orange') : tone('blue'),
                   )}>
@@ -982,14 +1001,21 @@ export default function Events() {
                             : event.event_subtype === 'usb_disconnect' ? 'USB Disconnected'
                             : event.event_subtype === 'usb_blocked' ? 'USB Blocked'
                             : event.event_subtype === 'usb_file_transfer'
-                              ? (usbTransferOutcome(event, 'blocked') ? 'USB Transfer Blocked'
+                              ? (event.action === 'block_failed' ? 'USB Transfer Block FAILED'
+                                : event.action === 'quarantine_failed' ? 'USB Transfer Quarantine FAILED'
+                                : usbTransferOutcome(event, 'blocked') ? 'USB Transfer Blocked'
                                 : usbTransferOutcome(event, 'quarantined') ? 'USB Transfer Quarantined'
                                 : 'USB Transfer')
                             : event.event_type)
                           : event.event_type}
                       </Badge>
-                      {(event.blocked || usbTransferOutcome(event, 'blocked')) && <Badge variant="critical">blocked</Badge>}
-                      {!event.blocked && !usbTransferOutcome(event, 'blocked') &&
+                      {usbTransferFailed(event) && (
+                        <Badge variant="critical">
+                          {event.action === 'quarantine_failed' ? 'quarantine failed — file still present' : 'block failed — file still present'}
+                        </Badge>
+                      )}
+                      {!usbTransferFailed(event) && (event.blocked || usbTransferOutcome(event, 'blocked')) && <Badge variant="critical">blocked</Badge>}
+                      {!usbTransferFailed(event) && !event.blocked && !usbTransferOutcome(event, 'blocked') &&
                         (event.quarantined || event.action_taken === 'quarantined' || event.action === 'quarantined' || usbTransferOutcome(event, 'quarantined')) && (
                         <Badge variant="warning">quarantined</Badge>
                       )}

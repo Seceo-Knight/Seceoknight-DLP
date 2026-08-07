@@ -8,6 +8,47 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Fix USB block/quarantine file-lock race + dashboard mislabeling (August 7, 2026)
+
+### Summary
+
+Closes task #127. Found via a real live test: the user set an EDM source to Restricted, copied the matching CSV to a USB drive, and the dashboard showed a green "blocked" badge -- but the file was still physically present on the drive (confirmed by re-inserting it). Two independent bugs were involved, both real, both fixed.
+
+### Bug 1 — Windows file-lock race on block/quarantine (agent-side, root cause)
+
+The agent's log revealed the actual failure: `Failed to block USB transfer: filesystem error: cannot remove: The process cannot access the file because it is being used by another process [G:\User's List.csv]`. This is a genuine Windows race, not an edge case: the USB directory-watcher reacts the instant a new file is detected, but Explorer (or real-time AV scanning) frequently still holds a handle on the just-copied file for a short window afterward. `fs::remove()`/`fs::copy_file()` called immediately in that window throw `ERROR_SHARING_VIOLATION`, and there was no retry logic, so the block/quarantine attempt failed outright every time it raced.
+
+Fix (`agents/endpoint/windows/agent.cpp`): added `RemoveFileWithRetry()` / `CopyFileWithRetry()` helpers (5 attempts, 200ms apart, using the `std::error_code` overloads so failures don't throw mid-retry) and swapped them in for the raw `fs::remove`/`fs::copy_file` calls in `HandleUSBFileTransferBlockNoTimestamp()` and `HandleUSBFileTransferQuarantineNoTimestamp()` (both the COPY and MOVE code paths in each).
+
+### Bug 2 — Dashboard showed "blocked" for an event whose actual outcome was "block_failed" (server-side, the visible symptom)
+
+Even before Bug 1 is fixed, the dashboard should have told the truth about the failure -- instead it actively hid it. Root cause, traced through `server/app/api/v1/events.py`:
+
+1. The agent correctly reports the real outcome via `SendEvent()` with `action: "block_failed"` (or `"quarantine_failed"`) when the filesystem operation throws.
+2. `create_event()` inserts the raw event with `action_taken="block_failed"` and `blocked=False` — correct so far.
+3. A background task (`_process_event_background`) then re-evaluates the event against DB policies for classification/alerting purposes. `ActionExecutor.execute_block()` (`app/actions/action_executor.py`) sets `event["blocked"] = True` *unconditionally* whenever a matched policy's configured action is `"block"` — this is a **declarative** "policy says block this" flag, not a confirmation the endpoint actually deleted anything.
+4. `_process_event_background` then did: `if processed.get("blocked"): update_fields["blocked"] = True; update_fields["action_taken"] = "blocked"` — silently clobbering the agent's correct `"block_failed"` back to `"blocked"`, two lines after it had just been set correctly from the same payload.
+
+Net effect: the server's own "a block policy matched" bookkeeping overwrote the endpoint's ground truth, and the dashboard rendered a misleading green "blocked" badge for a file that never left the USB drive.
+
+Fix (`server/app/api/v1/events.py`, `_process_event_background`): the agent-reported `action` is now checked first. If it ends in `"_failed"` (covers `block_failed` and `quarantine_failed`), that ground truth wins outright — `blocked`/`quarantined` are forced to `False` and `action_taken` is left as the agent's own failure string, never overwritten by the declarative policy-match signal.
+
+Defense in depth on the dashboard (`dashboard/src/pages/Events.tsx`): added a dedicated `usbTransferFailed()` check so a `block_failed`/`quarantine_failed` USB transfer event now renders a distinct red "block failed — file still present" / "quarantine failed — file still present" badge (list view) and "Block Failed — file still present" (detail view), instead of silently falling through to no badge or (pre-fix) the misleading success badge. This is a second layer of protection — even if some other future code path sets `blocked` incorrectly, the dashboard now cross-checks the raw `action` string directly rather than trusting a single boolean field.
+
+### Verification
+
+`bash`/error-code based `fs::` calls verified via brace/paren/bracket balance check against the established compiler-verified baseline (unchanged: paren=-2 brace=-5 bracket=-1). `python3 -c "import ast; ast.parse(...)"` clean on `events.py`. `npx tsc --noEmit` on the dashboard shows the same pre-existing 24 errors as baseline — no new TypeScript errors from the `Events.tsx` changes.
+
+**Not yet live-tested end to end** — the agent.cpp retry fix requires a CI rebuild of the Windows agent .exe and a fresh install before it can be verified against a real USB drive; the server-side fix requires `update.sh` on the server. See deployment note below.
+
+### Deployment
+
+1. **Server side** (fixes the dashboard mislabeling immediately, independent of the agent fix): `cd /opt/seceoknight && sudo bash update.sh` once this CI build is green.
+2. **Windows agent side** (fixes the actual file-lock race): wait for CI to rebuild `SeceoKnightAgent.exe`, then reinstall via `install-agent.ps1` on the endpoint.
+3. **Re-test**: repeat the exact same test — set an EDM source to Restricted, copy the matching file to a USB drive, confirm the file is actually removed from the drive this time (re-insert the drive to double check) and the dashboard shows a genuine "USB Transfer Blocked" / "blocked" badge, not a failure badge.
+
+---
+
 ## 🛡️ Wire Data Matching into live enforcement (August 7, 2026)
 
 ### Summary

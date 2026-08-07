@@ -358,18 +358,49 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
             }
 
             # Merge processed results
+            agent_reported_action: Optional[str] = None
             if processed.get("event"):
                 ev = processed["event"]
                 if ev.get("severity"):
                     update_fields["severity"] = ev["severity"]
                 if ev.get("action"):
+                    agent_reported_action = ev["action"]
                     update_fields["action_taken"] = ev["action"]
 
-            if processed.get("blocked"):
-                update_fields["blocked"] = True
-                update_fields["action_taken"] = "blocked"
-            if processed.get("quarantined"):
-                update_fields["quarantined"] = True
+            # `processed.get("blocked")`/`("quarantined")` come from
+            # ActionExecutor.execute_block()/execute_quarantine() (see
+            # app/actions/action_executor.py), which set them UNCONDITIONALLY
+            # whenever a policy's configured action is "block"/"quarantine" --
+            # that's a declarative "policy says this should be blocked", not
+            # a confirmation that the endpoint actually removed/moved the
+            # file. The agent, by contrast, reports what it actually did via
+            # `action` ("blocked"/"block_failed", "quarantined"/
+            # "quarantine_failed" -- see agent.cpp's
+            # HandleUSBFileTransferBlockNoTimestamp/QuarantineNoTimestamp).
+            #
+            # Without this check, a real endpoint failure (e.g. the Windows
+            # file-lock race: Explorer/AV still holding the file handle right
+            # after a USB copy) got silently overwritten here -- the agent's
+            # correct "block_failed" was clobbered back to "blocked" two
+            # lines below, so the dashboard showed a green "blocked" badge
+            # for a transfer that was NOT actually blocked. The file stayed
+            # on the USB drive while the UI claimed otherwise.
+            #
+            # Fix: when the agent explicitly reported a "*_failed" outcome,
+            # that ground truth wins -- never let the server's declarative
+            # policy decision mark the event blocked/quarantined or stomp
+            # the agent's action_taken.
+            agent_action_failed = bool(agent_reported_action) and str(agent_reported_action).endswith("_failed")
+
+            if agent_action_failed:
+                update_fields["blocked"] = False
+                update_fields["quarantined"] = False
+            else:
+                if processed.get("blocked"):
+                    update_fields["blocked"] = True
+                    update_fields["action_taken"] = "blocked"
+                if processed.get("quarantined"):
+                    update_fields["quarantined"] = True
             if processed.get("classification_metadata"):
                 update_fields["classification_metadata"] = processed["classification_metadata"]
                 cm = processed["classification_metadata"]

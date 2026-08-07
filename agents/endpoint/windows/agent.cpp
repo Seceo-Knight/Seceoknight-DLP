@@ -10638,9 +10638,51 @@ void MonitorUSBTransferDirectories() {
     
     // DO NOT SET TIMESTAMP HERE - already set in CheckUSBDriveForMonitoredFiles
     
-    SendUSBTransferEvent(relativePath, usbFile, monitoredPath, "alerted", 
+    SendUSBTransferEvent(relativePath, usbFile, monitoredPath, "alerted",
                         policy.severity, policy.policyId, policy.name, true);
 }
+
+// Windows Explorer (and some antivirus real-time scanners) briefly hold a
+// file handle open immediately after a copy operation completes -- observed
+// directly in production: a file freshly copied to a USB drive is detected
+// by the directory watcher and a block attempted within ~1ms of the copy
+// finishing, well within the window Explorer can still hold the handle.
+// fs::remove()/fs::copy_file() then throw "The process cannot access the
+// file because it is being used by another process" (ERROR_SHARING_VIOLATION,
+// win32 code 32) even though the file is completely free a couple hundred
+// milliseconds later. Without a retry this is a PERMANENT enforcement
+// failure on every single block/quarantine of a just-copied file, not a
+// rare edge case -- the race is the common case, not the exception, because
+// the whole point of this code path is to react to a copy the instant it's
+// detected. Retrying briefly turns this into a transparent, near-instant
+// success in the overwhelming majority of cases while still surfacing a
+// real error (via the thrown filesystem_error, same as before) if the file
+// is genuinely stuck locked for longer than ~1 second.
+static void RemoveFileWithRetry(const fs::path& path, int maxAttempts = 5, int delayMs = 200) {
+    std::error_code lastError;
+    for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+        fs::remove(path, lastError);
+        if (!lastError) return;
+        if (attempt < maxAttempts) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+        }
+    }
+    throw fs::filesystem_error("cannot remove after " + std::to_string(maxAttempts) + " retries", path, lastError);
+}
+
+static void CopyFileWithRetry(const fs::path& from, const fs::path& to, fs::copy_options options,
+                               int maxAttempts = 5, int delayMs = 200) {
+    std::error_code lastError;
+    for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+        fs::copy_file(from, to, options, lastError);
+        if (!lastError) return;
+        if (attempt < maxAttempts) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+        }
+    }
+    throw fs::filesystem_error("cannot copy after " + std::to_string(maxAttempts) + " retries", from, to, lastError);
+}
+
 void HandleUSBFileTransferBlockNoTimestamp(const std::string& fileName, const std::string& relativePath,
                                 const std::string& usbPath, const std::string& monitoredPath,
                                 const USBFileTransferPolicy& policy,
@@ -10670,7 +10712,7 @@ void HandleUSBFileTransferBlockNoTimestamp(const std::string& fileName, const st
             // File was COPIED
             transferType = "copy";
             logger.Warning("  Transfer Type: COPY");
-            fs::remove(usbFile);
+            RemoveFileWithRetry(usbFile);
             logger.Warning("  ✅ Deleted from USB");
         } else {
             // File was MOVED - restore from USB to monitored directory
@@ -10685,10 +10727,10 @@ void HandleUSBFileTransferBlockNoTimestamp(const std::string& fileName, const st
             }
 
             // Copy from USB back to monitored, then delete from USB
-            fs::copy_file(usbFile, monitoredFile, fs::copy_options::overwrite_existing);
+            CopyFileWithRetry(usbFile, monitoredFile, fs::copy_options::overwrite_existing);
             logger.Warning("  ✅ Restored to monitored directory");
 
-            fs::remove(usbFile);
+            RemoveFileWithRetry(usbFile);
             logger.Warning("  ✅ Deleted from USB");
 
             // Update shadow entry
@@ -10772,13 +10814,13 @@ void HandleUSBFileTransferQuarantineNoTimestamp(const std::string& fileName, con
             // copy_file + remove works reliably regardless of volume, and
             // matches the pattern already used by the BLOCK handler's MOVE
             // case for the same reason.
-            fs::copy_file(monitoredFile, quarantineFile, fs::copy_options::overwrite_existing);
-            fs::remove(monitoredFile);
+            CopyFileWithRetry(monitoredFile, quarantineFile, fs::copy_options::overwrite_existing);
+            RemoveFileWithRetry(monitoredFile);
             logger.Warning("  ✅ Moved to quarantine from monitored dir");
 
             // Delete from USB (no-op if monitoredFile == usbFile, already removed above)
             if (fs::exists(usbFile)) {
-                fs::remove(usbFile);
+                RemoveFileWithRetry(usbFile);
             }
             logger.Warning("  ✅ Deleted from USB");
         } else {
@@ -10788,8 +10830,8 @@ void HandleUSBFileTransferQuarantineNoTimestamp(const std::string& fileName, con
 
             // Move from USB to quarantine (see comment above — copy+remove,
             // not rename, for cross-volume safety)
-            fs::copy_file(usbFile, quarantineFile, fs::copy_options::overwrite_existing);
-            fs::remove(usbFile);
+            CopyFileWithRetry(usbFile, quarantineFile, fs::copy_options::overwrite_existing);
+            RemoveFileWithRetry(usbFile);
             logger.Warning("  ✅ Moved to quarantine from USB");
         }
         
