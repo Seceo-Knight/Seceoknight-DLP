@@ -118,6 +118,17 @@ def verhoeff_check(number_str: str) -> bool:
     return c == 0
 
 
+_CLASSIFICATION_RANK = {"Public": 0, "Internal": 1, "Confidential": 2, "Restricted": 3}
+
+
+def _classification_rank(level: str) -> int:
+    """Severity ordering for classification levels, used to pick the more
+    severe of two independently-derived classifications (e.g. regex-based
+    vs Data Matching) without either one silently overriding a stronger
+    finding from the other."""
+    return _CLASSIFICATION_RANK.get(level, 0)
+
+
 def shannon_entropy(data: str) -> float:
     """Calculate Shannon entropy of a string. Higher = more random/compressed/encrypted."""
     if not data:
@@ -185,6 +196,18 @@ class ClassificationResult:
     # passes actually ran (None otherwise — fully backward compatible).
     ml_analysis: Optional[Dict[str, Any]] = None
     context_analysis: Optional[Dict[str, Any]] = None
+    # Raw Data Matching (EDM/fingerprint, task #123) hits, if any -- each is
+    # {source_id, name, type, classification, ...}, the exact shape returned
+    # by DataMatchIndexService.match_content(). Populated by
+    # _check_data_match() in classify_content() below. Kept separate from
+    # matched_rules (which also gets a summarized entry per hit, for the
+    # dashboard's existing "matched rules" display) so agents.py's
+    # evaluate_policy_realtime can read each hit's own `classification`
+    # field directly and force an action from it, without having to
+    # re-parse matched_rules. See evaluate_policy_realtime's data-matching
+    # section for why this is additive rather than routed through
+    # classification_level + Policy rows like everything else here.
+    data_match_hits: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class ClassificationEngine:
@@ -257,6 +280,30 @@ class ClassificationEngine:
                 },
             )
 
+        # Step 1.5: Data Matching (EDM + document fingerprinting, task #123)
+        # against admin-uploaded real records/documents -- distinct from the
+        # legacy whole-file SHA-256 check above. A source classified
+        # "Restricted" is treated the same way the legacy fingerprint match
+        # is: authoritative, short-circuits here. Confidential/Internal hits
+        # are NOT authoritative -- they're folded into the normal pipeline
+        # below instead, so a single Internal-tier data-match source can't
+        # by itself override a stronger regex-based Restricted finding.
+        dm_rule_results, dm_hits = await self._check_data_match(eval_content)
+        if any(h["classification"] == "Restricted" for h in dm_hits):
+            return ClassificationResult(
+                classification="Restricted",
+                confidence_score=1.0,
+                matched_rules=dm_rule_results,
+                total_matches=len(dm_rule_results),
+                details={
+                    "content_length": len(eval_content),
+                    "rules_evaluated": 0,
+                    "context": ctx,
+                    "method": "data_match",
+                },
+                data_match_hits=dm_hits,
+            )
+
         # Step 2: Entropy analysis
         # Use a sample for performance (first 10K chars)
         entropy = shannon_entropy(eval_content[:10000])
@@ -264,6 +311,23 @@ class ClassificationEngine:
         # Step 3-5: Rule evaluation
         rules = await self._get_cached_rules()
         if not rules:
+            # Don't discard a Confidential/Internal data-match hit found in
+            # Step 1.5 just because no regex rules are configured -- that
+            # would silently drop live data-match enforcement on any
+            # deployment that hasn't set up regex rules yet.
+            if dm_hits:
+                dm_classification = max(
+                    (h["classification"] for h in dm_hits),
+                    key=_classification_rank,
+                )
+                return ClassificationResult(
+                    classification=dm_classification,
+                    confidence_score=1.0,
+                    matched_rules=dm_rule_results,
+                    total_matches=len(dm_rule_results),
+                    details={"reason": "No regex rules available", "method": "data_match"},
+                    data_match_hits=dm_hits,
+                )
             return ClassificationResult(
                 classification="Public",
                 confidence_score=0.0,
@@ -398,6 +462,22 @@ class ClassificationEngine:
         confidence_score = min(1.0, adjusted_weight + entropy_bonus)
         classification = self._determine_classification(confidence_score)
 
+        # Fold in any Confidential/Internal data-match hits from Step 1.5
+        # (Restricted hits already short-circuited above and never reach
+        # here). Take whichever classification is more severe rather than
+        # letting either source silently override a stronger finding from
+        # the other -- a regex-detected Restricted-confidence match must
+        # not get downgraded by a merely-Internal data-match hit, and vice
+        # versa.
+        if dm_hits:
+            matched_rules = matched_rules + dm_rule_results
+            total_matches += len(dm_rule_results)
+            dm_classification = max(
+                (h["classification"] for h in dm_hits), key=_classification_rank
+            )
+            if _classification_rank(dm_classification) > _classification_rank(classification):
+                classification = dm_classification
+
         return ClassificationResult(
             classification=classification,
             confidence_score=round(confidence_score, 4),
@@ -417,6 +497,7 @@ class ClassificationEngine:
             label_confidence={k: round(v, 4) for k, v in label_confidence.items()},
             ml_analysis=ml_result,
             context_analysis=context_result,
+            data_match_hits=dm_hits,
         )
 
     # ── ML classification + context (false-positive) analysis ──────────────
@@ -740,6 +821,54 @@ class ClassificationEngine:
                 }
             return rule_result
         return None
+
+    async def _check_data_match(
+        self, content: str
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Check content against every enabled Data Matching source (EDM +
+        fingerprint, task #123/#126). Reuses the exact same
+        DataMatchIndexService.match_content() the dashboard's "Test content"
+        sandbox already calls, so live enforcement and the test tool always
+        agree on whether a given piece of text matches.
+
+        Returns (rule_results, raw_hits):
+          - rule_results: matched_rules-shaped dicts, for the existing
+            dashboard "matched rules" / event detail display.
+          - raw_hits: the unmodified match_content() dicts (still carry each
+            source's own `classification` field), for
+            evaluate_policy_realtime to force an action from directly.
+
+        Never raises -- a broken data-match source must not take down
+        classification for everything else (same posture as the try/except
+        around _check_fingerprint's call site).
+        """
+        from app.services.data_match_index_service import DataMatchIndexService
+
+        try:
+            hits = await DataMatchIndexService(self.session).match_content(content)
+        except Exception as e:
+            logger.warning("Data-match check failed", error=str(e))
+            return [], []
+
+        rule_results: List[Dict[str, Any]] = []
+        for hit in hits:
+            if hit.get("type") == "edm":
+                detail = f"{hit.get('matched_rows', 0)} record(s)"
+            else:
+                detail = f"overlap {hit.get('overlap', 0)}, containment {round((hit.get('containment') or 0) * 100)}%"
+            rule_results.append({
+                "rule_id": hit["source_id"],
+                "rule_name": f"Data Match: {hit['name']} ({detail})",
+                "rule_type": "data_match",
+                "match_count": hit.get("matched_rows", 1) if hit.get("type") == "edm" else 1,
+                "weight": 1.0,
+                "priority": 0,
+                "classification_labels": [],
+                "severity": "critical" if hit["classification"] == "Restricted" else "high",
+                "category": "Data Matching (EDM/Fingerprint)",
+                "label": None,
+            })
+        return rule_results, hits
 
     def _has_nearby_keyword(
         self, content: str, matched_values: List[str], keywords: frozenset, window: int = 40

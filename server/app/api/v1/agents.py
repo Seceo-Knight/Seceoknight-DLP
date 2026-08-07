@@ -1789,6 +1789,38 @@ async def evaluate_policy_realtime(
                         if alert_severity is None or _severity_rank(action_severity) > _severity_rank(alert_severity):
                             alert_severity = action_severity
 
+        # 4b. Data Matching (EDM/fingerprint, task #123/#126) — force an
+        # action directly from each matched source's own `classification`
+        # field (Restricted/Confidential/Internal, chosen by the admin per
+        # source when they uploaded it), independent of whatever Policy
+        # rows exist. This is deliberately NOT routed through the same
+        # classification_level -> Policy matching used above: the default
+        # seeded policies (data/default_policies.json) only cover USB and
+        # only exist for regex/ML classification, and their
+        # Confidential->block mapping there is intentionally stricter than
+        # what an admin configuring a Data Matching source separately asks
+        # for. Doing it this way means data-matching enforcement works
+        # identically across every channel that calls this endpoint (USB,
+        # clipboard, browser upload, email, print) with zero policy setup
+        # required, and never touches how regex/ML-only detections are
+        # enforced. Purely additive — only ever turns should_block/
+        # should_alert further ON, never off.
+        data_match_sources_triggered = []
+        for hit in classification_result.data_match_hits:
+            data_match_sources_triggered.append({
+                "source_id": hit["source_id"],
+                "name": hit["name"],
+                "type": hit["type"],
+                "classification": hit["classification"],
+            })
+            if hit["classification"] == "Restricted":
+                should_block = True
+            else:  # Confidential or Internal
+                should_alert = True
+                hit_severity = "critical" if hit["classification"] == "Confidential" else "medium"
+                if alert_severity is None or _severity_rank(hit_severity) > _severity_rank(alert_severity):
+                    alert_severity = hit_severity
+
         # 5. Build response
         # Precedence: block > quarantine > alert > allow (matches the same
         # precedence used elsewhere for policy enforcement, e.g.
@@ -1822,6 +1854,7 @@ async def evaluate_policy_realtime(
             action=action,
             policies_triggered=len(triggered_policies),
             should_block=should_block,
+            data_match_sources_triggered=data_match_sources_triggered or None,
         )
 
         return PolicyEvaluationResponse(

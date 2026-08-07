@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Wire Data Matching into live enforcement (August 7, 2026)
+
+### Summary
+
+Closes task #126. Data Matching (EDM + document fingerprinting, task #123/#109) previously only worked through its own standalone API and the dashboard's "Test content" sandbox -- an admin could index a real CSV of sensitive records or a protected document, but nothing in actual live traffic (USB transfers, clipboard, browser uploads, email, print jobs) was ever checked against it. The user asked for this wired into real enforcement, with a specific mapping: a source classified Restricted should block the action; Confidential or Internal should alert only, not block.
+
+Research (see `ClassificationEngine.classify_content()`, `server/app/services/classification_engine.py`) confirmed a single shared chokepoint already exists: every one of the 5 requested channels -- USB/clipboard/print/network-share via the Windows agent, browser upload via the extension's native host, and email via `smtp-relay/app/dlp_client.py` -- round-trips content to `POST /agents/{agent_id}/policy/evaluate` (`server/app/api/v1/agents.py`), which calls `ClassificationEngine.classify_content()` then `DatabasePolicyEvaluator.evaluate_event()` to decide the action. One edit at that chokepoint covers all 5 channels rather than touching five separate code paths.
+
+### What was added
+
+**`classification_engine.py`**: new `_check_data_match()` method calls `DataMatchIndexService.match_content()` (the exact same function the dashboard's "Test content" tool already calls, so live enforcement and the test tool can never disagree) and folds results into the classification pipeline as a new Step 1.5, right after the existing (unrelated) whole-file SHA-256 fingerprint check. A Restricted-classified source match is authoritative and short-circuits immediately, exactly like the legacy fingerprint check already does. Confidential/Internal hits are not authoritative -- they're merged into the normal pipeline, and the final classification level is the more severe of the regex-based result and the data-match result (via a new `_classification_rank()` helper), so neither can silently downgrade a stronger finding from the other. New `ClassificationResult.data_match_hits` field carries the raw per-source hits (with each source's own `classification`) through to the caller. Matched sources also get a synthesized entry in `matched_rules` ("Data Match: <name> (...)")  so they show up in the existing Events/Incidents matched-rules display with zero dashboard changes needed.
+
+**`agents.py`** (`evaluate_policy_realtime`): new step reads `classification_result.data_match_hits` directly and forces `should_block`/`should_alert` per the user's exact requested mapping -- Restricted -> block, Confidential/Internal -> alert (severity "critical"/"medium" respectively). This is deliberately **not** routed through the existing `classification_level` -> `Policy` row matching used for everything else in this function: the seeded defaults in `data/default_policies.json` only cover the USB channel and map Confidential to block (stricter than what the user asked for specifically for Data Matching), and no default policies exist at all for clipboard/email/print/browser-upload. Forcing the action directly from each hit's own `classification` field means data-matching enforcement works identically across all 5 channels with zero policy configuration required, and never changes how existing regex/ML-based detections are enforced -- purely additive, only ever turns `should_block`/`should_alert` further on, never off.
+
+### Deliberate scope decision
+
+A separate `/decision/` endpoint (`server/app/api/v1/decision.py`) also calls `classify_content()` but resolves actions through a different engine (`DecisionEngine`, not `DatabasePolicyEvaluator`) that only receives the `classification_level` string, not the full `data_match_hits` list -- so it does not get the same forced block/alert behavior from this change. None of the 5 channels the user asked about were found to call this endpoint (all confirmed routed through `agents.py`'s `policy/evaluate` instead), so it was left untouched rather than expanding an already-safety-critical change further on unconfirmed usage. Flagging as a known follow-up if `/decision/` turns out to be live somewhere.
+
+### Verification
+
+`python3 -c "import ast; ast.parse(...)"`: clean on both modified files (`classification_engine.py`, `agents.py`). **Not live-tested** -- no database or running agent in this sandbox to actually upload a Restricted-classified CSV and confirm a real USB/clipboard/email/print/upload event gets blocked, or that a Confidential one only alerts. Before relying on this in production: create one test source of each classification tier via the dashboard, then trigger a matching transfer on each of the 5 channels and confirm the action (block vs alert) matches expectations, and that the event detail view shows the "Data Match: ..." entry in matched rules.
+
+---
+
 ## 🛡️ New `update.sh` — fix nginx stale-upstream 502 on routine updates (August 7, 2026)
 
 ### Summary
