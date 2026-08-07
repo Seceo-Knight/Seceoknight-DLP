@@ -335,17 +335,42 @@ Remove-Item "C:\ProgramData\SeceoKnight" -Recurse -Force
 
 The CI workflow at `.github/workflows/build-images.yml` rebuilds and
 re-publishes both GHCR images on every push to `main`. To pull the new
-versions onto the running server:
+versions onto the running server, use `update.sh` (installed alongside
+`docker-compose.prod.yml` by `install.sh`, or fetch it fresh — see below):
 
 ```bash
 cd /opt/seceoknight
-sudo docker compose -f docker-compose.prod.yml pull
-sudo docker compose -f docker-compose.prod.yml up -d
-sudo docker compose -f docker-compose.prod.yml ps
+sudo bash update.sh
 ```
 
-`up -d` will recreate only the containers whose images changed. Volumes
-(postgres data, mongo data, opensearch index, etc.) are preserved.
+**Do not just run `docker compose pull && docker compose up -d` by itself.**
+That was the originally-documented procedure here and it caused a real
+production incident: `up -d` only recreates containers whose image or config
+changed, which recreates `manager`/`dashboard` with brand-new internal
+Docker IPs — but nginx's own image rarely changes on a routine update, so it
+keeps running unchanged and silently keeps proxying to the *old*, now-dead
+IPs. Every request then fails with a 502, which in the dashboard surfaced
+as a misleading "Invalid email or password" on login rather than an obvious
+connectivity error. Two additional, separate gaps compound this: `pull`
+only refreshes images, never `docker-compose.prod.yml` or `nginx/nginx.conf`
+themselves (so config-level fixes never reach an existing install that way),
+and neither the old command nor `up -d` runs pending Alembic migrations.
+
+`update.sh` fixes all three: it re-syncs both config files (backing up
+anything already on disk first, in case you hand-edited it), pulls new
+images, force-recreates `manager`, `dashboard`, `celery-worker`,
+`celery-beat`, **and `nginx`** together every time regardless of whether
+nginx's image changed, then runs `alembic upgrade head`. If you don't have
+`update.sh` locally yet:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/update.sh \
+  -o /opt/seceoknight/update.sh
+cd /opt/seceoknight && sudo bash update.sh
+```
+
+Volumes (postgres data, mongo data, opensearch index, etc.) are always
+preserved — only the compose-managed containers get recreated.
 
 ### Server — full restart
 

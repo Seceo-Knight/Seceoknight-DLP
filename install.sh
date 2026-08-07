@@ -87,6 +87,16 @@ say "Downloading nginx/nginx.conf"
 mkdir -p "${INSTALL_DIR}/nginx"
 curl -fsSL "${RAW_BASE}/nginx/nginx.conf" -o "${INSTALL_DIR}/nginx/nginx.conf"
 
+# update.sh is the correct way to roll a running install forward -- unlike a
+# bare `docker compose pull && up -d`, it also recreates nginx (so it can
+# never keep proxying to a stale container IP after manager/dashboard get
+# recreated) and re-syncs this compose file + nginx.conf themselves (which
+# `pull` never touches, since that only refreshes images). Drop it in now so
+# it's already on disk the first time this box needs an update.
+say "Downloading update.sh"
+curl -fsSL "${RAW_BASE}/update.sh" -o "${INSTALL_DIR}/update.sh"
+chmod +x "${INSTALL_DIR}/update.sh"
+
 # ─── 4. Generate .env with secure random secrets ──────────────────────
 gen_secret() {
     # 48 chars of url-safe random
@@ -296,9 +306,15 @@ echo
 c_blue "Useful commands:"
 echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} ps"
 echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} logs -f manager"
-echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} pull && \\"
-echo "    docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} up -d   # rolling update"
 echo "  docker compose -f ${INSTALL_DIR}/${COMPOSE_FILE} down       # stop everything"
+echo
+c_blue "To update to the latest version:"
+echo "  cd ${INSTALL_DIR} && sudo bash update.sh"
+c_yellow "  (NOT a bare 'docker compose pull && up -d' -- that leaves nginx pointed"
+c_yellow "   at the old container IPs after manager/dashboard are recreated, which"
+c_yellow "   surfaces as random-looking 502s or failed logins. update.sh recreates"
+c_yellow "   nginx too, re-syncs config files pull alone never touches, and runs"
+c_yellow "   any new database migrations.)"
 echo
 c_blue "Next: install agents on endpoints (run on Windows boxes):"
 echo "  powershell -ExecutionPolicy Bypass -Command \"irm ${RAW_BASE}/install-agent.ps1 | iex\""

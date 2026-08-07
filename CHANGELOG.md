@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ New `update.sh` — fix nginx stale-upstream 502 on routine updates (August 7, 2026)
+
+### Summary
+
+Found and fixed during a real production incident on an existing install: running the update procedure that was previously documented everywhere in this repo (`docker compose pull && docker compose up -d`) recreated the `manager` and `dashboard` containers with new internal Docker IPs, but left the long-running `nginx` container untouched. nginx resolves those service names to a container IP and, having been running for days without a reload, kept proxying to the *old*, now-dead IPs. Every request 502'd -- and in the dashboard, that surfaced as a confusing "Invalid email or password" on login rather than an obvious connectivity error, since the frontend couldn't distinguish "backend rejected the credentials" from "backend unreachable." The admin password itself was never the problem; nginx was.
+
+Two further gaps compounded this: (1) `docker compose pull` only refreshes container *images* -- it never re-fetches `docker-compose.prod.yml` or `nginx/nginx.conf` from the repo, which `install.sh` only ever downloads once, on first install. `nginx/nginx.conf` already had a dynamic-resolver fix for exactly this class of bug (`resolver 127.0.0.11 valid=10s;` + variable-based `proxy_pass`, added in an earlier pass), but that fix could never reach a server that was installed before it landed -- `pull` alone doesn't sync config files, only images. (2) Neither the old documented command nor a bare `up -d` runs `alembic upgrade head`, so pending migrations also silently never apply on a routine update unless an operator remembers to run it by hand.
+
+### What was added
+
+**`update.sh`** (new, repo root): the correct one-command way to roll an existing install forward. Re-syncs `docker-compose.prod.yml` and `nginx/nginx.conf` from the repo (backing up any existing file first, in case an operator hand-edited it -- diff instructions printed if so), pulls new images, then force-recreates `manager`, `dashboard`, `celery-worker`, `celery-beat`, **and `nginx` together, every time**, regardless of whether nginx's own image changed. Runs `alembic upgrade head` afterward and health-checks the API through nginx before reporting success.
+
+**`install.sh`**: now downloads `update.sh` alongside the compose file and nginx config so it's already on disk the first time a box needs updating. The final "Useful commands" banner no longer prints the bare `pull && up -d` two-liner -- it now points at `update.sh` with an explanation of why the naive version is unsafe.
+
+**`DEPLOYMENT.md`**: the "Day-2 ops → pull a new image and roll forward" section rewritten to lead with `update.sh`, with the full incident explanation inline so a future operator understands *why* the old command is wrong, not just that it's deprecated.
+
+### Verification
+
+`bash -n update.sh` and `bash -n install.sh`: both clean. Not live-tested against a second real update cycle in this sandbox (no running stack here) -- the sequence itself (re-sync configs → pull → force-recreate including nginx → migrate → health-check) is exactly what was run by hand, one command at a time, to actually recover the production box this was found on, so each individual step is field-verified; only the script wrapping them together is new and unexercised end-to-end.
+
+---
+
 ## 🛡️ Behavioral risk scoring -- new capability, not ported from CyberSentinel (August 7, 2026)
 
 ### Summary
