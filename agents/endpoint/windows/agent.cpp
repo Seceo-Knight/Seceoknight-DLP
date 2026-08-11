@@ -5098,7 +5098,23 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
      std::string NewestSpoolFile(const std::string& dir) {
          WIN32_FIND_DATAA fd;
          HANDLE h = FindFirstFileA((dir + "*.SPL").c_str(), &fd);
-         if (h == INVALID_HANDLE_VALUE) return "";
+         if (h == INVALID_HANDLE_VALUE) {
+             // DIAGNOSTIC: distinguish "directory has no matching files right
+             // now" (ERROR_FILE_NOT_FOUND -- benign, can happen between
+             // polls) from "can't even list the directory"
+             // (ERROR_ACCESS_DENIED -- the real, confirmed-live root cause:
+             // this agent process runs unelevated by design, see Step 9c in
+             // install-agent.ps1, and the spool directory's default ACL
+             // doesn't grant regular users read access).
+             DWORD err = GetLastError();
+             logger.Debug("PRINT_SPOOL_DIR: FindFirstFileA(" + dir +
+                 "*.SPL) failed, GetLastError=" + std::to_string(err) +
+                 (err == ERROR_ACCESS_DENIED ?
+                     " (ACCESS DENIED -- run install-agent.ps1's Step 9c, or "
+                     "manually: icacls \"" + dir + "\" /grant \"%USERNAME%:(OI)(CI)RX\")" :
+                     ""));
+             return "";
+         }
          std::string best;
          FILETIME bestT{0, 0};
          do {

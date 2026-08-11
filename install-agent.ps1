@@ -897,6 +897,43 @@ try {
 
 Write-Host ""
 
+# Step 9c: Grant print spool read access -- CONFIRMED LIVE root cause of
+# print content inspection silently never detecting sensitive content: the
+# main agent process deliberately runs at normal (non-elevated) user
+# privilege (see Step 9's principal above -- required for clipboard/keyboard
+# hooks, which silently break if the process is elevated). But reading the
+# actual spooled print job data under
+# %SystemRoot%\System32\spool\PRINTERS\ requires elevated/SYSTEM access by
+# default -- regular users can't read raw .SPL files there even for their
+# own print jobs, since they're created by the SYSTEM-level Print Spooler
+# service with restrictive inherited ACLs. The agent's own diagnostic log
+# confirmed this exactly: every print job, from every app, resolved to "no
+# spool file resolved" and silently fell back to the (uninformative)
+# document name instead of the real content -- not a parsing problem, an
+# access problem.
+#
+# Elevating the whole agent process is not an option (breaks the hooks --
+# same reasoning as the USB block task above). Instead, since this
+# installer itself already runs elevated (#Requires -RunAsAdministrator at
+# the top), grant the logged-in user explicit read+list access to the spool
+# directory here, once, at install time -- with (OI)(CI) inheritance so
+# every NEW spool file created after this point picks up the grant
+# automatically, without needing to re-run this for each future print job.
+Write-ColorOutput "Step 9c: Granting print spool read access..." -Type "Info"
+try {
+    $spoolDir = "$env:SystemRoot\System32\spool\PRINTERS"
+    $icaclsResult = icacls $spoolDir /grant "${env:USERNAME}:(OI)(CI)RX" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-ColorOutput "Granted $env:USERNAME read access to $spoolDir" -Type "Success"
+    } else {
+        Write-ColorOutput "icacls exited with code $LASTEXITCODE -- print content inspection may not be able to read job data. Output: $icaclsResult" -Type "Warning"
+    }
+} catch {
+    Write-ColorOutput "Could not grant print spool read access (non-fatal): $($_.Exception.Message)" -Type "Warning"
+    Write-ColorOutput "Print content inspection may silently fail to read job data as a result -- job detection and printer-control (device) blocking are unaffected." -Type "Warning"
+}
+Write-Host ""
+
 # Step 10: Start the agent
 Write-ColorOutput "Step 10: Starting the agent..." -Type "Info"
 

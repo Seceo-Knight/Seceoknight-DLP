@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Fix print content inspection: agent can't read spool files (August 11, 2026)
+
+### Summary
+
+Root cause found via the diagnostic logging added earlier the same day (entry below). The new `PRINT_SPOOL_PATH` log line spelled it out directly: `job 11 -- no spool file resolved (FP-prefix, plain, and newest-in-dir all missed)`, and `PRINT_SPOOL_TEXT` showed the "extracted" text was just `Local Downlevel Document` -- the docName fallback string itself (`EvaluatePrintContent()`'s `if (text.size() < 20) text = docName;` line), not real content at all. That string is exactly 24 characters, which is also exactly the "24 chars" every single prior test showed regardless of app or document content -- confirming `ReadSpoolText()` was returning empty every time, not reading a wrong file or hitting an opaque driver encoding as previously theorized.
+
+Real root cause: `install-agent.ps1`'s scheduled-task principal deliberately runs the main agent process unelevated (`LogonType Interactive -RunLevel Limited`, at normal user privilege) -- required for clipboard/keyboard hook monitoring, which silently breaks if the process is elevated (documented at that principal's own definition). But `%SystemRoot%\System32\spool\PRINTERS\` -- where the actual spooled print job bytes live -- has a default ACL that does NOT grant regular (non-admin) users read access, even to their own print jobs, since those files are created by the SYSTEM-level Print Spooler service. So every attempt to open a job's spool file failed silently (`GetFileAttributesA`/`FindFirstFileA` return "not found" for access-denied too, not just genuinely-missing files), for every app and every printer, 100% reproducibly -- which is exactly the pattern observed across every test this entire investigation.
+
+### Fix
+
+Elevating the whole agent process was not an option (would break the hooks). Instead, since `install-agent.ps1` already requires and runs as Administrator (`#Requires -RunAsAdministrator`), added **Step 9c**: a one-time `icacls` grant of read+list access (`(OI)(CI)RX`) on the spool directory to the logged-in user, run once at install time in the already-elevated installer process -- not the agent process itself. The `(OI)(CI)` (Object Inherit / Container Inherit) flags mean every spool file created after this point automatically inherits the grant, so this doesn't need to run again per print job. Non-fatal on failure (warns and continues, consistent with the USB-block task's error handling right above it) -- job detection and printer-control (device) blocking don't depend on this and keep working either way.
+
+Also improved `NewestSpoolFile()` in `agent.cpp` to log `GetLastError()` when the directory scan fails, specifically calling out `ERROR_ACCESS_DENIED` with the exact manual `icacls` command to run -- so if the installer's grant is ever missed (pre-existing install not re-run, GPO reset the ACL, etc.), the next log line says exactly what's wrong and how to fix it, instead of another multi-round investigation.
+
+### Verification
+
+Brace/paren/bracket balance check against the established baseline: unchanged (paren=-2 brace=-5 bracket=-1). `install-agent.ps1` change reviewed manually for balanced braces/quotes (no PowerShell interpreter available in this environment) and follows the exact same try/catch + non-fatal-warning pattern as the adjacent USB-block task.
+
+### Deployment
+
+This is an **installer-side** fix -- the ACL grant only happens during install, not from a plain agent binary update. Wait for CI to go green, then on the endpoint: **uninstall and reinstall** (not just re-running the agent exe) so `install-agent.ps1` actually re-runs Step 9c. Re-test print with sensitive content and confirm it's now detected/blocked; the `PRINT_SPOOL_PATH`/`PRINT_SPOOL_TEXT` debug lines will show a real resolved path and real extracted content instead of the "no spool file resolved" / docName-fallback pattern.
+
+---
+
 ## 🔍 Add diagnostic logging for print content extraction gap (August 11, 2026)
 
 ### Summary
