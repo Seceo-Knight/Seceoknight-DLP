@@ -8,7 +8,34 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔍 Add diagnostic logging for print content extraction gap (August 11, 2026)
+
+### Summary
+
+Follow-up to the ZIP/XPS entry directly below -- **that theory has been disproven by live testing.** The ZIP/XPS magic-byte warning added there never fired, not even once, across every subsequent test. More importantly: re-tested printing sensitive "Study Report" content from **Notepad** (a plain-text app that should use the classic EMF/RAW print path, explicitly called out as unaffected in the entry below) to the same physical printer, and it failed *identically* to the Word test -- job detected, docName still "Local Downlevel Document", classification still Public/allow, and critically, **exactly the same 24 characters extracted** as the earlier Word test, despite being a completely different app printing completely different document content.
+
+That last detail is the important one: two different apps printing two different documents cannot legitimately produce the exact same extracted character count if the extraction were reading each job's real content. So this now looks like one of two things, and the evidence so far can't distinguish which:
+
+1. The printer's driver (SHARP AR-6020N) converts every job -- regardless of source app -- to a "downlevel"/RAW printer-ready format (the "Local Downlevel Document" label is itself the tell: that's the generic name Windows' local print processor uses for non-EMF/RAW datatype jobs, not something specific to Word's XPS pipeline as originally assumed) where the actual page content is encoded as opaque PCL/PS binary graphics or raster operators, and the only literal readable ASCII left is constant driver/PJL boilerplate (job name, resolution, paper size headers) -- which would explain why the count never changes.
+2. `ResolveSpoolFilePath()`/`NewestSpoolFile()` in `agent.cpp` is resolving to the same wrong or stale spool file on every job instead of each job's real data.
+
+Both produce an identical "same small number every time" symptom, so guessing further without evidence would just be a third unproven theory. Instead of that, added targeted `logger.Debug()` instrumentation (no behavior change) in `ReadSpoolText()` and `EvaluatePrintContent()` (`agents/endpoint/windows/agent.cpp`) that logs the resolved spool file path + on-disk byte count, and the actual extracted text itself (truncated to 300 chars). The next live print test will show directly which of the two it is: a resolved path that's identical across different jobs points at (2); recognizable driver boilerplate (e.g. "PJL", "SHARP", resolution numbers) in the extracted text points at (1).
+
+### Verification
+
+Brace/paren/bracket balance check against the established baseline: unchanged (paren=-2 brace=-5 bracket=-1) -- pure logging additions, no control-flow changes.
+
+### Deployment
+
+Wait for CI to rebuild `SeceoKnightAgent.exe`, reinstall via `install-agent.ps1`, then print a document with sensitive content again and pull the new `PRINT_SPOOL_PATH` and `PRINT_SPOOL_TEXT` log lines for the job.
+
+---
+
 ## ⚠️ Known limitation: print content inspection can't read XPS-pipeline spool jobs (August 11, 2026)
+
+### CORRECTED (see entry above, same date)
+
+**This entry's root-cause theory has been disproven by live testing** -- the ZIP/XPS magic-byte warning never fired, and a subsequent Notepad test (explicitly called out below as using the "unaffected" classic path) failed identically to the Word test with the exact same 24-character extraction result. The detection code below is harmless and left in place (it would still correctly flag a genuine ZIP/XPS spool file if one is ever hit), but it is **not** the explanation for the print-content-inspection gap. See the entry above for the corrected, still-open investigation.
 
 ### Summary
 

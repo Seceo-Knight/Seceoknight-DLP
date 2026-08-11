@@ -5162,8 +5162,23 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
      // so this avoids a second directory scan when the event callback runs.
      std::string ReadSpoolText(int jobId) {
          std::string path = ResolveSpoolFilePath(jobId);
-         if (path.empty()) return "";
+         // DIAGNOSTIC (temporary): the last several live print tests all
+         // extracted exactly the same character count (24) regardless of
+         // which app printed or what the document content was -- that's
+         // only possible if either (a) the real per-job content is opaque
+         // to ExtractSpoolStrings and all that's left is constant driver
+         // boilerplate, or (b) this is resolving to the same wrong/stale
+         // file every time instead of each job's real spool data. Logging
+         // the resolved path + byte count makes that distinguishable: if
+         // the path is identical across different jobs, that's (b).
+         if (path.empty()) {
+             logger.Debug("PRINT_SPOOL_PATH: job " + std::to_string(jobId) +
+                 " -- no spool file resolved (FP-prefix, plain, and newest-in-dir all missed)");
+             return "";
+         }
          std::string bytes = ReadFileBytesAllForPrint(path);
+         logger.Debug("PRINT_SPOOL_PATH: job " + std::to_string(jobId) + " -> " +
+             path + " (" + std::to_string(bytes.size()) + " bytes on disk)");
          if (bytes.empty()) return "";
          lastSpoolHash.jobId = jobId;
          try { lastSpoolHash.sha256 = CalculateFileHash(path); } catch (...) {}
@@ -5216,6 +5231,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          if (!printContentInspection.load()) return false;
          std::string text = ReadSpoolText(jobId);
          if (text.size() < 20) text = docName;   // fall back to the document name
+
+         // DIAGNOSTIC (temporary, pairs with the PRINT_SPOOL_PATH log in
+         // ReadSpoolText): show the actual bytes that ended up feeding the
+         // classifier. Recognizable driver/PJL boilerplate (e.g. "PJL",
+         // "SHARP", resolution/paper strings) here would confirm the real
+         // page content is opaque to this scanner; garbled/binary-looking
+         // output would instead point at a wrong-file resolution bug.
+         logger.Debug("PRINT_SPOOL_TEXT: job " + std::to_string(jobId) +
+             " extracted=[" + text.substr(0, 300) + "]");
 
          JsonBuilder j;
          j.AddString("file_name", docName);
