@@ -8,6 +8,36 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ⚠️ Known limitation: print content inspection can't read XPS-pipeline spool jobs (August 11, 2026)
+
+### Summary
+
+Found live while re-testing task #130's fix: print-job detection now works correctly (confirmed on the Events page -- the print job shows up, where before it didn't show up at all), but a Word document containing sensitive "Study Report" content, printed to a real physical printer, was still classified Public/low and not blocked -- while the exact same content tested via clipboard correctly showed `critical | blocked | STUDY_REPORT`.
+
+Root cause: the print event's `File` field showed **"Local Downlevel Document"** -- not the real filename. That string is a generic label Windows itself assigns for print jobs that go through its newer XPS-based print pipeline (confirmed: the test printed from Word, a common trigger for this pipeline depending on the target driver). In that pipeline the spool file is a ZIP/OPC container -- the actual page text lives inside DEFLATE-compressed XML (`<Glyphs UnicodeString="...">` runs), not as plain ASCII/UTF-16 text sitting directly in the raw bytes the way the older EMF/RAW/PS/PCL spool formats do. `ExtractSpoolStrings()` (agent.cpp) scans raw bytes for readable text runs -- against a compressed ZIP entry it finds essentially nothing, and even the docName fallback in `EvaluatePrintContent()` is uninformative here since Windows itself reports "Local Downlevel Document" instead of the real filename for these jobs. Net effect: a genuinely sensitive document printed through this pipeline was silently classified as if it had no content at all.
+
+### Why this isn't fixed yet
+
+Properly parsing XPS spool content requires a ZIP/DEFLATE decompressor plus XML attribute extraction inside this agent -- real binary/memory-unsafe parsing territory. That class of code needs a compiler and a test harness to verify safely before it's trustworthy in a production security agent; neither was available in this environment. Rather than hand-write and ship untested binary-parsing code into a live DLP agent, this fix is deliberately scoped to detection-and-disclosure instead of a guess at full support.
+
+### What was actually fixed (`ReadSpoolText()` in `agents/endpoint/windows/agent.cpp`)
+
+Detects the ZIP local-file-header magic bytes (`PK\x03\x04`) at the start of a spool file and logs a clear WARNING explaining exactly what's happening and why, when it's hit. This turns a silent, hard-to-diagnose gap (which took a multi-round live investigation to trace, even with full log access) into something immediately searchable in the agent log the next time it's hit -- for this agent or any other affected endpoint.
+
+### What still works today
+
+Print content inspection is NOT broken in general -- it works correctly for the classic EMF/RAW/PS/PCL spool formats most apps (including plain-text apps like Notepad) still use with most printer drivers. The gap is specific to the newer XPS-based print pipeline that some applications (observed: Word) route through for some driver configurations.
+
+### Verification
+
+Brace/paren/bracket balance check against the established baseline: unchanged (paren=-2 brace=-5 bracket=-1) -- this is a pure detection/logging addition, no control-flow changes to the classification path itself.
+
+### Recommendation for the user
+
+To confirm the rest of the print-content pipeline (detection → server round trip → block decision → cancel) is genuinely working end to end, test with an app that uses the classic print path -- e.g. print a plain .txt file containing the same sensitive content from Notepad to the same printer. That isolates this specific XPS-format gap from the rest of the feature. Full XPS support would need to be built and verified in a proper Windows dev/test environment before shipping -- flagging this as a real, scoped gap for a future session rather than closing task #130 as fully complete.
+
+---
+
 ## 🛡️ Fix Windows print monitor never detecting real print jobs (August 11, 2026)
 
 ### Summary

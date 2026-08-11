@@ -5167,6 +5167,42 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          if (bytes.empty()) return "";
          lastSpoolHash.jobId = jobId;
          try { lastSpoolHash.sha256 = CalculateFileHash(path); } catch (...) {}
+
+         // CONFIRMED LIVE: some applications (observed with Microsoft Word)
+         // print through Windows' XPS-based pipeline rather than the older
+         // EMF/RAW path -- the spool file is then a ZIP/OPC container (XPS
+         // page content lives inside DEFLATE-compressed XML, as <Glyphs
+         // UnicodeString="..."> runs), not a stream with plain ASCII/UTF-16
+         // text runs sitting directly in the raw bytes the way EMF/RAW/PS/
+         // PCL do. ExtractSpoolStrings() below can't see into a compressed
+         // ZIP entry, so it silently returns ~nothing for these jobs --
+         // and worse, jobs.pDocument for this pipeline is often the generic
+         // literal string "Local Downlevel Document", not the real
+         // filename, so even the docName fallback in EvaluatePrintContent()
+         // is uninformative. Net effect without this check: a genuinely
+         // sensitive Word document printed through this pipeline gets
+         // silently classified Public/low with zero visibility that
+         // inspection never actually happened.
+         //
+         // Properly parsing XPS content would mean shipping a ZIP/DEFLATE
+         // decompressor into this agent -- real memory-unsafe binary-parsing
+         // territory that needs a compiler and test harness to verify
+         // safely, neither of which was available while making this fix.
+         // Rather than guess at that blind, this at least makes the gap
+         // LOUD instead of silent: detect the ZIP local-file-header magic
+         // bytes ("PK\x03\x04") and log clearly when hit, so it's
+         // immediately diagnosable (not a multi-round mystery) instead of
+         // looking identical to a genuinely clean, low-risk print job.
+         if (bytes.size() >= 4 && bytes[0] == 'P' && bytes[1] == 'K' &&
+             (unsigned char)bytes[2] == 0x03 && (unsigned char)bytes[3] == 0x04) {
+             logger.Warning("Print job spool file is a ZIP/XPS container (job " +
+                 std::to_string(jobId) + ") -- content text extraction is not "
+                 "implemented for this format, so this job's classification "
+                 "cannot be trusted. Known trigger: printing from Word (and "
+                 "other apps using Windows' XPS print pipeline) to a driver "
+                 "that routes through the XPS-to-downlevel conversion path.");
+         }
+
          return ExtractSpoolStrings(bytes);
      }
 
