@@ -2542,6 +2542,38 @@ static ClassificationResult Classify(const std::string& content,
          return httpClient;
      }
 
+     // Dedicated HttpClient used ONLY by HeartbeatLoop/SendHeartbeat, never
+     // shared with the general-purpose httpClient above.
+     //
+     // CONFIRMED LIVE, in production: the shared_ptr fix above (see the long
+     // comment on httpClientMutex) only solved contention on the OUTER
+     // pointer -- it made swapping the client during reconnect non-blocking.
+     // It did NOT solve the INNER problem: HttpClient::Post/Put/Get/Delete
+     // each take that instance's own private requestMutex for the full
+     // network call (Post/Put/Get can take up to ~45s per
+     // WinHttpSetTimeouts). Every caller of GetHttpClient() gets the SAME
+     // instance, so they all still serialize through that one requestMutex
+     // -- heartbeat included. A burst of ordinary traffic through the
+     // shared client (clipboard policy checks, USB checks, event
+     // submissions -- anything routed through GetHttpClient()) can queue up
+     // and starve the heartbeat PUT behind it for as long as the backlog
+     // takes to drain. Observed directly: heartbeats succeeded every ~30s
+     // from agent startup, then stopped completely for 20+ minutes straight
+     // while other threads (baseline scan, clipboard handling) kept
+     // logging normally the whole time -- the dashboard showed the agent as
+     // Disconnected despite the process being fully alive and otherwise
+     // working. Only a full agent restart cleared it, because nothing in
+     // HeartbeatLoop's own reconnect logic (3-consecutive-failures ->
+     // reinit) can trigger if SendHeartbeat() never gets to run at all.
+     //
+     // Fix: give the heartbeat loop its own HttpClient instance, with its
+     // own independent WinHTTP session/connection and its own private
+     // requestMutex, so a heartbeat PUT can never queue behind unrelated
+     // traffic on the shared client again. Only HeartbeatLoop ever reads or
+     // reassigns this pointer (including its own reconnect-on-failure
+     // logic), so unlike httpClient it needs no mutex of its own.
+     std::shared_ptr<HttpClient> heartbeatHttpClient;
+
      std::atomic<bool> running{false};
      std::atomic<bool> hasFilePolices{false};
      std::atomic<bool> hasClipboardPolicies{false};
@@ -3829,6 +3861,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          : config(configPath) {
 
          httpClient = std::make_shared<HttpClient>(config.serverUrl);
+         // Separate connection dedicated to heartbeats -- see the comment on
+         // the heartbeatHttpClient member for why this must never share the
+         // main httpClient's requestMutex.
+         heartbeatHttpClient = std::make_shared<HttpClient>(config.serverUrl);
 
          if (config.GetQuarantine().enabled) {
              try {
@@ -6106,15 +6142,21 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             // After 3 consecutive failures, re-initialize the HTTP client.
             // This handles stale WinHTTP sessions after network drops, sleep/wake,
             // or IP address changes — all of which invalidate open connections.
+            //
+            // This reinitializes heartbeatHttpClient specifically, NOT the
+            // shared httpClient used by every other caller (browser-dialog
+            // handlers, USB monitor, event submission, etc.) -- swapping
+            // that one out from under unrelated in-flight callers here would
+            // be its own bug. heartbeatHttpClient is exclusively owned by
+            // this thread, so no mutex is needed to reassign it.
             if (consecutiveFailures >= 3) {
-                logger.Warning("3 consecutive heartbeat failures - reinitializing HTTP client");
+                logger.Warning("3 consecutive heartbeat failures - reinitializing heartbeat HTTP client");
                 try {
-                    std::lock_guard<std::mutex> lock(httpClientMutex);
-                    httpClient = std::make_shared<HttpClient>(config.serverUrl);
+                    heartbeatHttpClient = std::make_shared<HttpClient>(config.serverUrl);
                     consecutiveFailures = 0;
-                    logger.Info("HTTP client reinitialized - will retry heartbeat");
+                    logger.Info("Heartbeat HTTP client reinitialized - will retry heartbeat");
                 } catch (...) {
-                    logger.Error("Failed to reinitialize HTTP client - will retry next cycle");
+                    logger.Error("Failed to reinitialize heartbeat HTTP client - will retry next cycle");
                 }
             }
 
@@ -6144,7 +6186,10 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                  json.AddString("policy_version", activePolicyVersion);
              }
 
-             std::pair<int, std::string> hb = GetHttpClient()->Put(
+             // Deliberately NOT GetHttpClient() -- see heartbeatHttpClient's
+             // declaration for why the heartbeat must never share a
+             // requestMutex with the rest of the agent's HTTP traffic.
+             std::pair<int, std::string> hb = heartbeatHttpClient->Put(
                  "/agents/" + config.agentId + "/heartbeat",
                  json.Build()
              );

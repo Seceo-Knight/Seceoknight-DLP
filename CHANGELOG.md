@@ -8,6 +8,33 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Fix Windows agent heartbeat starved by shared HTTP connection (August 11, 2026)
+
+### Summary
+
+Hit live in production right after a routine agent reinstall: the dashboard showed the agent as Disconnected even though the process was fully alive and actively working (baseline scan running, clipboard events being classified and evaluated in real time). Traced via the agent's own log: heartbeats succeeded every ~30s from process startup, then stopped completely and stayed stopped for 20+ minutes straight, while every other thread kept logging normally the entire time. Only a full agent restart cleared it.
+
+Root cause, in `agents/endpoint/windows/agent.cpp`: `HttpClient::Post/Put/Get/Delete` each hold that instance's own private `requestMutex` for the full duration of the network call (up to ~45s worst case per `WinHttpSetTimeouts`). Every caller across the whole agent — heartbeat, clipboard policy checks, USB checks, event submission, browser-dialog forwarding, everything — gets the exact same shared `HttpClient` instance via `GetHttpClient()`, so they all serialize through that one mutex. A prior fix (see the long comment on `httpClientMutex`) made the *pointer itself* swappable without blocking other callers during reconnect, but never addressed this deeper issue: all requests through that one instance still queue behind each other. A burst of ordinary traffic on the shared client — in this case, real clipboard activity during a live troubleshooting session, each paste triggering a synchronous policy-evaluation HTTP call — can starve the heartbeat PUT behind it indefinitely. And because `HeartbeatLoop`'s own reconnect logic (reinitialize the client after 3 consecutive failures) only runs once `SendHeartbeat()` returns, it can never kick in if the call never gets the chance to run in the first place.
+
+### Fix
+
+Gave the heartbeat loop its own dedicated `HttpClient` instance (`heartbeatHttpClient`), with its own independent WinHTTP session, connection, and `requestMutex`, completely decoupled from the shared client used for everything else:
+- Constructed alongside the main `httpClient` at agent startup.
+- `SendHeartbeat()` now calls `heartbeatHttpClient->Put(...)` directly instead of `GetHttpClient()->Put(...)`.
+- The existing "3 consecutive failures → reinitialize" recovery logic now reinitializes `heartbeatHttpClient` specifically, not the shared client (reassigning the shared client out from under unrelated in-flight callers would have been its own bug). Since only `HeartbeatLoop` ever touches `heartbeatHttpClient`, no mutex is needed to reassign it.
+
+A heartbeat PUT can no longer queue behind any other traffic the agent generates, regardless of how busy the rest of the agent is.
+
+### Verification
+
+Brace/paren/bracket balance check (`/tmp/brace_check.py`) against the established compiler-verified baseline: unchanged (paren=-2 brace=-5 bracket=-1). Confirmed via grep that no other call site still references the old shared-client heartbeat path. Not yet independently re-tested against a live sustained clipboard-traffic burst beyond the manual recovery already performed (agent restart resolved the immediate incident; this fix prevents recurrence going forward but hasn't been stress-tested).
+
+### Deployment
+
+Same as any other agent-side fix: wait for CI to rebuild `SeceoKnightAgent.exe`, then reinstall via `install-agent.ps1` on each endpoint.
+
+---
+
 ## 🛡️ Fix update.sh silently filling the disk with dangling image layers (August 7, 2026)
 
 ### Summary
