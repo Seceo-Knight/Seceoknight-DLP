@@ -4393,21 +4393,35 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  // same job -- both use actionTaken=="Block", so the
                  // description/reason need to say which one actually fired.
                  // Ported from CyberSentinel-DLP.
+                 // CONFIRMED LIVE: before this, a print_content_prevention job
+                 // whose real content genuinely couldn't be read (see
+                 // EvaluatePrintContent's comment) fell back to a filename-
+                 // only decision that looked EXACTLY like a verified-clean
+                 // "low" allow -- a real, silent false sense of security for
+                 // whoever reviews these events. contentInspectionStatus ==
+                 // "unavailable" now surfaces that gap explicitly instead.
+                 bool contentUnavailable = (event.contentInspectionStatus == "unavailable");
                  std::string desc;
                  if (event.actionTaken == "Block" && event.blockReason == "printer_control")
                      desc = "PRINT BLOCKED (printer control): " + event.documentName + " -> " + event.printerName;
                  else if (event.actionTaken == "Block")
                      desc = "PRINT JOB BLOCKED: " + event.documentName + " — " + event.category + " data";
+                 else if (contentUnavailable)
+                     desc = "Print job: " + event.documentName + " -> " + event.printerName +
+                            " (content NOT verified -- inspection could not read the job's real "
+                            "data, this decision is based on filename only)";
                  else
                      desc = "Print job: " + event.documentName + " -> " + event.printerName;
                  json.AddString("description", desc);
-                 json.AddString("severity", event.actionTaken == "Block" ? "high" : "low");
+                 json.AddString("severity", event.actionTaken == "Block" ? "high" :
+                                            (contentUnavailable ? "medium" : "low"));
                  json.AddString("action", event.actionTaken == "Block" ? "blocked" : "allowed");
                  json.AddString("classification_level", event.category);
                  json.AddBool("blocked", event.actionTaken == "Block");
                  json.AddString("file_path", event.documentName);
                  json.AddString("printer_name", event.printerName);
                  json.AddString("block_reason", event.blockReason);
+                 json.AddString("content_inspection_status", event.contentInspectionStatus);
                  if (!event.fileHash.empty()) {
                      json.AddString("file_hash", event.fileHash);
                  }
@@ -5239,13 +5253,24 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
 
      // Callback for PrintMonitor: inspect the spooled document via the same
      // real-time /policy/evaluate endpoint the USB and network-share
-     // content-aware paths already use, and return true to block. Only runs
-     // when a print_content_prevention policy is active. Fail-open (allow)
-     // on any error so printing is never bricked by a DLP server outage.
-     // Ported from CyberSentinel-DLP.
-     bool EvaluatePrintContent(const std::string& printerName, int jobId, const std::string& docName) {
-         if (!printContentInspection.load()) return false;
+     // content-aware paths already use, and return the block decision PLUS
+     // an honest status of whether real content was actually read. Only
+     // runs when a print_content_prevention policy is active. Fail-open
+     // (allow) on any error so printing is never bricked by a DLP server
+     // outage -- but "allow" and "we couldn't verify" must never look the
+     // same to an admin; see PrintMonitor::PrintContentResult.
+     // Ported from CyberSentinel-DLP, extended with the inspected/status
+     // distinction after a real production investigation found this
+     // silently returning "allow" on jobs it had never actually been able
+     // to read (confirmed live: a real SHARP AR-6020N MFP where no spool
+     // file was ever observable on disk under this agent's normal,
+     // unelevated, correctly-ACL'd operating conditions -- root cause
+     // undetermined after exhausting every remotely-diagnosable
+     // possibility; see CHANGELOG for the full investigation).
+     PrintMonitor::PrintContentResult EvaluatePrintContent(const std::string& printerName, int jobId, const std::string& docName) {
+         if (!printContentInspection.load()) return {false, "unavailable"};
          std::string text = ReadSpoolText(jobId);
+         bool realContentRead = !text.empty();
          if (text.size() < 20) text = docName;   // fall back to the document name
 
          // DIAGNOSTIC (temporary, pairs with the PRINT_SPOOL_PATH log in
@@ -5263,6 +5288,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          j.AddString("event_type", "print");
          j.AddString("destination_type", "printer");
          j.AddString("destination_path", printerName);
+         // Honest signal to the server (additive field -- safe even before
+         // any server-side code reads it) distinguishing a verified read
+         // from the filename-only fallback above.
+         j.AddBool("content_inspected", realContentRead);
          // Send the spooled document's hash so the server's file-hash denylist
          // rule can match (the print channel sends extracted text, not raw
          // bytes, so the server can't compute this itself).
@@ -5270,12 +5299,14 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              j.AddString("file_hash", lastSpoolHash.sha256);
          }
 
+         std::string inspectionStatus = realContentRead ? "inspected" : "unavailable";
+
          std::pair<int, std::string> resp = GetHttpClient()->Post(
              "/agents/" + config.agentId + "/policy/evaluate", j.Build());
          auto& [status, response] = resp;
          if (status != 200) {
              logger.Warning("Print content evaluate HTTP " + std::to_string(status) + " -- allowing");
-             return false;
+             return {false, "unavailable"};   // couldn't even complete the check
          }
 
          bool block = config.ExtractJsonValue(response, "action") == "block";
@@ -5287,11 +5318,12 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          if (block && cmode == "audit") {
              logger.Info("PRINT_CONTENT_AUDIT: would block " + docName +
                          " -- sensitive content (" + std::to_string(text.size()) + " chars)");
-             return false;   // audit: log, don't cancel
+             return {false, inspectionStatus};   // audit: log, don't cancel
          }
          logger.Info("Print content inspection: " + docName + " -> " +
-                     (block ? "BLOCK" : "allow") + " (" + std::to_string(text.size()) + " chars)");
-         return block;
+                     (block ? "BLOCK" : "allow") + " (" + std::to_string(text.size()) + " chars, " +
+                     inspectionStatus + ")");
+         return {block, inspectionStatus};
      }
 
      // Same directory-resolution rule as Logger (SECEOKNIGHT_LOG_DIR env var,

@@ -8,6 +8,35 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Make print content-inspection failures honest instead of silent allow (August 11, 2026)
+
+### Summary
+
+Follow-up to the ACL fix directly below -- that fix was correct and confirmed working (`icacls` shows the grant in place, `GetLastError` moved from `5` ACCESS_DENIED to `2` FILE_NOT_FOUND), but the underlying mystery turned out to be deeper: for one specific real printer (SHARP AR-6020N) on this test endpoint, **no `.SPL` spool file is ever observable on disk, even for a single moment, during an actual print job** -- confirmed via a live 3-second/60-sample polling loop during active printing, and independently via the agent's own `FindFirstFileA` call (which unlike PowerShell's `Get-ChildItem` doesn't filter hidden/system files, so this isn't a visibility artifact). Every standard explanation was checked and ruled out in turn: "Print directly to the printer" is off (spooling is genuinely enabled), it's not a print-server-redirected queue (direct `Standard TCP/IP Port` to the printer's own IP), the spool directory isn't relocated (`DefaultSpoolDirectory` registry value is empty), it's not a Microsoft IPP Class Driver (genuine OEM "SHARP AR-6020N" driver, `Type: Local`), and it's not a custom vendor print processor (`Win32_Printer.PrintProcessor` is the standard `winprint`). The remaining tool that could settle this decisively -- Process Monitor, watching exactly what `spoolsv.exe` touches on disk in real time -- isn't practical to run across a production fleet, so the root cause of *why* this specific printer/driver/OS combination never produces a spool file remains genuinely open.
+
+Rather than keep guessing at an increasingly deep systems-level mystery, pivoted to fixing the actual security problem this created: the agent was reporting `Print content inspection: ... -> allow (24 chars)` -- language that reads as "we checked, it's clean" -- when what actually happened was `ReadSpoolText()` returned nothing and `EvaluatePrintContent()` silently substituted the document name as a stand-in (`"Local Downlevel Document"` is, not coincidentally, exactly 24 characters). Content inspection failing open and looking *identical* to content inspection succeeding is a real gap for a security product, independent of whether the underlying file-access mystery ever gets solved.
+
+### Fix
+
+1. **`agents/endpoint/windows/print_monitor.h`**: `PrintContentCallback` now returns a `PrintContentResult{bool block, std::string status}` instead of a bare `bool`. `PrintEvent` gained `contentInspectionStatus` (`"not_configured"` | `"inspected"` | `"unavailable"`).
+2. **`agents/endpoint/windows/agent.cpp`**: `EvaluatePrintContent()` tracks whether `ReadSpoolText()` returned real bytes (`realContentRead`) *before* the docName fallback overwrites `text`, and returns `"inspected"` or `"unavailable"` accordingly (also sends `content_inspected` as an honest extra field to the server's `/policy/evaluate` call). The print event JSON now includes `content_inspection_status`, bumps `severity` from `"low"` to `"medium"` when content genuinely couldn't be verified, and appends `"(content NOT verified -- ...)"` to the event description so it's visible directly in the Events page detail view, not just in agent logs.
+3. **`agents/endpoint/windows/print_monitor.cpp`**: logs a `WARNING`-level `PRINT_CONTENT_UNAVAILABLE` line (not just DEBUG) whenever this happens, so it's visible without needing debug logging enabled.
+4. **`server/app/api/v1/events.py`**: found and fixed a second, unrelated bug while wiring this through -- `EventCreate` (the incoming-event Pydantic model) never declared `content_inspection_status`, `block_reason`, or the `printer_name` key the Windows/Linux agents actually send (only a differently-named `printer` field was declared, which nothing sends), so all of these were being **silently stripped by Pydantic before `create_event()` ever saw them** -- the same undeclared-field bug class an earlier comment in this file already flagged for `file_hash`/`username`/`printer`. Declared all three and threaded them into `event_doc`, with `printer_name` and `printer` both merging into the same stored `printer` field for backward compatibility.
+
+### Verification
+
+Brace/paren/bracket balance checks against established baselines: `agent.cpp` unchanged (paren=-2 brace=-5 bracket=-1), `print_monitor.h`/`print_monitor.cpp` both unchanged (0/0/0). `events.py` verified via `python3 -c "import ast; ast.parse(...)"`. Confirmed via `Grep` that `EvaluatePrintContent`'s only caller (the `SetPrintContent` lambda) forwards the new return type automatically with no other call sites needing updates. Confirmed in the dashboard (`Events.tsx`) that `severity === 'medium'` already renders as a distinct (yellow) tone and `event.description` is already displayed in the event detail view, so this is visible end-to-end without further dashboard changes.
+
+### What this does and doesn't fix
+
+This does **not** make print content inspection actually work for the SHARP AR-6020N or any other printer hitting the same not-yet-understood spool-file gap -- that would need either the root cause found (a proper ProcMon trace against a live repro, done deliberately rather than across a fleet) or a fundamentally different interception point (a port monitor or print-processor DLL running inside the spooler process itself, a substantially larger undertaking than anything in this session). What it does fix: an admin looking at the Events page or agent logs can now tell the difference between "this document was inspected and found clean" and "we have no idea what was in this document," instead of both looking identical. Printer-level blocking (`printer_control` policies) and print job detection are both unaffected either way -- those don't depend on reading spool file content.
+
+### Deployment
+
+Both agent-side (Windows) and server-side changes. Wait for CI, redeploy the server via `update.sh`, and reinstall the Windows agent. Re-test print with sensitive content -- if this printer still can't be read, the event should now show medium severity and an explicit "(content NOT verified...)" description instead of a plain low-severity allow.
+
+---
+
 ## 🛡️ Fix print content inspection: agent can't read spool files (August 11, 2026)
 
 ### Summary

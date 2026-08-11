@@ -65,6 +65,26 @@ class EventCreate(BaseModel):
     file_hash: Optional[str] = Field(None, description="SHA-256 hash (hex) of the file/document involved, if computed by the agent")
     username: Optional[str] = Field(None, description="Bare OS username (no @host), alongside user_email")
     printer: Optional[str] = Field(None, description="Printer name (print events)")
+    # CONFIRMED LIVE: the Windows agent (agent.cpp) actually sends the key
+    # "printer_name" for print events, not "printer" -- so `printer` above
+    # has been silently None for every print event this whole model existed,
+    # same class of bug as the file_hash/username/printer fix noted above.
+    # Declared separately (not renaming `printer`) so anything that might
+    # already send the "printer" key server-side keeps working too; both are
+    # merged into the single stored "printer" field in create_event() below.
+    printer_name: Optional[str] = Field(None, description="Printer name, as actually sent by the Windows/Linux agents' print events")
+    # "" | "content" | "printer_control" -- which control fired a block, so
+    # the dashboard can tell a device-control block apart from a content
+    # block on the same print job. Sent by the Windows agent since the
+    # print_monitor.cpp port, but was being silently dropped here (same
+    # undeclared-field bug) until now.
+    block_reason: Optional[str] = Field(None, description="Which control fired a block on a print event: '', 'content', or 'printer_control'")
+    # "not_configured" | "inspected" | "unavailable" -- whether print content
+    # inspection actually read the real spooled document, or silently fell
+    # back to a filename-only decision. Added after a real production
+    # investigation found print events reporting a confident-looking "allow"
+    # on jobs whose content had never actually been read.
+    content_inspection_status: Optional[str] = Field(None, description="Print content inspection status: not_configured, inspected, or unavailable")
 
 
 class DLPEvent(BaseModel):
@@ -252,8 +272,18 @@ async def create_event(
         event_doc["description"] = event.description
     if event.username:
         event_doc["username"] = event.username
-    if event.printer:
+    # printer_name is what the Windows/Linux agents actually send for print
+    # events; printer is kept as a fallback in case anything else sends that
+    # key instead -- both land in the same stored "printer" field so nothing
+    # downstream (dashboard, SIEM export) needs to know about the mismatch.
+    if event.printer_name:
+        event_doc["printer"] = event.printer_name
+    elif event.printer:
         event_doc["printer"] = event.printer
+    if event.block_reason:
+        event_doc["block_reason"] = event.block_reason
+    if event.content_inspection_status:
+        event_doc["content_inspection_status"] = event.content_inspection_status
 
     # ── Step 2: Atomic upsert into MongoDB (fast, <5ms) ────────────────
     result = await events_collection.update_one(

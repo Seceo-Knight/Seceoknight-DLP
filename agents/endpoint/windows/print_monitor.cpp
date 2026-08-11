@@ -212,13 +212,27 @@ void PrintMonitor::ProcessPendingJobs() {
                     // filename/keyword classifier result exactly as before this
                     // change -- purely additive. Ported from CyberSentinel-DLP.
                     bool contentBlocked;
+                    std::string contentStatus = "not_configured";
                     if (m_printContent) {
                         ControlJob(printerName, jobId, JOB_CONTROL_PAUSE);
-                        contentBlocked = m_printContent(printerName, jobId, docName);
+                        PrintContentResult pcr = m_printContent(printerName, jobId, docName);
+                        contentBlocked = pcr.block;
+                        contentStatus = pcr.status;
                         if (!contentBlocked && !deviceBlocked)
                             ControlJob(printerName, jobId, JOB_CONTROL_RESUME);
                     } else {
                         contentBlocked = isSensitive;   // legacy filename fallback
+                    }
+                    // CONFIRMED LIVE: without this, a job whose content
+                    // genuinely couldn't be read (see PrintContentResult's
+                    // comment) looked EXACTLY like a verified-clean allow in
+                    // both the log and the dashboard -- a real, silent false
+                    // sense of security. Make it loud instead.
+                    if (contentStatus == "unavailable" && m_logger) {
+                        m_logger("WARNING", "PRINT_CONTENT_UNAVAILABLE: " + docName +
+                            " on " + printerName + " -- could not read this job's real "
+                            "spooled content; the decision above is based on the "
+                            "filename only and has NOT verified what was actually printed.");
                     }
                     std::string action = (contentBlocked || deviceBlocked) ? "Block" : "Allow";
 
@@ -247,6 +261,7 @@ void PrintMonitor::ProcessPendingJobs() {
                     event.actionTaken = action;
                     event.blockReason = deviceBlocked ? "printer_control"
                                         : (contentBlocked ? "content" : "");
+                    event.contentInspectionStatus = contentStatus;
                     event.pages = pages;
                     event.jobId = jobId;
                     event.fileHash = fileHash;

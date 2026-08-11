@@ -24,6 +24,20 @@ struct PrintEvent {
     int jobId = 0;
     std::string fileHash;           // SHA-256 of the spooled document data file, if hashed
     std::string timestamp;
+    // "not_configured" | "inspected" | "unavailable" -- CONFIRMED LIVE, added
+    // after a real production investigation found the agent was reporting
+    // "allow" on print jobs with zero visibility that content inspection had
+    // silently never actually read the job's data (fell back to the doc
+    // name, which for some printer/driver/spool configurations -- e.g. a
+    // real SHARP AR-6020N MFP where no .SPL spool file was ever observable
+    // on disk despite spooling being enabled -- is the ONLY thing available).
+    // "not_configured": no print_content_prevention policy active right now.
+    // "inspected": real spooled document bytes were read and evaluated.
+    // "unavailable": a content policy IS active, but the real document bytes
+    // could not be read -- category/action below reflect a FILENAME-ONLY
+    // decision, not a verified one. The dashboard/severity should treat this
+    // distinctly from a genuinely-inspected clean result.
+    std::string contentInspectionStatus = "not_configured";
 };
 
 class PrintMonitor {
@@ -43,13 +57,25 @@ public:
     // leaves the content-classification path below untouched. Ported from
     // CyberSentinel-DLP.
     using PrinterControlCallback = std::function<bool(const std::string& printerName)>;
-    // Print CONTENT control: inspect the spooled document and return true to
-    // block. When set, the job is PAUSED before this runs (so it can't print
-    // during the server round-trip) and resumed if allowed. Returns false to
-    // allow. Ported from CyberSentinel-DLP -- when unset, MonitorLoop falls
-    // back to the legacy filename/keyword classifier result exactly as
-    // before, so this is purely additive.
-    using PrintContentCallback = std::function<bool(const std::string& printerName, int jobId,
+    // Print CONTENT control: inspect the spooled document and return the
+    // block decision PLUS whether the content was actually, genuinely read
+    // (not just a filename fallback). The two are deliberately separate: a
+    // "false" block decision must not be silently indistinguishable from
+    // "we don't actually know what this document contains" -- see
+    // PrintEvent::contentInspectionStatus for the full rationale. When set,
+    // the job is PAUSED before this runs (so it can't print during the
+    // server round-trip) and resumed if allowed. Ported from CyberSentinel-
+    // DLP, extended with the inspected/status distinction -- when unset,
+    // MonitorLoop falls back to the legacy filename/keyword classifier
+    // result exactly as before, so this remains purely additive.
+    struct PrintContentResult {
+        bool block = false;
+        // "inspected" | "unavailable" -- callers should never construct this
+        // as "not_configured" (that's only used when the callback itself
+        // isn't set at all, handled entirely in ProcessPendingJobs).
+        std::string status = "unavailable";
+    };
+    using PrintContentCallback = std::function<PrintContentResult(const std::string& printerName, int jobId,
                                                     const std::string& documentName)>;
 
     PrintMonitor(PrintCallback callback, LogCallback logger = nullptr,
