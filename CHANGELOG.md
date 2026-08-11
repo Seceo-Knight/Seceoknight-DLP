@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Fix Windows print monitor never detecting real print jobs (August 11, 2026)
+
+### Summary
+
+Hit live in production while testing print content inspection: with a `print_content_prevention` policy confirmed active on the agent (`content_inspection=true` in the log), printing a document containing sensitive content ("Study Report" data) to a real physical printer went completely undetected -- no event, no alert, nothing blocked, and critically, not even the baseline `PRINT_JOB_DETECTED` log line that should fire for every print job regardless of outcome. Confirmed the print monitor thread itself had started successfully hours earlier (`Print monitor started — monitoring print jobs` in the log) and had been running the whole time, ruling out a startup failure. A virtual/instant printer (which can finish before the monitor's poll catches it) was also ruled out -- this was a real physical printer.
+
+Root cause, in `agents/endpoint/windows/print_monitor.cpp`'s `Start()`: the printer/print-server handle (`hPrinter`) was closed immediately after `FindFirstPrinterChangeNotification()` returned successfully, before the monitor thread ever started waiting on the resulting notification handle. Both API calls genuinely succeeded before that close, so `Start()` correctly logged success -- but per Microsoft's documented usage pattern for this API, the source printer handle must remain open for the entire lifetime of the wait loop, not just long enough to create the notification. Closing it early breaks notification delivery going forward, consistently and silently -- explaining why this reproduced every time, not intermittently.
+
+### Fix
+
+1. **Root cause**: `hPrinter` is now stored as a member (`m_hPrinter`) and kept open until `Stop()`, where it's closed alongside `FindClosePrinterChangeNotification()`, matching Microsoft's documented pattern.
+2. **Defense in depth**: extracted the job-enumeration/classification/enforcement logic into a new `ProcessPendingJobs()` method, and added a fallback poll that runs it unconditionally every ~2 seconds (on every `WaitForSingleObject` timeout in `MonitorLoop`), not just when the notification fires. Windows print-spooler notification delivery has more than one way to silently fail depending on driver/permission/session specifics -- this bug was one of them, and there could be others. The poll means a real job sitting in a queue gets caught regardless of whether the notification ever fires again for some other reason.
+3. To keep the new poll safe for slow physical print jobs (which can legitimately sit in the queue across many consecutive 2-second poll cycles), added `m_processedJobIds` (a per-monitor `std::set<int>`) so a job already classified/enforced isn't reprocessed on every subsequent poll. It's cleared whenever a full pass finds the queue completely empty everywhere -- a safe point to forget old IDs before job-ID recycling could cause a false-positive skip.
+
+### Verification
+
+Brace/paren/bracket balance check against the established baseline: `print_monitor.cpp`/`print_monitor.h` both balance cleanly (0/0/0, consistent with well-formed standalone files); `agent.cpp` (untouched this round) still matches its established baseline exactly. Not yet live-tested against a real print job on this build -- requires the next CI rebuild + agent reinstall to verify end-to-end.
+
+### Deployment
+
+Wait for CI to rebuild `SeceoKnightAgent.exe`, then reinstall via `install-agent.ps1` on the endpoint. Re-test: print a document containing sensitive content (or to a non-sanctioned printer under a `printer_control` allowlist policy) to a real physical printer, and confirm this time it shows up as a blocked/alerted event on the Events page.
+
+---
+
 ## 🛡️ Fix Windows agent heartbeat starved by shared HTTP connection (August 11, 2026)
 
 ### Summary

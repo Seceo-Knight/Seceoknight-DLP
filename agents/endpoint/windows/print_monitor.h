@@ -5,6 +5,7 @@
 #include <functional>
 #include <thread>
 #include <atomic>
+#include <set>
 
 struct PrintEvent {
     std::string eventType = "print_attempt";
@@ -66,6 +67,7 @@ public:
 
 private:
     void MonitorLoop();
+    void ProcessPendingJobs();
     std::string GetTimestamp();
     bool CancelPrintJob(const std::string& printerName, int jobId);
     bool ControlJob(const std::string& printerName, int jobId, unsigned long command);
@@ -79,4 +81,23 @@ private:
     std::thread m_thread;
     std::atomic<bool> m_running{false};
     HANDLE m_changeNotification{INVALID_HANDLE_VALUE};
+    // Job IDs already processed this "generation" (see ProcessPendingJobs'
+    // comment in print_monitor.cpp) -- only touched from the single
+    // MonitorLoop thread, so no lock needed.
+    std::set<int> m_processedJobIds;
+    // The printer/print-server handle used to create m_changeNotification.
+    // CONFIRMED LIVE, in production: Start() used to close this handle
+    // immediately after FindFirstPrinterChangeNotification() succeeded,
+    // before the monitor thread ever waited on the notification. Both
+    // OpenPrinter and FindFirstPrinterChangeNotification genuinely
+    // succeeded before that close, so Start() logged success -- but per
+    // Microsoft's own documented usage pattern, the printer handle must
+    // stay open for the entire lifetime of the wait loop, or notification
+    // delivery silently breaks going forward. Observed exactly that: the
+    // monitor started successfully, but PRINTER_CHANGE_ADD_JOB never fired
+    // even once for a real physical print job printed minutes later, on an
+    // agent that had otherwise been running fine for hours. Now kept open
+    // for the monitor's whole lifetime and closed only in Stop(), alongside
+    // FindClosePrinterChangeNotification.
+    HANDLE m_hPrinter{NULL};
 };
