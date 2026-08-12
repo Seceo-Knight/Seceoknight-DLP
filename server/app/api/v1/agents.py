@@ -1365,32 +1365,55 @@ async def get_printer_policy(
             )).all()
         ]
 
-    content_policy = (await db.execute(
+    # CONFIRMED LIVE BUG (fixed here): two active print_content_prevention
+    # policies existed at the same priority ("Block Sensitive Printing" with
+    # no unknownContentAction key, and "Print Content" with
+    # unknownContentAction="block"). The old code did
+    # .order_by(Policy.priority.desc()).first() -- with a priority tie, SQL
+    # doesn't guarantee which row comes back first, so this silently and
+    # non-deterministically picked one policy's settings over the other's.
+    # The admin configured "block" on the policy they were editing and it
+    # was invisibly overridden by an unrelated leftover policy. Fixed by
+    # fetching every active policy of this type and merging them: the
+    # strictest setting from any policy wins (enforce beats audit, block
+    # beats allow), so multiple admin-authored policies compose safely
+    # instead of one arbitrarily shadowing another.
+    content_policies = (await db.execute(
         _select(Policy).where(
             Policy.type == "print_content_prevention",
             Policy.status == "active",
             Policy.deleted_at.is_(None),
-        ).order_by(Policy.priority.desc())
-    )).scalars().first()
-    content_inspection = content_policy is not None
-    content_mode = str((content_policy.config or {}).get("mode") or "enforce").lower() \
-        if content_inspection else "off"
-    if content_mode not in ("enforce", "audit"):
+        )
+    )).scalars().all()
+    content_inspection = len(content_policies) > 0
+    content_mode = "off"
+    unknown_content_action = "allow"
+    if content_inspection:
+        content_mode = "audit"
+        for _cp in content_policies:
+            _cfg = _cp.config or {}
+            _m = str(_cfg.get("mode") or "enforce").lower()
+            if _m == "enforce":
+                content_mode = "enforce"
+            # "allow" | "block" -- what to do when content inspection is
+            # active but genuinely could not read a job's real spooled data
+            # (as opposed to reading it and finding it clean). Defaults to
+            # "allow" so this is non-breaking for every existing
+            # deployment. CONFIRMED LIVE: a real printer/driver/OS
+            # combination was found where no spool file is ever observable
+            # on disk for ANY print job, meaning "unavailable" isn't a rare
+            # edge case for that endpoint -- it's the permanent state.
+            # Fail-open there means content_inspection provides zero actual
+            # protection while looking configured; this lets an admin
+            # choose fail-closed instead, matching CyberSentinel's own
+            # stated principle for file extraction ("content we could not
+            # fully inspect must never be treated as clean") applied to the
+            # print channel.
+            _uca = str(_cfg.get("unknownContentAction") or "allow").lower()
+            if _uca == "block":
+                unknown_content_action = "block"
+    if content_mode not in ("enforce", "audit", "off"):
         content_mode = "enforce"
-    # "allow" | "block" -- what to do when content inspection is active but
-    # genuinely could not read a job's real spooled data (as opposed to
-    # reading it and finding it clean). Defaults to "allow" so this is
-    # non-breaking for every existing deployment. CONFIRMED LIVE: a real
-    # printer/driver/OS combination was found where no spool file is ever
-    # observable on disk for ANY print job, meaning "unavailable" isn't a
-    # rare edge case for that endpoint -- it's the permanent state. Fail-
-    # open there means content_inspection provides zero actual protection
-    # while looking configured; this lets an admin choose fail-closed
-    # instead, matching CyberSentinel's own stated principle for file
-    # extraction ("content we could not fully inspect must never be
-    # treated as clean") applied to the print channel.
-    unknown_content_action = str((content_policy.config or {}).get("unknownContentAction") or "allow").lower() \
-        if content_inspection else "allow"
     if unknown_content_action not in ("allow", "block"):
         unknown_content_action = "allow"
 
