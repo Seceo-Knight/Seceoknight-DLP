@@ -1412,6 +1412,9 @@ void CALLBACK BrowserWinEventProc(
     // Check if the creating process is a browser
     bool fromBrowser = IsBrowserExe(exe);
     DWORD browserPid = pid;
+    std::string ownerExe;
+    bool haveOwner = false;
+    DWORD ownerPid = 0;
 
     if (!fromBrowser) {
         // Chrome's file dialog is hosted in a utility/helper process (not chrome.exe).
@@ -1419,9 +1422,9 @@ void CALLBACK BrowserWinEventProc(
         HWND owner = GetWindow(hwnd, GW_OWNER);
         if (!owner) owner = GetParent(hwnd);
         if (owner) {
-            DWORD ownerPid = 0;
             GetWindowThreadProcessId(owner, &ownerPid);
-            std::string ownerExe = ProcessImageName(ownerPid);
+            ownerExe = ProcessImageName(ownerPid);
+            haveOwner = true;
             LogDbg("WinEvent #32770 owner: exe=" + ownerExe);
             if (IsBrowserExe(ownerExe)) {
                 fromBrowser = true;
@@ -1435,13 +1438,41 @@ void CALLBACK BrowserWinEventProc(
     // Managed messaging / thick-client app control (additive, ported from
     // CyberSentinel-DLP): if this dialog wasn't opened by a browser, check
     // whether it was opened by a MANAGED MESSAGING app instead (Teams /
-    // WhatsApp / Telegram / Slack / Discord / Signal / ...). Unlike Chrome's
-    // sandboxed-helper indirection, these apps host their own file-open
-    // dialog directly, so no owner-window lookup is needed here -- just the
-    // dialog's own creating process.
+    // WhatsApp / Telegram / Slack / Discord / Signal / ...).
+    //
+    // CONFIRMED LIVE BUG (fixed here): the "new" Microsoft Teams client
+    // hosts its file-open dialog inside a msedgewebview2.exe helper process,
+    // not ms-teams.exe itself -- the exact same sandboxed-helper indirection
+    // Chrome uses, which this function already had an owner-window fallback
+    // for, but that fallback only ever checked whether the OWNER was a
+    // BROWSER. It correctly resolved and logged "owner: exe=ms-teams.exe"
+    // every time, then never used that value for the messaging-app check --
+    // g_cfg.messagingPolicy() was only ever called with the helper
+    // process's own name, which is never in anyone's managed-apps list, so
+    // this returned managed=false and the whole detector silently no-opped
+    // on every single Teams attachment. Fixed by trying the owner process
+    // too when the dialog's own creating process isn't a managed app.
     MessagingVerdict mv;
     if (!fromBrowser && g_cfg.messagingPolicy) {
         try { mv = g_cfg.messagingPolicy(ToLower(exe), g_cfg.username); } catch (...) {}
+        if (!mv.managed && haveOwner && !ownerExe.empty()) {
+            try {
+                MessagingVerdict ownerMv = g_cfg.messagingPolicy(ToLower(ownerExe), g_cfg.username);
+                if (ownerMv.managed) {
+                    mv  = ownerMv;
+                    exe = ownerExe;
+                    // CONFIRMED LIVE: browserPid is what a "block" verdict
+                    // actually terminates (TerminatePid below in
+                    // HandleBrowserDialogFromHwnd). Leaving it as the
+                    // dialog's own creating process here would terminate
+                    // the msedgewebview2.exe helper instead of ms-teams.exe
+                    // itself -- the helper typically just respawns and the
+                    // user is barely inconvenienced, not actually blocked.
+                    browserPid = ownerPid;
+                    LogDbg("WinEvent: dialog owner is managed messaging app: " + ownerExe);
+                }
+            } catch (...) {}
+        }
     }
 
     if (!fromBrowser && !mv.managed) return;
