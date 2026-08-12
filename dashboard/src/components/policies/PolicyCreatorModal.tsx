@@ -18,7 +18,8 @@ import {
   WirelessTransferControlConfig,
   PrintContentPreventionConfig,
   MessagingAppControlConfig,
-  PrinterControlConfig
+  PrinterControlConfig,
+  EmailConfig
 } from '@/types/policy'
 import { validatePolicy } from '@/utils/policyUtils'
 import PolicyTypeSelector from './PolicyTypeSelector'
@@ -37,6 +38,7 @@ import WirelessTransferControlPolicyForm from './WirelessTransferControlPolicyFo
 import PrintContentPreventionPolicyForm from './PrintContentPreventionPolicyForm'
 import MessagingAppControlPolicyForm from './MessagingAppControlPolicyForm'
 import PrinterControlPolicyForm from './PrinterControlPolicyForm'
+import EmailPolicyForm from './EmailPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
 import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react'
@@ -68,6 +70,7 @@ type TraditionalPolicyConfig =
   | PrintContentPreventionConfig
   | MessagingAppControlConfig
   | PrinterControlConfig
+  | EmailConfig
 
 const getDefaultConfig = (type: PolicyType): TraditionalPolicyConfig | {} => {
   switch (type) {
@@ -205,6 +208,12 @@ const getDefaultConfig = (type: PolicyType): TraditionalPolicyConfig | {} => {
         mode: 'enforce',
         scope: 'block_network'
       } as PrinterControlConfig
+
+    case 'email_send_prevention':
+      return {
+        action: 'block',
+        triggerLevels: ['Confidential', 'Restricted']
+      } as EmailConfig
   }
 }
 
@@ -719,6 +728,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'printer_control' && (
                   <PrinterControlPolicyForm
                     config={config as PrinterControlConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'email_send_prevention' && (
+                  <EmailPolicyForm
+                    config={config as EmailConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

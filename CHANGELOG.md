@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ✨ Add dedicated Email DLP (Outbound) policy type (August 12, 2026)
+
+### Summary
+
+Found via a gap-scan of CyberSentinel-DLP's changelog (task #134): CyberSentinel exposes `email_send_prevention` as a first-class policy type in its dashboard wizard, letting admins tune outbound-email severity/action independently from other channels. SeceoKnight's SMTP relay (`smtp-relay/`) already enforced DLP on outbound mail end-to-end, but rode on generic evaluator defaults with no admin-configurable policy object -- an email with no matching custom policy always returned `allow`, and there was no UI to change that.
+
+### What was added
+
+**Dashboard**: `email_send_prevention` added to `PolicyType`, plus a new `EmailConfig` (`action: block|alert|log`, `triggerLevels: Internal|Confidential|Restricted[]`). New `EmailPolicyForm.tsx` component, wired into `PolicyTypeSelector.tsx` (new picker entry with a Mail icon), `PolicyCreatorModal.tsx` (import, `TraditionalPolicyConfig` union, `getDefaultConfig()` case, render switch), and `utils/policyUtils.ts` (icon/label/format-config functions, plus the second, duplicate `getDefaultConfig()` implementation used by `transformApiPolicyToFrontend` -- both needed the same case to stay in sync, a pre-existing maintenance wart noted but not otherwise touched).
+
+**Server**: unlike `printer_control`/`print_content_prevention`/`messaging_app_control` -- which are agent-polled config toggles read directly off `Policy.config` by a dedicated `GET /agents/{id}/<x>-policy` endpoint -- the SMTP relay has no polling loop. It's a synchronous component that POSTs each message's content straight to the generic `/agents/{id}/policy/evaluate` endpoint and expects an inline decision back from `DatabasePolicyEvaluator`'s conditions/actions rule engine (the same path `usb_file_transfer_monitoring` uses). So `server/app/utils/policy_transformer.py` got a new `_transform_email_config()` emitting `destination_type == "email"` + `classification_level in [...]` rules -- without this, an admin-created email policy would have silently done nothing, since the previous unhandled-type fallback returns empty rules. Also added `email_send_prevention` to `server/app/core/domains.py`'s `POLICY_TYPE_DOMAIN` map (as `DATA_PROTECTION`) so domain-scoped admins can actually manage it -- it was unmapped before, which would have silently fallen back to the `general` domain.
+
+### Verification
+
+`python3 -c "import ast; ast.parse(...)"` clean on both server files. `npx tsc --noEmit` on the dashboard: 24 errors, identical count to the established pre-existing baseline, none in any file touched by this change (confirmed via grep -- all 24 are pre-existing issues in `ClassificationPolicyForm.tsx`, `ClipboardPolicyForm.tsx`, `GoogleDriveCloudPolicyForm.tsx`, `OneDriveCloudPolicyForm.tsx`, `PolicyCreatorModal.tsx`'s unrelated `ClassificationPolicyConfig` typing, `PolicyDetailsModal.tsx`, `PolicyRow.tsx`, `RuleModal.tsx`, `lib/utils.ts`).
+
+### Deployment
+
+Dashboard + server change, no agent rebuild needed. Rebuild/redeploy the dashboard and server containers via `update.sh`. New policies of this type appear immediately in the policy wizard; existing SMTP relay traffic is unaffected until an admin creates one.
+
+---
+
 ## 🛡️ Make print content-inspection failures honest instead of silent allow (August 11, 2026)
 
 ### Summary

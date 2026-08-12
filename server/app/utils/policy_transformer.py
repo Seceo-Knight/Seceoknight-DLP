@@ -37,6 +37,8 @@ def transform_frontend_config_to_backend(
         return _transform_onedrive_cloud_config(config)
     elif policy_type == "file_identity_denylist":
         return _transform_file_identity_denylist_config(config)
+    elif policy_type == "email_send_prevention":
+        return _transform_email_config(config)
     else:
         # Unknown type, return empty defaults
         return (
@@ -381,6 +383,72 @@ def _transform_file_system_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any
         actions["quarantine"] = {"path": quarantine_path}
     else:
         actions[action] = {}
+
+    return conditions, actions
+
+
+def _transform_email_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform email DLP (outbound) config to backend format.
+
+    Unlike printer_control/print_content_prevention/messaging_app_control --
+    which are agent-polled config toggles read directly off Policy.config by
+    a dedicated GET /agents/{id}/<x>-policy endpoint -- the SMTP relay
+    (smtp-relay/app/dlp_client.py) has no polling loop. It's a synchronous
+    server-side component that POSTs each outbound message's extracted text
+    straight to the generic /agents/{id}/policy/evaluate endpoint (event_type
+    "email_send", destination_type "email") and expects an inline block/
+    allow decision back from DatabasePolicyEvaluator's conditions/actions
+    rule engine -- the exact same path usb_file_transfer_monitoring already
+    uses. So this needs a real conditions/rules translation, not an empty
+    fallback: without it, every email evaluation matches zero policies and
+    silently returns allow regardless of what an admin configures in the UI.
+
+    Frontend format:
+    {
+        "action": "block" | "alert" | "log",
+        "triggerLevels": ["Confidential", "Restricted"]   // Public/Internal optional
+    }
+
+    Backend format:
+    conditions: {
+        "match": "all",
+        "rules": [
+            {"field": "destination_type", "operator": "equals", "value": "email"},
+            {"field": "classification_level", "operator": "in", "value": ["Confidential", "Restricted"]} (if specified)
+        ]
+    }
+    actions: {
+        "block": {} | "alert": {} | "log": {}
+    }
+    """
+    action = config.get("action", "block")
+    trigger_levels = [lvl for lvl in config.get("triggerLevels", []) if lvl]
+
+    rules = [
+        {
+            "field": "destination_type",
+            "operator": "equals",
+            "value": "email",
+        }
+    ]
+    if trigger_levels:
+        rules.append(
+            {
+                "field": "classification_level",
+                "operator": "in",
+                "value": trigger_levels,
+            }
+        )
+
+    conditions = {
+        "match": "all",
+        "rules": rules,
+    }
+
+    if action not in {"block", "alert", "log"}:
+        action = "block"
+    actions = {action: {}}
 
     return conditions, actions
 

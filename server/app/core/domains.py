@@ -83,6 +83,12 @@ POLICY_TYPE_DOMAIN = {
     # Print CONTENT inspection -- real spooled-document text scanning (not
     # just filename keywords). Ported from CyberSentinel-DLP.
     "print_content_prevention": PolicyDomain.THREAT,
+    # Email DLP (outbound) -- content classification on mail routed through
+    # the SMTP relay, same category as clipboard/file content policies
+    # rather than a device/threat control. Added during the CyberSentinel
+    # gap-scan (task #134/#135) -- was previously unmapped, which would have
+    # silently fallen back to the "general" domain via domain_for_policy_type().
+    "email_send_prevention": PolicyDomain.DATA_PROTECTION,
 }
 
 # Event ``event_type`` → domain, so events without a resolvable matched-policy

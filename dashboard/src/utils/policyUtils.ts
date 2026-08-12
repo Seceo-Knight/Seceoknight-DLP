@@ -18,9 +18,10 @@ import {
   WirelessTransferControlConfig,
   PrintContentPreventionConfig,
   MessagingAppControlConfig,
-  PrinterControlConfig
+  PrinterControlConfig,
+  EmailConfig
 } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail } from 'lucide-react'
 
 /**
  * Get icon component for policy type
@@ -57,6 +58,8 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return MessageSquare
     case 'printer_control':
       return Printer
+    case 'email_send_prevention':
+      return Mail
     default:
       return FileText
   }
@@ -97,6 +100,8 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Messaging App Attachment Control'
     case 'printer_control':
       return 'Printer Device Control'
+    case 'email_send_prevention':
+      return 'Email DLP (Outbound)'
     default:
       return 'Unknown'
   }
@@ -233,6 +238,12 @@ export const formatPolicyConfig = (policy: Policy): string => {
       case 'printer_control': {
         const c = config as PrinterControlConfig
         return `Mode: ${c.mode || 'enforce'} | Scope: ${c.scope || 'block_network'}`
+      }
+
+      case 'email_send_prevention': {
+        const c = config as EmailConfig
+        const levels = (c.triggerLevels || []).join(', ') || 'None selected'
+        return `Action: ${c.action || 'block'} | Triggers on: ${levels}`
       }
 
       default:
@@ -669,6 +680,8 @@ const getDefaultConfig = (type: PolicyType): any => {
       }
     case 'printer_control':
       return { mode: 'enforce', scope: 'block_network' }
+    case 'email_send_prevention':
+      return { action: 'block', triggerLevels: ['Confidential', 'Restricted'] }
     default:
       return {}
   }

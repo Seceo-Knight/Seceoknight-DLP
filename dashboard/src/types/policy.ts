@@ -21,6 +21,7 @@ export type PolicyType =
   | 'print_content_prevention'
   | 'messaging_app_control'
   | 'printer_control'
+  | 'email_send_prevention'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
 export type ClipboardAction = 'alert' | 'log'
@@ -199,6 +200,30 @@ export interface PrinterControlConfig {
   scope: PrinterControlScope
 }
 
+// Ported from CyberSentinel-DLP (dedicated Email DLP policy type, task
+// #134's gap scan). Unlike printer_control/print_content_prevention/
+// messaging_app_control -- which are agent-polled config toggles read
+// directly by GET /agents/{id}/<x>-policy endpoints -- the smtp-relay
+// (smtp-relay/app/dlp_client.py) is a synchronous server-side component
+// with no polling loop: it POSTs each outbound message's content straight
+// to the generic /agents/{id}/policy/evaluate endpoint and expects an
+// inline block/allow decision back from DatabasePolicyEvaluator's
+// conditions/actions rule engine. So this config is transformed (see
+// server/app/utils/policy_transformer.py's _transform_email_config) into
+// ordinary conditions/rules matching destination_type=="email" plus
+// classification_level, the same pattern usb_file_transfer_monitoring
+// already uses -- NOT a dedicated polled-config endpoint like
+// printer_control's.
+export type EmailAction = 'block' | 'alert' | 'log'
+export type EmailTriggerLevel = 'Internal' | 'Confidential' | 'Restricted'
+
+export interface EmailConfig {
+  action: EmailAction
+  // Which classification levels trigger the action. Public is deliberately
+  // excluded from the picker (never worth blocking/alerting on).
+  triggerLevels: EmailTriggerLevel[]
+}
+
 // Classification-aware policy types
 export interface PolicyCondition {
   field: string
@@ -243,6 +268,7 @@ export type PolicyConfig =
   | PrintContentPreventionConfig
   | MessagingAppControlConfig
   | PrinterControlConfig
+  | EmailConfig
 
 export interface Policy {
   id: string

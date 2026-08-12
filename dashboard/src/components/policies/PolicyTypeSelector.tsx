@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield, Globe, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield, Globe, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -115,6 +115,12 @@ const policyTypes: Array<{
     label: 'Printer Device Control',
     description: 'Block printing entirely, or restrict to local/network/allowlisted printers',
     icon: Printer
+  },
+  {
+    type: 'email_send_prevention',
+    label: 'Email DLP (Outbound)',
+    description: 'Inspect outbound email content via the SMTP relay and block/alert on sensitive data',
+    icon: Mail
   }
 ]
 
