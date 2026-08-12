@@ -2721,6 +2721,17 @@ static ClassificationResult Classify(const std::string& content,
      // permanent, silent no-op for that printer rather than a rare edge
      // case). Defaults to "allow" -- matches server default, non-breaking.
      std::string printUnknownContentAction = "allow";
+     // CONFIRMED LIVE: an admin set severity="critical" on their
+     // print_content_prevention policy (the same top-level severity field
+     // every policy type has), but blocked/unverified print events kept
+     // showing hardcoded "high"/"medium" regardless -- there was no path
+     // for the policy's configured severity to ever reach the agent.
+     // Populated from GET /printer-policy's merged "content_severity"
+     // (server takes the highest-ranked severity across every active
+     // print_content_prevention policy). Defaults to "high", matching the
+     // previous hardcoded value, so this is non-breaking until the server
+     // side of this fix is deployed too.
+     std::string printContentSeverity = "high";
      std::mutex printerPolicyMutex;
      // SHA-256 of the last spooled document read, keyed by job id -- computed
      // once during content inspection and reused by the print event callback
@@ -4430,8 +4441,26 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  else
                      desc = "Print job: " + displayDocName + " -> " + event.printerName;
                  json.AddString("description", desc);
-                 json.AddString("severity", event.actionTaken == "Block" ? "high" :
-                                            (contentUnavailable ? "medium" : "low"));
+                 // CONFIRMED LIVE: an admin set severity="critical" on their
+                 // print_content_prevention policy and it was silently
+                 // ignored -- every content-driven block/unverified event
+                 // showed a hardcoded "high"/"medium" no matter what the
+                 // policy actually said. printContentSeverity is synced
+                 // from GET /printer-policy's merged content_severity (see
+                 // that member's declaration comment). Device-control
+                 // blocks (blockReason=="printer_control") are a different
+                 // policy type with its own severity semantics not covered
+                 // by this fix, so that path keeps its previous "high".
+                 std::string printSeverity;
+                 if (event.actionTaken == "Block" && event.blockReason == "printer_control") {
+                     printSeverity = "high";
+                 } else if (event.actionTaken == "Block" || contentUnavailable) {
+                     std::lock_guard<std::mutex> lock(printerPolicyMutex);
+                     printSeverity = printContentSeverity;
+                 } else {
+                     printSeverity = "low";   // verified-clean allow -- routine, not a policy hit
+                 }
+                 json.AddString("severity", printSeverity);
                  json.AddString("action", event.actionTaken == "Block" ? "blocked" : "allowed");
                  json.AddString("classification_level", event.category);
                  json.AddBool("blocked", event.actionTaken == "Block");
@@ -5098,6 +5127,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              std::string contentMode = ToLower(config.ExtractJsonValue(response, "content_mode"));
              std::string unknownContentAction = ToLower(config.ExtractJsonValue(response, "unknown_content_action"));
              if (unknownContentAction != "block") unknownContentAction = "allow";   // safe default on missing/garbled field
+             std::string contentSeverity = ToLower(config.ExtractJsonValue(response, "content_severity"));
+             if (contentSeverity != "low" && contentSeverity != "medium" &&
+                 contentSeverity != "high" && contentSeverity != "critical" && contentSeverity != "info") {
+                 contentSeverity = "high";   // safe default on missing/garbled field, matches prior hardcoded value
+             }
 
              {
                  std::lock_guard<std::mutex> lock(printerPolicyMutex);
@@ -5106,6 +5140,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  sanctionedPrinters = printers;
                  printContentMode = contentMode;
                  printUnknownContentAction = unknownContentAction;
+                 printContentSeverity = contentSeverity;
              }
              printerControlEnforced.store(enforced);
              printContentInspection.store(contentInspection);
@@ -5120,7 +5155,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                          " scope=" + (scope.empty() ? "none" : scope) +
                          " content_inspection=" + std::string(contentInspection ? "true" : "false") +
                          " content_mode=" + (contentMode.empty() ? "off" : contentMode) +
-                         " unknown_content_action=" + unknownContentAction);
+                         " unknown_content_action=" + unknownContentAction +
+                         " content_severity=" + contentSeverity);
          } catch (const std::exception& e) {
              logger.Debug(std::string("FetchPrinterPolicy failed: ") + e.what());
          } catch (...) {

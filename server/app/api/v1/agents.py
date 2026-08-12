@@ -1417,6 +1417,28 @@ async def get_printer_policy(
     if unknown_content_action not in ("allow", "block"):
         unknown_content_action = "allow"
 
+    # CONFIRMED LIVE: an admin set severity="critical" on the
+    # print_content_prevention policy (the same top-level Policy.severity
+    # field every other policy type has), but blocked/unverified print
+    # events kept showing hardcoded "high"/"medium" -- the agent's print
+    # event builder never had any way to know what severity the admin
+    # actually configured, because this endpoint never returned it.
+    # Mirrors the mode/unknownContentAction merge above: take the highest-
+    # ranked severity across every active print_content_prevention policy,
+    # so multiple policies compose the same way here too. Defaults to
+    # "high" (the previous hardcoded value for a block) when no policy
+    # carries an explicit severity, so this is non-breaking.
+    content_severity = "high"
+    if content_inspection:
+        best_rank = -1
+        for _cp in content_policies:
+            _sev = str(_cp.severity or "").lower()
+            if _sev and _severity_rank(_sev) > best_rank:
+                best_rank = _severity_rank(_sev)
+                content_severity = _sev
+    if content_severity not in ("low", "medium", "high", "critical", "info"):
+        content_severity = "high"
+
     return {
         "enforced": enforced,
         "mode": mode,
@@ -1425,6 +1447,7 @@ async def get_printer_policy(
         "content_inspection": content_inspection,
         "content_mode": content_mode,
         "unknown_content_action": unknown_content_action,
+        "content_severity": content_severity,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
