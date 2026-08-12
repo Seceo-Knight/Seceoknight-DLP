@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Fix printer-policy endpoint silently ignoring one of multiple active print_content_prevention policies (August 12, 2026)
+
+### Summary
+
+Direct follow-up to the fail-closed feature below: after deploying it, a live test showed the agent consistently reporting `unknown_content_action=allow` even though the admin had set the policy to `block` in the dashboard and confirmed it saved. Diagnosed by adding `content_mode`/`unknown_content_action` to the agent's existing debug log line (agent-side confirmed it was faithfully receiving `allow` from the server on every single poll -- ruling out an agent caching bug), then querying Postgres directly: two active `print_content_prevention` policies existed at the same priority (100) -- an older "Block Sensitive Printing" policy with no `unknownContentAction` key, and the "Print Content" policy the admin was actually editing, correctly holding `unknownContentAction: "block"`.
+
+### Root cause
+
+`GET /{agent_id}/printer-policy` fetched the content policy via `.order_by(Policy.priority.desc()).first()`. On a priority tie, SQL does not guarantee row order, so this silently and non-deterministically returned one policy's config over the other's -- the admin's fail-closed setting on the policy they were editing was invisibly shadowed by an unrelated leftover policy every single poll, with no error, no warning, nothing in the UI to suggest a conflict existed.
+
+### Fix
+
+`server/app/api/v1/agents.py`: fetch every active `print_content_prevention` policy instead of one, and merge them by taking the strictest setting present in any of them (`enforce` beats `audit`, `block` beats `allow`). Multiple admin-authored policies of this type now compose safely instead of one arbitrarily shadowing another on a priority tie.
+
+### Verification
+
+`python3 -c "import ast; ast.parse(...)"` clean on `agents.py`.
+
+### Deployment
+
+Server-only change. Redeploy via `update.sh`; no agent reinstall needed. Also worth cleaning up any duplicate/leftover `print_content_prevention` policies in the dashboard so intent stays unambiguous even though the merge now handles it safely either way.
+
+---
+
 ## 🛡️ Add fail-closed option for unverifiable print content (August 12, 2026)
 
 ### Summary
