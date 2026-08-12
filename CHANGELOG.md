@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Fix print events ignoring the admin-configured policy severity (August 12, 2026)
+
+### Summary
+
+After the two fixes above, print-content events were finally blocking correctly and showing the right filename -- but the severity shown was still wrong. The admin had set severity to Critical on the "Print Content" policy (the same top-level Severity dropdown every policy type has), yet blocked jobs kept showing `high` and unverified-content jobs kept showing `medium`. Traced to `agent.cpp`'s print event builder, which hardcoded `Block -> "high"`, `content unavailable -> "medium"`, else `"low"` -- there was no path anywhere for the policy's actual configured severity to reach the agent. `GET /printer-policy` never returned it in the first place.
+
+### Fix
+
+`server/app/api/v1/agents.py` (`get_printer_policy`): compute a merged `content_severity` across every active `print_content_prevention` policy, same pattern as the mode/unknownContentAction merge two fixes ago -- highest-ranked severity wins (using the existing `_severity_rank()` helper). Defaults to `high` (the old hardcoded value) when no policy carries an explicit severity, so this is non-breaking. `agent.cpp`: new cached `printContentSeverity`, synced alongside `content_mode`/`unknown_content_action`. The print event builder now uses it for the two paths this policy actually governs -- a content-driven block, and content-unavailable. Device-control blocks (blocked by the separate `printer_control` policy type) keep their previous `high`, since that's a different policy with its own severity semantics untouched by this fix. A fully verified-clean allow stays `low` -- that's not a policy hit, and tagging routine clean prints as Critical would be actively misleading.
+
+### Verification
+
+Brace-balance on `agent.cpp` (unchanged, paren=-2 brace=-5 bracket=-1). `python3 -c "import ast; ast.parse(...)"` clean on `agents.py`.
+
+### Deployment
+
+Server + agent change. Redeploy via `update.sh`, then reinstall the Windows agent.
+
+---
+
 ## 🐛 Fix print events showing generic "Local Downlevel Document" instead of the real filename (August 12, 2026)
 
 ### Summary
