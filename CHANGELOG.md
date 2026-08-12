@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Fix print events showing generic "Local Downlevel Document" instead of the real filename (August 12, 2026)
+
+### Summary
+
+After the fail-closed fix above started actually blocking print jobs, the resulting Events showed `File: Local Downlevel Document` instead of the real document name -- for every job, on this printer. Traced to `JOB_INFO_1A.pDocument`: for this printer's driver class (a v4/XPS-class driver receiving a legacy GDI "downlevel" job), Windows itself renames the spooler job's document to that generic literal string during its internal XPS conversion shim -- confirmed this is not a parsing bug in the agent, the OS genuinely hands back that string via `EnumJobsA`. Same underlying driver-pipeline family as the earlier content-extraction gap.
+
+### Fix
+
+Best achievable fix with the public spooler API (a full fix needs a print processor/port monitor DLL earlier in the pipeline -- the same driver-signing-gated undertaking as content extraction): when `pDocument` comes back as that placeholder (or empty/"Unknown"), `print_monitor.cpp` falls back to the foreground window's title at the moment the job is detected. Jobs are picked up within ~2s via the change-notification handler or the poll, so this is very likely the actual source document. Labelled `"(inferred from active window)"` in the event description and `file_path` rather than presented with the same confidence as a real API-sourced name -- new `PrintEvent::documentNameInferred` bool threads this through from `print_monitor.h`/`.cpp` to `agent.cpp`.
+
+### Verification
+
+Brace-balance check on `agent.cpp` (unchanged, paren=-2 brace=-5 bracket=-1), `print_monitor.cpp`/`.h` (both 0/0/0).
+
+### Deployment
+
+Agent-only change. Reinstall the Windows agent via `install-agent.ps1`; no server redeploy needed.
+
+---
+
 ## 🐛 Fix printer-policy endpoint silently ignoring one of multiple active print_content_prevention policies (August 12, 2026)
 
 ### Summary
