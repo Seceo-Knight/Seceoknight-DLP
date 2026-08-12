@@ -8,6 +8,33 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Fix messaging-app file selection silently producing zero events for Teams' WebView2 dialog (August 12, 2026)
+
+### Summary
+
+Third round on this feature. With both prior fixes deployed, the log showed detection now working correctly end to end -- the dialog was attributed to `ms-teams.exe` and matched as a managed app -- but attaching the sensitive test file through Teams still produced zero events.
+
+### Root cause
+
+Traced to filename resolution, not detection. The log showed the Win32 child-window scan found nothing, followed by "Shell MRU never showed an entry newer than dialog close within 10s". Teams' file dialog is a genuine native common-dialog window (class #32770, not a custom in-app control), but unlike Chrome's own sandboxed-helper dialog -- which the existing `OpenSavePidlMRU` registry mechanism already handles correctly -- it doesn't appear to record through Explorer's MRU the way a normal file-picker call does. Not diagnosable further without invasive per-machine tooling this project has deliberately ruled out for production fleet use. With the filename never resolved, the function silently `return`ed -- zero events, indistinguishable in the dashboard from "nothing was attached at all."
+
+### Fix
+
+Two parts, in `network_exfil_monitor.cpp`:
+
+1. **`FindRecentlyAccessedCandidateFile()`** -- a last-resort heuristic. Opening a file to attach it still touches that file's last-access timestamp even when neither the child-window scan nor the MRU registry key fires. Scans Desktop/Documents/Downloads (shallow, non-recursive) for the most-recently-accessed file strictly after the dialog closed. Explicitly a heuristic, not an MRU-confirmed fact -- logged as such, and callers must treat it accordingly.
+2. When even that fails for a **managed messaging app** specifically (browsers keep their existing behavior -- separately verified working via MRU/Win32 scan for every browser tested this session, so this fix is scoped to the gap just confirmed), emit an honest `ALERT`/`medium` event instead of the previous silent no-op. Same principle already applied to print content inspection: a detection gap must be visible on the Events page, not indistinguishable from nothing happening.
+
+### Verification
+
+Brace-balance check: `paren=1 brace=-2 bracket=-1`, matching the file's own established baseline.
+
+### Deployment
+
+Agent-only change. Reinstall the Windows agent via `install-agent.ps1`; no server redeploy needed.
+
+---
+
 ## 🐛 Fix Messaging App Attachment Control: "teams.exe" policy doesn't match the ms-teams.exe process (August 12, 2026)
 
 ### Summary
