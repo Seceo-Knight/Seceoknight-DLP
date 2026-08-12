@@ -4922,6 +4922,25 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          }
      }
 
+     // CONFIRMED LIVE: an admin's policy had exactly one app configured --
+     // "teams.exe", the only Teams option the dashboard's chip list offers
+     // (MessagingAppControlPolicyForm.tsx's defaultApps). But the process
+     // Microsoft actually ships for the current "new Teams" client is
+     // ms-teams.exe -- a rename an admin has no reason to know about. An
+     // exact-string match against the configured set silently missed every
+     // real-world Teams attachment as a result (confirmed via log: dialog
+     // correctly attributed to ms-teams.exe, but GetMessagingVerdict()
+     // still returned managed=false, so nothing after that point ever ran).
+     // Canonicalize known same-product exe-name variants to one identity
+     // before matching, so whichever name an admin happened to pick still
+     // covers every real install of that product.
+     static std::string CanonicalMessagingAppName(const std::string& exeLower) {
+         if (exeLower == "teams.exe" || exeLower == "ms-teams.exe" || exeLower == "msteams.exe") {
+             return "teams.exe";   // canonical identity for "Microsoft Teams", any variant
+         }
+         return exeLower;
+     }
+
      // Local verdict for the messaging-app attachment detector. Given the
      // dialog-owning process exe (lowercased) and the current user, reports
      // whether it's a managed messaging client, whether to BLOCK (vs alert)
@@ -4937,7 +4956,20 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          std::lock_guard<std::mutex> lock(messagingMutex);
          std::string u = ToLower(userName);
          if (!u.empty() && messagingExceptUsers.count(u)) return v;   // user exempt
-         if (messagingApps.count(exeLower)) {
+         // Symmetric check: canonicalize BOTH the incoming process name and
+         // each configured app name before comparing, so it doesn't matter
+         // which of the known same-product variants the admin happened to
+         // pick versus which variant is actually running.
+         std::string canonicalIncoming = CanonicalMessagingAppName(exeLower);
+         bool matched = false;
+         for (const auto& configured : messagingApps) {
+             if (configured == exeLower ||
+                 CanonicalMessagingAppName(configured) == canonicalIncoming) {
+                 matched = true;
+                 break;
+             }
+         }
+         if (matched) {
              v.managed          = true;
              v.block            = (messagingAction == "block");
              v.exemptExtensions = messagingExemptTypes;
