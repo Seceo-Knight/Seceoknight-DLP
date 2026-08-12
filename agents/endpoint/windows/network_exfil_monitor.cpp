@@ -1697,7 +1697,51 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
         finder.logChildren = log;
         EnumChildWindows(dialogHwnd, EditControlFinder::Callback,
                          reinterpret_cast<LPARAM>(&finder));
-        return finder.best();
+        std::string result = finder.best();
+        if (!result.empty()) return result;
+
+        // CONFIRMED LIVE (Teams / msedgewebview2.exe host): the direct child
+        // scan above finds only the dialog's outer chrome -- "File name:"/
+        // "Files of type:" labels and the Open/Cancel/Help buttons -- with
+        // NO Edit control and NO file-list control among its children at
+        // all. That's a real, structural difference from Chrome's dialog
+        // (which exposes a plain "Edit" child the same scan reads
+        // successfully). The interactive file-picker surface for this
+        // dialog composition apparently isn't a CHILD of the #32770 frame
+        // WinEvent handed us -- try windows OWNED BY it instead (a distinct
+        // Win32 relationship from parent/child; EnumChildWindows does not
+        // walk owned windows). Best-effort: if the real content is rendered
+        // through a non-HWND mechanism (e.g. DirectComposition) with no
+        // ownership-linked window at all, this still won't find anything --
+        // but it costs one extra EnumWindows pass only when the primary
+        // scan has already come up empty, so it's cheap insurance.
+        struct OwnedWindowScan {
+            HWND owner;
+            HWND found = nullptr;
+            static BOOL CALLBACK Callback(HWND hwnd, LPARAM lp) {
+                auto* self = reinterpret_cast<OwnedWindowScan*>(lp);
+                if (hwnd == self->owner) return TRUE;
+                if (GetWindow(hwnd, GW_OWNER) == self->owner) {
+                    self->found = hwnd;
+                    return FALSE;
+                }
+                return TRUE;
+            }
+        };
+        OwnedWindowScan ownedScan;
+        ownedScan.owner = dialogHwnd;
+        EnumWindows(OwnedWindowScan::Callback, reinterpret_cast<LPARAM>(&ownedScan));
+        if (ownedScan.found) {
+            EditControlFinder ownedFinder;
+            ownedFinder.logChildren = log;
+            EnumChildWindows(ownedScan.found, EditControlFinder::Callback,
+                             reinterpret_cast<LPARAM>(&ownedFinder));
+            if (log && !ownedFinder.best().empty()) {
+                LogDbg("dialog_owned_window scan found a filename-bearing control");
+            }
+            return ownedFinder.best();
+        }
+        return {};
     };
 
     std::string captured;
@@ -1782,18 +1826,43 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
                             "close within 10s — not guessing a filename "
                             "(mruBefore was: " +
                             (mruBefore.empty() ? "(empty)" : mruBefore) + ")");
-                    // CONFIRMED LIVE: Teams' WebView2-hosted dialog hits
-                    // exactly this path every time -- see
-                    // FindRecentlyAccessedCandidateFile's comment. Last
-                    // resort before giving up entirely: a file's last-
-                    // access time still gets touched by opening it to
-                    // attach it, even when neither of the two mechanisms
-                    // above ever fire for this dialog type.
-                    std::string guess = FindRecentlyAccessedCandidateFile(dialogCloseTime);
-                    if (!guess.empty()) {
-                        LogDbg("Recently-accessed-file fallback matched: " + guess +
-                               " (heuristic, not MRU-confirmed)");
-                        captured = guess;
+                    // CONFIRMED LIVE this heuristic is UNSAFE for messaging
+                    // (Teams) dialogs specifically, and is now disabled for
+                    // that path -- see the detailed incident writeup in
+                    // CHANGELOG.md. What actually happened in production:
+                    // FindRecentlyAccessedCandidateFile() returned
+                    // "salary_sheet_2026.txt" -- the SAME file that was
+                    // already the stale MRU entry BEFORE this dialog opened
+                    // -- not the sensitive study-report file the user had
+                    // genuinely just selected in Teams. Its ftLastAccessTime
+                    // check (`> dialogCloseTime`) passed anyway, most likely
+                    // because something unrelated (Explorer preview/
+                    // thumbnailing, AV scan, search indexer -- anything that
+                    // touches file metadata) nudged that old file's access
+                    // time within the observation window, purely by
+                    // coincidence. The agent then classified THAT file's
+                    // real content (an unrelated, non-sensitive email
+                    // string) and reported an incorrect ALLOW/"Internal"
+                    // verdict on what was actually a sensitive-content
+                    // event -- a false negative, which is strictly worse
+                    // for a DLP product than the honest "(unknown)" case
+                    // this function exists to avoid. A confidently-wrong
+                    // file is more dangerous than an admitted detection
+                    // gap. Browsers are NOT affected (they resolve via MRU
+                    // reliably and essentially never reach this branch), so
+                    // this is scoped to isMessaging only.
+                    if (!isMessaging) {
+                        std::string guess = FindRecentlyAccessedCandidateFile(dialogCloseTime);
+                        if (!guess.empty()) {
+                            LogDbg("Recently-accessed-file fallback matched: " + guess +
+                                   " (heuristic, not MRU-confirmed)");
+                            captured = guess;
+                        }
+                    } else {
+                        LogWarn("Messaging app file-attach: recently-accessed-file "
+                                "heuristic is disabled for this path (confirmed to "
+                                "produce false wrong-file attributions) -- reporting "
+                                "as unidentified instead of guessing.");
                     }
                 }
             }

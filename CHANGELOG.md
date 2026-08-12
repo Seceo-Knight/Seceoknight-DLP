@@ -8,6 +8,35 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Fix messaging file-attach heuristic producing false wrong-file DLP verdicts (August 12, 2026)
+
+### Summary
+
+Live debug capture (`dialog_child`/Shell MRU log trace, requested and reviewed with the admin) proved that Teams' file-attach dialog attribution was worse than previously known: it wasn't just failing honestly with "(unknown)" — it was actively misattributing events to the WRONG file and producing a false ALLOW verdict on what was actually a sensitive attachment.
+
+### Root cause (two distinct findings)
+
+**1. The direct Win32 scan structurally cannot see Teams' dialog content.** A live `dialog_child` dump of the `#32770` dialog (`exe=msedgewebview2.exe`, owner `ms-teams.exe`) showed `EnumChildWindows` finds only 5 generic controls: two `Static` labels ("File name:", "Files of type:") and three `Button`s (Open/Cancel/Help) — no `Edit` control, no file-list control at all. This is a genuine structural difference from Chrome's dialog, where the same scan reliably finds an `Edit`-class control. The real interactive file-picker surface isn't a *child* of the `#32770` frame WinEvent hands us for this dialog composition.
+
+**2. The last-resort `FindRecentlyAccessedCandidateFile()` heuristic actively produced a false, wrong-file, wrong-verdict event — confirmed live.** With the direct scan and MRU both failing, the heuristic fell back to "grab whichever file in Desktop/Documents/Downloads has the most recent NTFS access-time strictly after the dialog closed." In production this returned `salary_sheet_2026.txt` — the exact same file that was *already* the stale Shell MRU entry from before this dialog even opened, not the sensitive study-report file the admin had genuinely just selected in Teams. Something unrelated (Explorer preview/thumbnailing, AV scan, search indexing — anything that touches file metadata) evidently nudged that old file's access-time within the observation window, by pure coincidence. The agent then classified *that* file's real content (an unrelated, non-sensitive `EMAIL` pattern) and reported `category=Internal, decision=ALLOW` — a **false negative** on a genuinely sensitive attachment, misattributed to the wrong file entirely. A confidently-wrong file/verdict is more dangerous for a DLP product than an admitted detection gap, and is the opposite of the honesty principle this whole feature is built on (see the "(unknown)" fallback event added in the previous round).
+
+### Fix
+
+Two changes in `agents/endpoint/windows/network_exfil_monitor.cpp`:
+
+1. **New owned-window scan** in the `tryWin32` lambda (`HandleBrowserDialogFromHwnd`): when the direct child-window scan finds nothing, additionally check windows *owned by* (not children of) the dialog HWND via `EnumWindows` + `GetWindow(hwnd, GW_OWNER)`, and scan that window's children too. This is a best-effort attempt at finding Teams' actual file-picker controls, based on the confirmed evidence that they aren't in the direct child tree. Not guaranteed to succeed if the real content renders through a non-HWND mechanism (e.g. DirectComposition) with no ownership-linked window at all — but it's a real additional detection layer, not a placeholder.
+2. **Disabled `FindRecentlyAccessedCandidateFile()` for messaging events specifically** (`isMessaging` gate). Browsers are unaffected (they resolve reliably via Shell MRU and essentially never reach this branch). When neither the (now-enhanced) Win32 scan nor Shell MRU can identify the file, messaging events now consistently fall back to the honest "(unknown)" detection-gap ALERT event from the previous fix, instead of guessing and potentially misattributing to an unrelated file.
+
+### Verification
+
+Custom brace-balance checker (skips string/char literals and `//`/`/* */` comments) confirms `paren=1 brace=-2 bracket=-1` for `network_exfil_monitor.cpp` — matches this file's established pre-existing baseline exactly (confirmed unchanged by these edits).
+
+### Deployment
+
+Same as prior rounds: rebuild/redeploy the Windows agent installer (this is agent-side C++, not server-side — requires a new agent build + reinstall on endpoints, not just a server `update.sh`). After redeploying: re-test a Teams attachment. Best case, the owned-window scan finds the real filename and content inspection works properly. Otherwise, the event should now honestly report "(unknown)" instead of a wrong file — no more false ALLOW verdicts on misattributed content.
+
+---
+
 ## 🐛 Fix Messaging App Attachment Control dashboard falsely showing "blocked" (August 12, 2026)
 
 ### Summary
