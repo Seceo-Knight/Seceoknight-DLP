@@ -58,6 +58,8 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <future>
+#include <memory>
 
 // Note: libs are provided via build.sh (-lwbemuuid -lole32 -loleaut32
 // -luiautomationcore -ladvapi32 -lshell32 -luser32 -lpsapi). MSVC #pragma
@@ -1374,11 +1376,92 @@ std::string FindFileNameFromDialog(IUIAutomation* uia, IUIAutomationElement* roo
 // Written only by BrowserDetectorThread; read-only by detached threads (MTA safe).
 static IUIAutomation* g_browserUia = nullptr;
 
+// Thread ID of BrowserDetectorThread, captured at startup, so per-dialog
+// detached threads can PostThreadMessage() to it. Written once before the
+// message loop starts; read-only afterward (no lock needed).
+static DWORD g_browserThreadId = 0;
+
+// Custom thread message: "please run a UIA-based filename lookup on the
+// given dialog HWND and hand the result back". See the safe-cross-thread-
+// UIA design note above HandleUiaLookupRequest() for why this exists.
+#define WM_APP_UIA_FILENAME_LOOKUP (WM_APP + 1)
+
+// A pending UIA lookup request, handed off from a per-dialog detached
+// thread to BrowserDetectorThread via PostThreadMessage(). Ownership is
+// shared_ptr-managed so EITHER side can finish first (a timed-out detached
+// thread abandoning the wait, or BrowserDetectorThread completing the
+// lookup after the requester gave up) without a dangling pointer or
+// double-free -- whichever side drops its reference last is the one that
+// actually frees it.
+struct UiaFilenameRequest {
+    HWND dialogHwnd = nullptr;
+    std::promise<std::string> resultPromise;
+};
+
 // Forward declaration
 static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
                                         const std::string& browserExe,
                                         DWORD browserPid,
                                         MessagingVerdict mv = MessagingVerdict{});
+
+// SAFE CROSS-THREAD UIA LOOKUP -- background/rationale
+//
+// UIA (IUIAutomation) calls made from any thread OTHER than
+// BrowserDetectorThread are documented (see the long comment inside
+// HandleBrowserDialogFromHwnd) to have caused a confirmed, reproducible
+// production bug: a stuck COM/RPC call on the per-dialog detached thread
+// that only unblocked once the NEXT dialog opened, causing every file's
+// alert to permanently lag one dialog behind. That's why the per-dialog
+// thread was restricted to raw Win32 window inspection only (EnumChildWindows,
+// EnumWindows/GW_OWNER) -- which, for Teams' WebView2-hosted dialog, was
+// confirmed via live debug capture to find nothing: no Edit control, no
+// file-list control, not even as an owned window.
+//
+// UIA can potentially see into that dialog's content anyway -- UI Automation
+// providers can expose elements backed by non-HWND rendering surfaces
+// (e.g. DirectComposition-rendered content) that raw Win32 window
+// enumeration fundamentally cannot reach. So it's worth trying, but only
+// from the thread that's actually safe to call it from.
+//
+// RunUiaLookupOnDialogThread() lets the per-dialog detached thread request
+// a UIA-based lookup WITHOUT calling UIA itself: it posts a request to
+// BrowserDetectorThread's message queue (via PostThreadMessage, handled in
+// BrowserDetectorThread's own PeekMessageW loop) and waits on a
+// std::promise/future with a bounded timeout. BrowserDetectorThread -- the
+// only thread that owns g_browserUia and pumps messages -- performs the
+// actual UIA call and fulfills the promise. This preserves the existing,
+// already-proven-safe threading architecture (no change to which thread
+// owns UIA) while adding a real, different detection technique for
+// dialogs the Win32-only path can't see into.
+static std::string RunUiaLookupOnDialogThread(HWND dialogHwnd, DWORD timeoutMs = 300) {
+    if (!dialogHwnd || g_browserThreadId == 0) return {};
+
+    auto req = std::make_shared<UiaFilenameRequest>();
+    req->dialogHwnd = dialogHwnd;
+    std::future<std::string> fut = req->resultPromise.get_future();
+
+    // Heap-allocate a second shared_ptr (not the request itself) to pass
+    // through LPARAM -- PostThreadMessage carries a plain LPARAM, and we
+    // need the receiving side to be able to reconstruct a proper shared_ptr
+    // reference rather than a raw pointer it might mishandle the lifetime
+    // of. The message handler deletes this wrapper immediately upon
+    // receipt; the underlying UiaFilenameRequest survives as long as
+    // either side (this function's local `req`, or the handler's copy)
+    // still holds it.
+    auto* handoff = new std::shared_ptr<UiaFilenameRequest>(req);
+    if (!PostThreadMessageW(g_browserThreadId, WM_APP_UIA_FILENAME_LOOKUP,
+                             0, reinterpret_cast<LPARAM>(handoff))) {
+        delete handoff;
+        return {};
+    }
+
+    if (fut.wait_for(std::chrono::milliseconds(timeoutMs)) == std::future_status::ready) {
+        return fut.get();
+    }
+    return {};  // Timed out -- BrowserDetectorThread may still complete the
+                // lookup later; the shared_ptr keeps the request alive
+                // safely either way, we just don't wait for it here.
+}
 
 // WinEvent callback — fires on the BrowserDetectorThread message loop
 // whenever ANY window is created in the system (WINEVENT_OUTOFCONTEXT).
@@ -1685,8 +1768,18 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
     // file's alert permanently lagging one dialog behind. Removing the UIA
     // call from this thread removes the stall entirely — Win32 child-window
     // scanning plus the Shell MRU fallback below are sufficient on their
-    // own (this was already true; UIA was a "nice to have" for pre-
-    // populated drag-drop dialogs, not the primary detection path).
+    // own for browsers (this was already true; UIA was a "nice to have"
+    // for pre-populated drag-drop dialogs, not the primary detection path).
+    //
+    // UPDATE: for messaging apps (Teams' WebView2-hosted dialog), the Win32
+    // scan and Shell MRU both proved insufficient (confirmed live -- no
+    // Edit/file-list control anywhere in the child or owned-window tree).
+    // RunUiaLookupOnDialogThread() (defined above, near g_browserThreadId)
+    // adds UIA back in for that case WITHOUT reintroducing the stall bug:
+    // it never calls g_browserUia from this thread directly, it hands the
+    // request off to BrowserDetectorThread via PostThreadMessage and waits
+    // on a bounded-timeout future. Still true: no direct g_browserUia/
+    // IUIAutomation calls belong in this function.
     bool comInited = false;
 
     // Win32 scan: walk child windows for filename text.
@@ -1781,6 +1874,26 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
             // to the Shell Open/Save MRU registry key.  Windows writes this key
             // for every selection regardless of which picker implementation is
             // used, including the modern IFileOpenDialog.
+            if (captured.empty()) {
+                // Try a UIA-based lookup while the HWND is still technically
+                // valid (even if just hidden -- it may be fully destroyed a
+                // moment later). This is SAFE to call from this thread
+                // despite the no-direct-UIA rule above: RunUiaLookupOnDialogThread()
+                // doesn't touch g_browserUia itself, it hands the request off
+                // to BrowserDetectorThread (which owns it) and waits with a
+                // bounded timeout -- see the design note above that function.
+                // UIA can see into element trees backed by non-HWND rendering
+                // surfaces that EnumChildWindows/EnumWindows above cannot, so
+                // this is a genuinely different technique, not a repeat of
+                // the Win32 scan already tried.
+                if (dialogValid) {
+                    std::string uiaResult = RunUiaLookupOnDialogThread(dialogHwnd);
+                    if (!uiaResult.empty()) {
+                        LogDbg("UIA cross-thread lookup matched: " + uiaResult);
+                        captured = uiaResult;
+                    }
+                }
+            }
             if (captured.empty()) {
                 // Wait for the MRU to show an entry that was written AFTER
                 // this dialog closed — NOT just "different from mruBefore".
@@ -2044,6 +2157,10 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
 void BrowserDetectorThread() {
     LogInfo("NetworkExfilMonitor: browser detector thread starting");
 
+    // Captured before the message loop starts so RunUiaLookupOnDialogThread()
+    // (called from per-dialog detached threads) can PostThreadMessage() here.
+    g_browserThreadId = GetCurrentThreadId();
+
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     bool comInitialized = (hr == S_OK || hr == S_FALSE);
     if (!comInitialized) {
@@ -2086,12 +2203,41 @@ void BrowserDetectorThread() {
         DWORD r = MsgWaitForMultipleObjects(0, nullptr, FALSE, 200, QS_ALLINPUT);
         if (r == WAIT_OBJECT_0 || r == WAIT_TIMEOUT) {
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                // Thread messages (posted via PostThreadMessage, hwnd==NULL)
+                // are never routed to a window procedure by DispatchMessageW
+                // -- there is no window to dispatch to -- so they must be
+                // handled directly here, before the normal
+                // TranslateMessage/DispatchMessageW path.
+                if (msg.message == WM_APP_UIA_FILENAME_LOOKUP) {
+                    auto* handoff = reinterpret_cast<std::shared_ptr<UiaFilenameRequest>*>(msg.lParam);
+                    if (handoff) {
+                        std::shared_ptr<UiaFilenameRequest> req = *handoff;
+                        delete handoff;  // Only frees the wrapper pointer; the
+                                         // UiaFilenameRequest itself lives on
+                                         // via shared_ptr refcounting until
+                                         // both this local `req` and the
+                                         // requester's copy go out of scope.
+                        std::string result;
+                        if (req && g_browserUia && IsWindow(req->dialogHwnd)) {
+                            IUIAutomationElement* element = nullptr;
+                            HRESULT ehr = g_browserUia->ElementFromHandle(
+                                reinterpret_cast<UIA_HWND>(req->dialogHwnd), &element);
+                            if (SUCCEEDED(ehr) && element) {
+                                result = FindFileNameFromDialog(g_browserUia, element);
+                                element->Release();
+                            }
+                        }
+                        if (req) req->resultPromise.set_value(result);
+                    }
+                    continue;
+                }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
         }
     }
 
+    g_browserThreadId = 0;
     UnhookWinEvent(hook);
     if (g_browserUia) { g_browserUia->Release(); g_browserUia = nullptr; }
     CoUninitialize();

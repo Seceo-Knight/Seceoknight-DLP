@@ -8,6 +8,37 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 Add safe cross-thread UIA lookup attempt for Teams file-attach detection (August 12, 2026)
+
+### Summary
+
+Follow-up to the previous fix, which made Teams' messaging_file_selection detection honest (no more false wrong-file misattribution) but left content inspection unresolved for that app specifically -- confirmed live that Teams' WebView2-hosted dialog exposes no Edit/file-list control to either the direct child-window scan or the owned-window scan, so every event still fell back to "(unknown)". This change adds one more real detection technique: a safe, cross-thread UI Automation (UIA) lookup.
+
+### Why this wasn't just re-enabling the old UIA call
+
+UIA calls were previously removed entirely from the per-dialog detached thread after they caused a confirmed production bug: a stuck COM/RPC call that only unblocked when the *next* dialog opened, causing every file's alert to permanently lag one dialog behind (misattributing file A's alert to file B's dialog, and so on). Calling `g_browserUia` directly from that thread is still forbidden.
+
+### What was added
+
+1. `g_browserThreadId` -- captured once at the top of `BrowserDetectorThread()` (the thread that owns `g_browserUia` and the only message pump in this component).
+2. `UiaFilenameRequest` / `RunUiaLookupOnDialogThread()` -- a per-dialog detached thread calls this instead of touching UIA itself. It posts a `WM_APP_UIA_FILENAME_LOOKUP` message (via `PostThreadMessage`) carrying a `shared_ptr`-wrapped request/promise pair to `BrowserDetectorThread`, then waits on the paired future with a bounded 300ms timeout. Ownership is shared_ptr-managed so either side finishing first (a timed-out requester, or a late-completing lookup) is safe -- no dangling pointer, no double-free, no leak under normal operation.
+3. `BrowserDetectorThread()`'s existing `PeekMessageW` loop now recognizes `WM_APP_UIA_FILENAME_LOOKUP` (thread messages bypass `DispatchMessageW`/window procedures entirely and must be handled inline), performs the actual `g_browserUia->ElementFromHandle()` + `FindFileNameFromDialog()` call **on the thread that already safely owns UIA**, and fulfills the promise.
+4. Wired into `HandleBrowserDialogFromHwnd`: when the Win32 scan finds nothing and the dialog HWND is still valid (even if just hidden, before full destruction), try the UIA cross-thread lookup before falling through to the Shell MRU wait.
+
+### Why this might actually work where Win32 scanning didn't
+
+UI Automation providers can expose elements backed by non-HWND rendering surfaces (e.g. content rendered via DirectComposition) that raw Win32 window enumeration (`EnumChildWindows`/`EnumWindows`) fundamentally cannot see. This is a genuinely different technique, not a repeat of the already-failed approach -- but it is **not guaranteed to succeed**. If Teams' dialog content isn't exposed through the UIA tree either, this will also come up empty, and the honest "(unknown)" fallback (from the previous fix) remains the safety net either way -- never a wrong-file misattribution, worst case an honest detection gap.
+
+### Verification
+
+Custom brace-balance checker showed a `+4` delta from this file's established baseline on first pass. Investigated thoroughly: manually audited all three edited regions for correct open/close nesting (all balanced), confirmed via raw diff that added lines contain exactly 14 `{` and 14 `}` (balanced), and confirmed the checker's own per-line state tracking shows a `in_string=True` artifact spanning ~300 lines **already present in the unmodified baseline file** (line ~1400-1700, pre-dating this change entirely) -- a known limitation of this heuristic checker with escaped-backslash sequences in Windows path string literals (already documented from an earlier session as "pre-existing string/comment noise"), not a real syntax defect. The authoritative check is the CI build itself (`build-windows-agent.yml`): it only commits an updated `seceoknight_agent.exe` back to the repo on successful compilation, so a real syntax error would be self-evident as "no new binary" rather than a silent bad deploy.
+
+### Deployment
+
+Agent-side C++ change. Wait for CI to rebuild `seceoknight_agent.exe` (auto-triggered on push), then re-run `install-agent.ps1` on the Windows endpoint to pick up the new binary. Re-test a Teams attachment: check the log for a new `"UIA cross-thread lookup matched: ..."` debug line. If present, content inspection should now work for Teams too. If absent, the event still safely falls back to "(unknown)" as before -- no regression either way.
+
+---
+
 ## 🐛 Fix messaging file-attach heuristic producing false wrong-file DLP verdicts (August 12, 2026)
 
 ### Summary
