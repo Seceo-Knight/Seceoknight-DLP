@@ -496,11 +496,34 @@ def _transform_messaging_app_control_config(config: Dict[str, Any]) -> Tuple[Dic
         "apps": ["teams.exe", "whatsapp.exe", ...],
         "exceptions": {"users": [...], "file_types": [...]}
     }
-    """
-    action = config.get("action", "alert")
-    if action not in {"block", "alert", "log", "quarantine"}:
-        action = "alert"
 
+    IMPORTANT -- the backend/reporting action here is ALWAYS "alert",
+    regardless of config.action. Confirmed live in production this was a
+    real bug the first time this function shipped: setting the backend
+    action to "block" whenever the admin picked Block on the form caused
+    DatabasePolicyEvaluator -> EventProcessor.evaluate_policies() to run
+    ActionExecutor.execute_block(), which unconditionally does
+    `event["blocked"] = True` with ZERO real-world verification (see
+    action_executor.py's execute_block() -- it's a purely declarative
+    "policy says block" flag, not a confirmation anything was actually
+    blocked). That's fine for event types where the server-side pipeline
+    performs or confirms the block (e.g. clipboard's synchronous
+    block-decision path). It's wrong here: messaging enforcement is 100%
+    agent-side -- GetMessagingVerdict()/FetchMessagingAppPolicy() in
+    agent.cpp already decided and executed (or didn't) BEFORE the event
+    was ever created, and the event's own honestly-reported `action` field
+    (BLOCK/ALERT/ALLOW, see EmitEvent() in network_exfil_monitor.cpp) is
+    already the ground truth, correctly written to `action_taken` at
+    ingest (events.py's create_event()). Using "block" as the backend
+    action here let the declarative flag stomp that honest value with a
+    literal "blocked" even for the honest-fallback ALERT case, where the
+    agent explicitly could NOT identify/inspect the file and never
+    terminated anything -- the user confirmed the file went through in
+    Teams while the dashboard falsely showed "blocked". Using "alert"
+    unconditionally avoids ever emitting a false block claim, while
+    leaving the admin's real Block/Alert choice fully intact and effective
+    where it actually matters -- the agent-side enforcement decision.
+    """
     conditions = {
         "match": "all",
         "rules": [
@@ -511,7 +534,7 @@ def _transform_messaging_app_control_config(config: Dict[str, Any]) -> Tuple[Dic
             }
         ],
     }
-    actions = {action: {}}
+    actions = {"alert": {}}
 
     return conditions, actions
 

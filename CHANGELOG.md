@@ -8,6 +8,45 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Fix Messaging App Attachment Control dashboard falsely showing "blocked" (August 12, 2026)
+
+### Summary
+
+Immediately after deploying the previous fix (below) and confirming it worked -- a real event now correctly matched "Messaging App Attachment Control" and the violations count incremented -- the admin reported a new, more serious problem: the event's badge showed "blocked" in red, but the file had genuinely gone through in Teams (attached and sent successfully). A DLP dashboard claiming something was blocked when it wasn't is a false-confidence bug, worse than the "0 violations" bug it replaced.
+
+### Root cause
+
+The previous fix's `_transform_messaging_app_control_config()` mapped the admin's UI choice (Alert/Block) directly into the backend policy's action list: `actions = {action: {}}`, where `action` could be `"block"`. Once the policy started matching (previous fix), every matching event ran through `EventProcessor.evaluate_policies()` -> `ActionExecutor.execute_block()` (`action_executor.py:354`), which does:
+
+```python
+async def execute_block(self, event: Dict, action: Dict) -> BlockResult:
+    event["blocked"] = True
+    ...
+    return BlockResult(..., success=True, blocked=True, ...)
+```
+
+This is a purely declarative "policy says block" flag with **zero real-world verification** -- appropriate for event types where the server-side pipeline actually performs or confirms a block (e.g. clipboard's synchronous block-decision path). It is categorically wrong for messaging: enforcement here is 100% agent-side. `GetMessagingVerdict()`/`FetchMessagingAppPolicy()` in `agent.cpp` already decide and execute (or don't) the real Block/Alert action *before the event is even created and sent*. The event's own honestly-reported `action` field (`BLOCK`/`ALERT`/`ALLOW` -- see `EmitEvent()` in `network_exfil_monitor.cpp`) is already the ground truth, and gets correctly written to `action_taken` at ingest in `create_event()`. Declaratively calling `execute_block()` afterward let the server stomp that honest value with a hardcoded `"blocked"` string in `_process_event_background()`'s merge logic (`events.py`) -- even for the honest-fallback ALERT event, where the agent explicitly could not identify or inspect the selected file and never terminated anything.
+
+This is the same class of bug previously fixed for USB (task: "Fix USB block event lying about success") -- declarative policy intent getting confused with confirmed real-world enforcement -- just not yet covered for this newly-wired policy type.
+
+### Fix
+
+`_transform_messaging_app_control_config()` now always returns `actions = {"alert": {}}`, regardless of `config.action`. This is intentional and permanent, not a placeholder: the backend/reporting action for this policy type should never be "block", because the server has no real enforcement capability to confirm for an event that's already fully decided by the time it arrives. The admin's Block/Alert selection remains fully effective where it actually matters -- the agent's local enforcement decision, delivered via `GET /agents/{id}/messaging-app-policy` -- completely unaffected by this change.
+
+### Verification
+
+`ast.parse()` clean. Confirmed via code read that `execute_block()` has no event-type-aware guard and would behave identically for any policy type -- this fix has to live in the transform (never emit `"block"` for this policy type), not in the shared executor.
+
+Note: the two test events already created in Mongo before this fix (during testing) will keep showing "blocked" historically -- this fix only prevents new occurrences going forward, it does not rewrite existing documents.
+
+### Deployment
+
+1. `git pull` (image-based deployment: wait for CI to publish the new `manager` image, then `docker compose -f docker-compose.prod.yml pull manager && docker compose -f docker-compose.prod.yml up -d manager`, or run `update.sh`).
+2. Re-open "Messaging App Attachment Control" in the dashboard and click through to "Update Policy" again (same as before -- the fix only regenerates a policy's `actions`/`conditions` on save, not retroactively).
+3. Re-test a Teams attachment; the new event should show `ALERT`, never a false "blocked".
+
+---
+
 ## 🐛 Fix Messaging App Attachment Control policy stuck at "0 violations" despite real detections (August 12, 2026)
 
 ### Summary
