@@ -8,6 +8,45 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Fix Messaging App Attachment Control policy stuck at "0 violations" despite real detections (August 12, 2026)
+
+### Summary
+
+Fourth round on this feature. With the prior three fixes deployed, a real `messaging_file_selection` event was confirmed reaching MongoDB correctly (verified via direct `mongosh` query) and confirmed visible in the dashboard's Events page (verified via a direct authenticated `curl` against `GET /api/v1/events/`, bypassing the browser entirely). However, the admin reported the event wasn't being attributed to the "Messaging App Attachment Control" policy, and that policy's row on the Policies page showed "0 violations" even after the detection fired.
+
+### Root cause
+
+`transform_frontend_config_to_backend()` in `server/app/utils/policy_transformer.py` has a dedicated branch for most policy types (`clipboard_monitoring`, `usb_device_monitoring`, `email_send_prevention`, etc.) that converts the admin's UI config into a real `conditions.rules` list. `messaging_app_control` had no branch, so it fell through to the generic `else`:
+
+```python
+else:
+    # Unknown type, return empty defaults
+    return ({"match": "all", "rules": []}, {"log": {}})
+```
+
+Every `messaging_app_control` policy was therefore persisted with `conditions = {"match": "all", "rules": []}`. `DatabasePolicyEvaluator.evaluate_event()` skips any policy with empty rules unconditionally (`if not conditions.get("rules"): continue`) -- before comparing a single field. So no `messaging_file_selection` event could ever match this policy, regardless of how many managed-app file attachments the agent detected. This is why `matched_policies`/`policy_id` stayed empty on the event doc, and why the Policies page's violations aggregation (which counts events with a non-empty `matched_policies`) correctly, but misleadingly, showed 0.
+
+This is a separate, narrower gap from the messaging App *enforcement* path (block/alert per configured app), which is agent-side and was already working correctly: the Windows agent polls `GET /agents/{id}/messaging-app-policy` directly and decides block/alert locally via `GetMessagingVerdict()`/`CanonicalMessagingAppName()` in `agent.cpp` before the event is ever sent. What was missing was purely the server-side bookkeeping that attributes an already-detected event back to the policy that's "responsible" for it, for reporting purposes.
+
+### Fix
+
+Added `_transform_messaging_app_control_config()` to `server/app/utils/policy_transformer.py` and registered it in `transform_frontend_config_to_backend()`'s dispatch. It matches any event with `event_subtype == "messaging_file_selection"` -- the one and only subtype `network_exfil_monitor.cpp` emits for this feature (both the normal classified-file path and the honest-fallback "(unknown)" detection-gap path use the same subtype), and applies the admin's configured action (`alert` or `block`) as the policy's own action for reporting purposes.
+
+The per-app allow list itself is deliberately not re-checked server-side: the agent already filters to only managed apps before emitting the event, and the raw process name isn't reliably available server-side (`EventCreate` doesn't declare a `channel`/`process_name` field for this event type) -- re-deriving it here would be redundant at best.
+
+### Verification
+
+`ast.parse()` clean on `policy_transformer.py`. Confirmed via code read that `evaluate_event()`'s field-mapping (`database_policy_evaluator.py`) already supports `event_subtype` out of the box (`"event_subtype": ["event.subtype", "event_subtype"]`), and that `_build_processor_payload()` in `events.py` already threads `event.event_subtype` into `payload["event"]["subtype"]` for every event that carries one -- so no other file needed to change.
+
+### Deployment
+
+**This fix only affects policies created or edited AFTER it's deployed** -- `transform_frontend_config_to_backend()` only runs at policy create/update time, not retroactively. After redeploying the server:
+1. Open the existing "Messaging App Attachment Control" policy in the dashboard.
+2. Click Save (no changes needed -- just re-submitting it re-runs the transform and backfills real `conditions.rules` onto the existing policy row).
+3. Re-test a Teams file attachment; the event should now carry a `policy_id`/`matched_policies` entry, and the Policies page's violations count should increment.
+
+---
+
 ## 🐛 Fix messaging-app file selection silently producing zero events for Teams' WebView2 dialog (August 12, 2026)
 
 ### Summary

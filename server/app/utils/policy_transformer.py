@@ -39,6 +39,8 @@ def transform_frontend_config_to_backend(
         return _transform_file_identity_denylist_config(config)
     elif policy_type == "email_send_prevention":
         return _transform_email_config(config)
+    elif policy_type == "messaging_app_control":
+        return _transform_messaging_app_control_config(config)
     else:
         # Unknown type, return empty defaults
         return (
@@ -448,6 +450,67 @@ def _transform_email_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dic
 
     if action not in {"block", "alert", "log"}:
         action = "block"
+    actions = {action: {}}
+
+    return conditions, actions
+
+
+def _transform_messaging_app_control_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform messaging app attachment control config to backend format.
+
+    Enforcement (block/alert per configured app) is agent-side: the Windows
+    agent polls GET /agents/{id}/messaging-app-policy directly (see
+    FetchMessagingAppPolicy()/GetMessagingVerdict() in agent.cpp) and makes
+    the block/alert decision locally before the event ever reaches the
+    server -- this policy's Policy.config is never read by
+    DatabasePolicyEvaluator for that live decision.
+
+    This transform exists purely so a real conditions.rules gets persisted.
+    Previously messaging_app_control fell through to the "unknown type"
+    branch below -> empty rules -> evaluate_event() skips the policy
+    unconditionally (`if not conditions.get("rules"): continue`). Confirmed
+    live in production: a real messaging_file_selection event (Teams
+    file-attach, including the honest-fallback "(unknown)" detection-gap
+    path) reached MongoDB correctly, but policy_id/matched_policies stayed
+    empty forever, so the Policies page's violations count for "Messaging
+    App Attachment Control" stayed stuck at 0 even while real detections
+    were happening.
+
+    Matches on event_subtype alone (not event_type/channel) because
+    "messaging_file_selection" is the one and only subtype
+    network_exfil_monitor.cpp emits for this feature -- see
+    HandleBrowserDialogFromHwnd() in network_exfil_monitor.cpp, where both
+    the honest-fallback branch and the normal classified-file branch set
+    f.eventSubtype = "messaging_file_selection". The per-app allow/deny
+    list itself (config.apps) is intentionally NOT re-checked here: the
+    agent already filtered to only managed apps before ever emitting the
+    event (GetMessagingVerdict()/CanonicalMessagingAppName()), and the raw
+    process name isn't reliably available server-side (EventCreate doesn't
+    declare a "channel"/"process_name" field for this event type), so
+    re-deriving it here would be redundant at best and wrong at worst.
+
+    Frontend format:
+    {
+        "action": "alert" | "block",
+        "apps": ["teams.exe", "whatsapp.exe", ...],
+        "exceptions": {"users": [...], "file_types": [...]}
+    }
+    """
+    action = config.get("action", "alert")
+    if action not in {"block", "alert", "log", "quarantine"}:
+        action = "alert"
+
+    conditions = {
+        "match": "all",
+        "rules": [
+            {
+                "field": "event_subtype",
+                "operator": "equals",
+                "value": "messaging_file_selection",
+            }
+        ],
+    }
     actions = {action: {}}
 
     return conditions, actions
