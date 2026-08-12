@@ -4407,24 +4407,35 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  // whoever reviews these events. contentInspectionStatus ==
                  // "unavailable" now surfaces that gap explicitly instead.
                  bool contentUnavailable = (event.contentInspectionStatus == "unavailable");
+                 // CONFIRMED LIVE: for some printer/driver classes Windows
+                 // itself overwrites the spooler job's document name with
+                 // the generic "Local Downlevel Document" before the agent
+                 // ever sees it (see print_monitor.h's documentNameInferred
+                 // comment). print_monitor.cpp falls back to the foreground
+                 // window's title in that case -- likely correct, but a
+                 // heuristic. Label it plainly rather than presenting a
+                 // guess with the same confidence as a real API-sourced
+                 // document name.
+                 std::string displayDocName = event.documentName +
+                     (event.documentNameInferred ? " (inferred from active window)" : "");
                  std::string desc;
                  if (event.actionTaken == "Block" && event.blockReason == "printer_control")
-                     desc = "PRINT BLOCKED (printer control): " + event.documentName + " -> " + event.printerName;
+                     desc = "PRINT BLOCKED (printer control): " + displayDocName + " -> " + event.printerName;
                  else if (event.actionTaken == "Block")
-                     desc = "PRINT JOB BLOCKED: " + event.documentName + " — " + event.category + " data";
+                     desc = "PRINT JOB BLOCKED: " + displayDocName + " — " + event.category + " data";
                  else if (contentUnavailable)
-                     desc = "Print job: " + event.documentName + " -> " + event.printerName +
+                     desc = "Print job: " + displayDocName + " -> " + event.printerName +
                             " (content NOT verified -- inspection could not read the job's real "
                             "data, this decision is based on filename only)";
                  else
-                     desc = "Print job: " + event.documentName + " -> " + event.printerName;
+                     desc = "Print job: " + displayDocName + " -> " + event.printerName;
                  json.AddString("description", desc);
                  json.AddString("severity", event.actionTaken == "Block" ? "high" :
                                             (contentUnavailable ? "medium" : "low"));
                  json.AddString("action", event.actionTaken == "Block" ? "blocked" : "allowed");
                  json.AddString("classification_level", event.category);
                  json.AddBool("blocked", event.actionTaken == "Block");
-                 json.AddString("file_path", event.documentName);
+                 json.AddString("file_path", displayDocName);
                  json.AddString("printer_name", event.printerName);
                  json.AddString("block_reason", event.blockReason);
                  json.AddString("content_inspection_status", event.contentInspectionStatus);

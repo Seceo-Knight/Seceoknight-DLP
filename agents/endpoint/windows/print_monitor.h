@@ -38,6 +38,17 @@ struct PrintEvent {
     // decision, not a verified one. The dashboard/severity should treat this
     // distinctly from a genuinely-inspected clean result.
     std::string contentInspectionStatus = "not_configured";
+    // CONFIRMED LIVE: for some printer/driver classes (v4/XPS-class driver
+    // receiving a legacy GDI job), Windows itself overwrites the spooler
+    // job's real document name with the generic literal "Local Downlevel
+    // Document" before the agent ever sees it -- not something this agent
+    // parses wrong, JOB_INFO_1A.pDocument genuinely contains that string.
+    // When true, documentName was NOT read from the print job itself but
+    // inferred as a best-effort fallback from the foreground window's title
+    // at detection time -- likely correct, but a heuristic, not an
+    // API-sourced fact. The dashboard/description should label it as such
+    // rather than presenting it with the same confidence as a real name.
+    bool documentNameInferred = false;
 };
 
 class PrintMonitor {

@@ -171,6 +171,53 @@ void PrintMonitor::ProcessPendingJobs() {
                     std::string printerName = printers[i].pPrinterName ? printers[i].pPrinterName : "Unknown";
                     std::string docName = jobs[j].pDocument ? jobs[j].pDocument : "Unknown";
                     std::string jobUser = jobs[j].pUserName ? jobs[j].pUserName : username;
+
+                    // CONFIRMED LIVE: for this printer's driver class (v4/
+                    // XPS-class driver receiving a legacy GDI/"downlevel"
+                    // job), Windows itself renames the spooler job's
+                    // document name to the generic literal string "Local
+                    // Downlevel Document" during its internal XPS
+                    // conversion shim -- this is not something our code
+                    // parses wrong, JOB_INFO_1A.pDocument genuinely
+                    // contains that string, straight from the OS. Every
+                    // event for this printer was showing that placeholder
+                    // instead of anything identifying which document was
+                    // printed. There's no public spooler API that recovers
+                    // the original app-supplied title once Windows has
+                    // overwritten it (that would need a print processor/
+                    // port monitor DLL sitting earlier in the pipeline --
+                    // the same driver-signing-gated undertaking as the
+                    // content-extraction gap). Best achievable fallback
+                    // with what's available here: the foreground window's
+                    // title at the moment the job is first observed is
+                    // very likely the source application's document (e.g.
+                    // "salary_sheet.txt - Notepad"), since print jobs are
+                    // picked up within ~2s of submission via the
+                    // notification handler or this poll. Explicitly a
+                    // heuristic, not an authoritative API-sourced name --
+                    // labelled as such downstream -- but strictly more
+                    // useful than a placeholder that's identical for every
+                    // job this printer will ever produce.
+                    bool docNameIsGenericPlaceholder =
+                        (docName.empty() || docName == "Unknown" ||
+                         docName == "Local Downlevel Document");
+                    bool docNameIsInferred = false;
+                    if (docNameIsGenericPlaceholder) {
+                        HWND fg = GetForegroundWindow();
+                        if (fg) {
+                            char fgTitle[512] = {0};
+                            if (GetWindowTextA(fg, fgTitle, sizeof(fgTitle)) > 0) {
+                                std::string title(fgTitle);
+                                // Skip shell/desktop surfaces -- not a
+                                // meaningful document title for anyone.
+                                if (!title.empty() && title != "Program Manager" &&
+                                    title != "Desktop") {
+                                    docName = title;
+                                    docNameIsInferred = true;
+                                }
+                            }
+                        }
+                    }
                     int pages = jobs[j].TotalPages;
 
                     // Hash the spooled data file BEFORE any
@@ -262,6 +309,7 @@ void PrintMonitor::ProcessPendingJobs() {
                     event.blockReason = deviceBlocked ? "printer_control"
                                         : (contentBlocked ? "content" : "");
                     event.contentInspectionStatus = contentStatus;
+                    event.documentNameInferred = docNameIsInferred;
                     event.pages = pages;
                     event.jobId = jobId;
                     event.fileHash = fileHash;
