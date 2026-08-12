@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Fix Messaging App Attachment Control: "teams.exe" policy doesn't match the ms-teams.exe process (August 12, 2026)
+
+### Summary
+
+Direct follow-up to the WebView2/owner-process fix above. With that fix deployed, the agent's log now correctly attributed a Teams file dialog to `ms-teams.exe` -- but attaching the sensitive test file still produced zero events. `GetMessagingVerdict("ms-teams.exe")` was still returning `managed=false`.
+
+### Root cause
+
+The admin's policy had exactly one app configured: `teams.exe` -- the only Teams option `MessagingAppControlPolicyForm.tsx`'s chip list offers. The process Microsoft actually ships for the current "new Teams" client is `ms-teams.exe`, an internal rename an admin has no way to know about. `GetMessagingVerdict()`'s exact-string set lookup (`messagingApps.count(exeLower)`) silently missed every real-world Teams attachment as a result -- not a detection bug this time, a naming mismatch between what the dashboard lets you configure and what actually runs.
+
+### Fix
+
+`agent.cpp`: new `CanonicalMessagingAppName()` maps `teams.exe` / `ms-teams.exe` / `msteams.exe` to one identity. `GetMessagingVerdict()` now does a symmetric check -- canonicalizing both the incoming process name and each configured app name before comparing -- so it no longer matters which of the known Teams exe-name variants an admin happened to pick versus which variant is actually installed.
+
+### Verification
+
+Brace-balance check on `agent.cpp`: unchanged (paren=-2 brace=-5 bracket=-1).
+
+### Deployment
+
+Agent-only change. Reinstall the Windows agent via `install-agent.ps1`; no server redeploy or policy change needed -- your existing `teams.exe` policy now covers `ms-teams.exe` automatically.
+
+---
+
 ## 🐛 Fix Messaging App Attachment Control never firing for new Teams (August 12, 2026)
 
 ### Summary
