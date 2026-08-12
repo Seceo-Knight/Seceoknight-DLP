@@ -1377,6 +1377,22 @@ async def get_printer_policy(
         if content_inspection else "off"
     if content_mode not in ("enforce", "audit"):
         content_mode = "enforce"
+    # "allow" | "block" -- what to do when content inspection is active but
+    # genuinely could not read a job's real spooled data (as opposed to
+    # reading it and finding it clean). Defaults to "allow" so this is
+    # non-breaking for every existing deployment. CONFIRMED LIVE: a real
+    # printer/driver/OS combination was found where no spool file is ever
+    # observable on disk for ANY print job, meaning "unavailable" isn't a
+    # rare edge case for that endpoint -- it's the permanent state. Fail-
+    # open there means content_inspection provides zero actual protection
+    # while looking configured; this lets an admin choose fail-closed
+    # instead, matching CyberSentinel's own stated principle for file
+    # extraction ("content we could not fully inspect must never be
+    # treated as clean") applied to the print channel.
+    unknown_content_action = str((content_policy.config or {}).get("unknownContentAction") or "allow").lower() \
+        if content_inspection else "allow"
+    if unknown_content_action not in ("allow", "block"):
+        unknown_content_action = "allow"
 
     return {
         "enforced": enforced,
@@ -1385,6 +1401,7 @@ async def get_printer_policy(
         "printers": printers,
         "content_inspection": content_inspection,
         "content_mode": content_mode,
+        "unknown_content_action": unknown_content_action,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 

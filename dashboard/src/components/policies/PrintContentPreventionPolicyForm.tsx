@@ -10,6 +10,7 @@ interface PrintContentPreventionPolicyFormProps {
 export default function PrintContentPreventionPolicyForm({ config: rawConfig, onChange }: PrintContentPreventionPolicyFormProps) {
   const config: PrintContentPreventionConfig = {
     mode: rawConfig?.mode ?? 'audit',
+    unknownContentAction: rawConfig?.unknownContentAction ?? 'allow',
   }
 
   return (
@@ -49,6 +50,47 @@ export default function PrintContentPreventionPolicyForm({ config: rawConfig, on
             <div>
               <div className="text-white font-medium text-sm">Audit</div>
               <div className="text-muted-foreground/70 text-xs">Log an event on sensitive content but let the job print -- validate before enforcing</div>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-200 mb-3">
+          When content genuinely can&apos;t be read
+        </label>
+        <div className="p-3 mb-3 rounded-lg bg-blue-900/20 border border-blue-500/30 text-xs text-blue-200/90">
+          Some printer drivers never produce a readable spool file at all -- not a bug in one specific job, a
+          permanent gap for that printer. This setting controls what happens for a job the agent genuinely
+          could not verify, as distinct from one it inspected and found clean.
+        </div>
+        <div className="space-y-2">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+            <input
+              type="radio"
+              name="print-content-unknown-action"
+              value="allow"
+              checked={config.unknownContentAction === 'allow'}
+              onChange={() => onChange({ ...config, unknownContentAction: 'allow' })}
+              className="w-4 h-4 text-indigo-400"
+            />
+            <div>
+              <div className="text-white font-medium text-sm">Allow (default)</div>
+              <div className="text-muted-foreground/70 text-xs">Let the job print -- consistent with how inspection has always behaved when content can&apos;t be read</div>
+            </div>
+          </label>
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+            <input
+              type="radio"
+              name="print-content-unknown-action"
+              value="block"
+              checked={config.unknownContentAction === 'block'}
+              onChange={() => onChange({ ...config, unknownContentAction: 'block' })}
+              className="w-4 h-4 text-indigo-400"
+            />
+            <div>
+              <div className="text-white font-medium text-sm">Block (strict / fail-closed)</div>
+              <div className="text-muted-foreground/70 text-xs">Treat unverifiable content as a precaution -- cancel the job rather than pass content nobody actually checked</div>
             </div>
           </label>
         </div>

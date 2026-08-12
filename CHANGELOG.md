@@ -8,6 +8,38 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🛡️ Add fail-closed option for unverifiable print content (August 12, 2026)
+
+### Summary
+
+Direct follow-up to the print content-inspection honesty fix above, after being asked what an actually enterprise-grade answer looks like given that reading the SHARP AR-6020N's real content may never be solvable without a custom port-monitor/print-processor driver (a multi-week undertaking needing signing and tooling this environment doesn't have). The real gap wasn't just visibility -- it's that even fully aware a print job's content was never verified, the agent still let it print by default, every time, unconditionally. That's not a real enforcement posture for a security product; it's a permanent, silent no-op dressed up as a configured control for any printer that hits this class of gap.
+
+CyberSentinel's own July 2026 changelog states the governing principle for exactly this situation, applied to file extraction: "content we could not fully inspect must never be treated as clean -- classification reports what it saw; policy decides what to do about not knowing." SeceoKnight already applies that principle to file transfers via `extraction_status`. This closes the same gap for print.
+
+### What was added
+
+An admin-configurable `unknownContentAction` (`allow` | `block`, default `allow` -- fully non-breaking) on the `print_content_prevention` policy type. When set to `block`, a print job whose content genuinely could not be read (as opposed to read-and-found-clean) is treated as a precautionary block instead of a silent pass, on the reasoning that unverified content in a strict environment is safer refused than assumed safe.
+
+**Server** (`server/app/api/v1/agents.py`, `GET /{agent_id}/printer-policy`): reads `unknownContentAction` off the `print_content_prevention` Policy row's config, validated to `allow`/`block`, returned as `unknown_content_action`.
+
+**Agent** (`agents/endpoint/windows/agent.cpp`): new cached field `printUnknownContentAction`, populated by `FetchPrinterPolicy()` alongside the existing `printContentMode`. `EvaluatePrintContent()` now forces `block = true` when content wasn't genuinely read AND the setting is `block` AND the server's own filename-based verdict didn't already say block -- deliberately scoped to "content unreadable locally", not "DLP server unreachable" (`status != 200` above it keeps its existing, separate fail-open behavior -- conflating the two would make one setting mean two different failure modes at once). Respects the existing audit-mode gate below it, so `audit` + `unknownContentAction=block` correctly logs "would block" without actually cancelling the job, consistent with how audit mode already behaves everywhere else in this policy type.
+
+**Dashboard**: `PrintContentPreventionConfig` gained `unknownContentAction`; `PrintContentPreventionPolicyForm.tsx` got a new radio group explaining the tradeoff in plain terms, with both `getDefaultConfig()` implementations and `formatPolicyConfig()` in `policyUtils.ts` updated to match.
+
+### Verification
+
+Brace-balance on `agent.cpp`: unchanged (paren=-2 brace=-5 bracket=-1). `python3 -c "import ast; ast.parse(...)"` clean on `agents.py`. `npx tsc --noEmit`: 24 errors, identical to the established baseline, confirmed via grep that none are in any file this change touched.
+
+### What this does and doesn't do
+
+This does not solve the SHARP AR-6020N's underlying spool-file mystery -- that's still open, and a real fix (port monitor or print-processor DLL) is a genuinely separate, much larger undertaking. What it does: turns "we silently allow what we can't verify, always" into an actual admin decision, so a strict deployment can choose to refuse unverified print jobs rather than have content inspection be effectively decorative for whatever fraction of printers hit this gap.
+
+### Deployment
+
+Server + agent change (touches both `agents.py` and `agent.cpp`). Redeploy the server via `update.sh`, then reinstall the Windows agent. Defaults to `allow` for every existing policy -- nothing changes in behavior unless an admin explicitly opts a `print_content_prevention` policy into `unknownContentAction: block`.
+
+---
+
 ## ✨ Add dedicated Email DLP (Outbound) policy type (August 12, 2026)
 
 ### Summary

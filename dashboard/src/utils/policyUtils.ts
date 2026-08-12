@@ -226,7 +226,7 @@ export const formatPolicyConfig = (policy: Policy): string => {
 
       case 'print_content_prevention': {
         const c = config as PrintContentPreventionConfig
-        return `Mode: ${c.mode || 'audit'}`
+        return `Mode: ${c.mode || 'audit'} | Unknown content: ${c.unknownContentAction || 'allow'}`
       }
 
       case 'messaging_app_control': {
@@ -671,7 +671,7 @@ const getDefaultConfig = (type: PolicyType): any => {
         block_nearby_sharing: false
       }
     case 'print_content_prevention':
-      return { mode: 'audit' }
+      return { mode: 'audit', unknownContentAction: 'allow' }
     case 'messaging_app_control':
       return {
         action: 'alert',

@@ -2715,6 +2715,12 @@ static ClassificationResult Classify(const std::string& content,
      std::set<std::string> sanctionedPrinters;           // enabled allowlist printer names (UPPERCASE)
      std::atomic<bool> printContentInspection{false};    // a print_content_prevention policy is active
      std::string printContentMode;                       // "enforce" | "audit" | "off"
+     // "allow" | "block" -- enterprise-grade fail-closed option (CONFIRMED
+     // LIVE need: a real printer/driver/OS combination where content
+     // inspection can NEVER read a job's real data, making fail-open a
+     // permanent, silent no-op for that printer rather than a rare edge
+     // case). Defaults to "allow" -- matches server default, non-breaking.
+     std::string printUnknownContentAction = "allow";
      std::mutex printerPolicyMutex;
      // SHA-256 of the last spooled document read, keyed by job id -- computed
      // once during content inspection and reused by the print event callback
@@ -5079,6 +5085,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
 
              bool contentInspection = ExtractJsonBool(response, "content_inspection");
              std::string contentMode = ToLower(config.ExtractJsonValue(response, "content_mode"));
+             std::string unknownContentAction = ToLower(config.ExtractJsonValue(response, "unknown_content_action"));
+             if (unknownContentAction != "block") unknownContentAction = "allow";   // safe default on missing/garbled field
 
              {
                  std::lock_guard<std::mutex> lock(printerPolicyMutex);
@@ -5086,6 +5094,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  printerControlScope = scope;
                  sanctionedPrinters = printers;
                  printContentMode = contentMode;
+                 printUnknownContentAction = unknownContentAction;
              }
              printerControlEnforced.store(enforced);
              printContentInspection.store(contentInspection);
@@ -5311,9 +5320,33 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
 
          bool block = config.ExtractJsonValue(response, "action") == "block";
          std::string cmode;
+         std::string ucAction;
          {
              std::lock_guard<std::mutex> lock(printerPolicyMutex);
              cmode = printContentMode;
+             ucAction = printUnknownContentAction;
+         }
+         // Enterprise-grade fail-closed option (CONFIRMED LIVE need -- see
+         // this function's class comment). When content genuinely couldn't
+         // be read, the server verdict above was necessarily computed from
+         // the docName fallback, not real document text -- effectively "we
+         // don't know, not verified-clean". Default (ucAction=="allow")
+         // preserves today's behavior exactly. An admin running a stricter
+         // posture can flip this so an unverifiable job is treated as a
+         // precautionary block instead of a silent pass -- matching
+         // CyberSentinel's own stated principle for file extraction
+         // ("content we could not fully inspect must never be treated as
+         // clean") applied to the print channel. Deliberately scoped to
+         // "content unreadable locally" only, NOT server-unreachable
+         // (status != 200 above) -- that's governed separately from
+         // wherever the general DLP-server-outage fail-open policy lives,
+         // and conflating the two would make this setting mean two very
+         // different things at once.
+         if (!realContentRead && ucAction == "block" && !block) {
+             block = true;
+             logger.Warning("PRINT_CONTENT_UNKNOWN_BLOCKED: " + docName + " on " + printerName +
+                 " -- content could not be verified and unknownContentAction=block is configured; "
+                 "blocking as a precaution rather than passing unverified content.");
          }
          if (block && cmode == "audit") {
              logger.Info("PRINT_CONTENT_AUDIT: would block " + docName +

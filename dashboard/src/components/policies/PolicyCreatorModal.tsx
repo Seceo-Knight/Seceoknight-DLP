@@ -193,7 +193,8 @@ const getDefaultConfig = (type: PolicyType): TraditionalPolicyConfig | {} => {
 
     case 'print_content_prevention':
       return {
-        mode: 'audit'
+        mode: 'audit',
+        unknownContentAction: 'allow'
       } as PrintContentPreventionConfig
 
     case 'messaging_app_control':

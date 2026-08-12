@@ -176,9 +176,19 @@ export interface WirelessTransferControlConfig {
 }
 
 export type PrintContentMode = 'enforce' | 'audit'
+// "allow" | "block" -- what to do when inspection is active but genuinely
+// could NOT read a job's real spooled content (as opposed to reading it and
+// finding it clean). Added after a real production investigation found a
+// printer/driver/OS combination where no spool file is EVER observable on
+// disk, making "unavailable" a permanent state for that printer rather than
+// a rare edge case -- fail-open there meant content inspection provided
+// zero actual protection while still looking fully configured. Defaults to
+// "allow" (non-breaking); admins running a stricter posture can flip it.
+export type PrintUnknownContentAction = 'allow' | 'block'
 
 export interface PrintContentPreventionConfig {
   mode: PrintContentMode
+  unknownContentAction?: PrintUnknownContentAction
 }
 
 export type MessagingAppAction = 'alert' | 'block'
