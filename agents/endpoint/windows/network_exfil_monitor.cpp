@@ -1599,6 +1599,59 @@ static std::string GetLastOpenedFileFromMRU(FILETIME* outWriteTime = nullptr) {
     return bestPath;
 }
 
+// CONFIRMED LIVE: for Microsoft Teams' WebView2-hosted file-open dialog,
+// neither the Win32 child-window scan NOR the Shell OpenSavePidlMRU
+// registry mechanism above (which both work reliably for Chrome's own
+// sandboxed-helper dialog) ever showed which file was selected -- the
+// dialog is a genuine native common-dialog window (class #32770, so it's
+// not a custom in-app control), it just doesn't appear to record through
+// the same Explorer MRU path a normal GetOpenFileName/IFileOpenDialog call
+// does, for reasons not diagnosable further without invasive per-machine
+// tooling this project has deliberately ruled out for production fleet use.
+//
+// Best-effort last resort: opening a file to attach it necessarily touches
+// that file's last-ACCESS timestamp, even when nothing else observable
+// does. Scans the handful of folders a user is realistically attaching a
+// file from (Desktop/Documents/Downloads, non-recursive -- deliberately
+// shallow and fast) for whichever regular file's last-access time is
+// newest and strictly after the dialog closed. This is a heuristic, not an
+// authoritative capture -- a false hit is possible if another file in one
+// of those folders happens to be touched by something else in the same
+// narrow window -- so callers must not treat it with the same confidence
+// as an MRU-confirmed filename.
+static std::string FindRecentlyAccessedCandidateFile(const FILETIME& afterTime) {
+    std::string bestPath;
+    FILETIME bestTime{};
+    bool haveBest = false;
+
+    wchar_t pathBuf[MAX_PATH] = {0};
+    std::vector<std::wstring> folders;
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, pathBuf)))
+        folders.push_back(pathBuf);
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PERSONAL, nullptr, 0, pathBuf)))
+        folders.push_back(pathBuf);   // "Documents"
+    if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PROFILE, nullptr, 0, pathBuf)))
+        folders.push_back(std::wstring(pathBuf) + L"\\Downloads");
+
+    for (const auto& folder : folders) {
+        WIN32_FIND_DATAW fd;
+        std::wstring pattern = folder + L"\\*";
+        HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
+        if (h == INVALID_HANDLE_VALUE) continue;
+        do {
+            if (fd.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_HIDDEN)) continue;
+            if (CompareFileTime(&fd.ftLastAccessTime, &afterTime) <= 0) continue;
+            if (!haveBest || CompareFileTime(&fd.ftLastAccessTime, &bestTime) > 0) {
+                bestTime = fd.ftLastAccessTime;
+                bestPath = WideToUtf8(folder + L"\\" + fd.cFileName);
+                haveBest = true;
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    return bestPath;
+}
+
 // Polls the file dialog until the user picks a file (or closes it),
 // then classifies content and emits an event.  Runs on a detached thread.
 static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
@@ -1729,6 +1782,19 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
                             "close within 10s — not guessing a filename "
                             "(mruBefore was: " +
                             (mruBefore.empty() ? "(empty)" : mruBefore) + ")");
+                    // CONFIRMED LIVE: Teams' WebView2-hosted dialog hits
+                    // exactly this path every time -- see
+                    // FindRecentlyAccessedCandidateFile's comment. Last
+                    // resort before giving up entirely: a file's last-
+                    // access time still gets touched by opening it to
+                    // attach it, even when neither of the two mechanisms
+                    // above ever fire for this dialog type.
+                    std::string guess = FindRecentlyAccessedCandidateFile(dialogCloseTime);
+                    if (!guess.empty()) {
+                        LogDbg("Recently-accessed-file fallback matched: " + guess +
+                               " (heuristic, not MRU-confirmed)");
+                        captured = guess;
+                    }
                 }
             }
             break;
@@ -1737,7 +1803,38 @@ static void HandleBrowserDialogFromHwnd(HWND dialogHwnd,
 
     if (comInited) CoUninitialize();
 
-    if (captured.empty()) return;
+    // CONFIRMED LIVE: for a managed messaging app, filename resolution can
+    // fail completely (see FindRecentlyAccessedCandidateFile's comment --
+    // Teams' WebView2 dialog hits this every time). Previously this was a
+    // silent `return` -- zero events, indistinguishable from "nothing
+    // happened" even though a managed app's attachment dialog genuinely
+    // was used. Same honesty principle already applied to print content
+    // inspection (content_inspection_status="unavailable" instead of a
+    // silent clean allow): surface that detection fired but couldn't
+    // identify what was selected, rather than saying nothing at all.
+    // Browsers intentionally keep the original silent-return behavior here
+    // -- that path is separately verified working via MRU/Win32 scan for
+    // every browser tested this session, so this is scoped to the
+    // specific gap just confirmed, not a blanket behavior change.
+    if (captured.empty()) {
+        if (mv.managed) {
+            EventFields f;
+            f.eventSubtype = "messaging_file_selection";
+            f.channel      = "MESSAGING";
+            f.processName  = browserExe;
+            f.pid          = browserPid;
+            f.fileName     = "(unknown)";
+            f.filePath     = "";
+            f.action       = "ALERT";
+            f.severity     = "medium";
+            f.reason       = "Managed messaging app (" + browserExe + ") file-attach dialog was used, "
+                              "but the selected file could not be identified -- content was NOT inspected. "
+                              "This is a detection gap for this app's dialog implementation, not a "
+                              "verified-clean allow.";
+            EmitEvent(f);
+        }
+        return;
+    }
 
     // Resolve to full path
     std::string resolved = ResolveExistingPath(captured);
