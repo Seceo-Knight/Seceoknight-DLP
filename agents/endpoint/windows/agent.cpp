@@ -5098,10 +5098,18 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              }
              printerControlEnforced.store(enforced);
              printContentInspection.store(contentInspection);
+             // CONFIRMED LIVE need: this line previously omitted
+             // content_mode and unknown_content_action entirely, so there
+             // was no way to directly confirm what the agent actually
+             // cached for the new fail-closed setting versus guessing from
+             // downstream behavior. Added while live-diagnosing exactly
+             // that ambiguity.
              logger.Debug("Printer control: enforced=" + std::string(enforced ? "true" : "false") +
                          " mode=" + (mode.empty() ? "off" : mode) +
                          " scope=" + (scope.empty() ? "none" : scope) +
-                         " content_inspection=" + std::string(contentInspection ? "true" : "false"));
+                         " content_inspection=" + std::string(contentInspection ? "true" : "false") +
+                         " content_mode=" + (contentMode.empty() ? "off" : contentMode) +
+                         " unknown_content_action=" + unknownContentAction);
          } catch (const std::exception& e) {
              logger.Debug(std::string("FetchPrinterPolicy failed: ") + e.what());
          } catch (...) {
