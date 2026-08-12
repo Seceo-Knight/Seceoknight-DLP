@@ -8,6 +8,35 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Fix Messaging App Attachment Control never firing for new Teams (August 12, 2026)
+
+### Summary
+
+Moved on to testing Messaging App Attachment Control. Policy was created and confirmed synced to the agent (`enforced=true action=block apps=1`), but attaching a sensitive file through Teams' native file-picker produced zero events -- not a wrong severity or a wrong filename, nothing logged at all.
+
+### Root cause
+
+Diagnosed from the agent's own debug log:
+```
+WinEvent #32770 created: exe=msedgewebview2.exe title=Open
+WinEvent #32770 owner: exe=ms-teams.exe
+```
+The "new" Microsoft Teams client hosts its file-open dialog inside a `msedgewebview2.exe` helper process, not `ms-teams.exe` itself -- the exact same sandboxed-helper indirection Chrome uses for its own file dialog, which `network_exfil_monitor.cpp`'s `BrowserWinEventProc` already had an owner-window fallback for. But that fallback only ever checked whether the **owner** was a **browser**. It correctly resolved and logged the real owner (`ms-teams.exe`) on every single attempt, then never used that value for the messaging-app check -- `messagingPolicy()` was only ever called with the helper process's own name, which no admin's managed-apps list will ever contain, so it always came back `managed=false` and the detector silently did nothing on every Teams attachment.
+
+### Fix
+
+`network_exfil_monitor.cpp`: when the dialog's own creating process isn't a managed messaging app, also try `messagingPolicy()` against the owner process -- mirrors the existing browser fallback exactly. Also propagates the owner's PID into `browserPid`, since that's what a "block" verdict actually terminates downstream (`TerminatePid`); leaving it as the WebView2 helper's PID would have terminated the wrong process even after fixing detection, undermining Block silently in a different way.
+
+### Verification
+
+Brace-balance check: `paren=1 brace=-2 bracket=-1`, identical to the unmodified file fetched fresh from `origin/main` -- confirms this pre-existing imbalance is string/comment noise unrelated to this edit, not something the change introduced.
+
+### Deployment
+
+Agent-only change. Reinstall the Windows agent via `install-agent.ps1`; no server redeploy needed.
+
+---
+
 ## 🐛 Fix print events ignoring the admin-configured policy severity (August 12, 2026)
 
 ### Summary
