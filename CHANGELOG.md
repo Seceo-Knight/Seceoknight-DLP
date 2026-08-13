@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 Fix CLI Guard IFEO writes: main agent task runs unelevated, needs a separate SYSTEM task (August 13, 2026)
+
+### Summary
+
+Following the previous fix's diagnostic logging, live testing traced the `rc=5 (ACCESS_DENIED)` failures to their real root cause -- and it had nothing to do with antivirus. `Get-ScheduledTask` showed the main **"SeceoKnight DLP Agent"** task runs as the logged-in user with `RunLevel: Limited` (a standard, non-admin token) -- this is a *deliberate* choice documented in `install-agent.ps1`: clipboard hooks, keyboard/mouse monitoring, and UI Automation all silently break under Windows UIPI if this process runs elevated. A standard user's token only has `ReadKey` on the Image File Execution Options registry path (confirmed via `Get-Acl`), so `RegCreateKeyExA` from that process was *guaranteed* to fail every time, regardless of Defender/AV settings. An elevated interactive PowerShell succeeded earlier purely because it used a different (admin) token, not because anything about the write itself was special.
+
+### Why this wasn't caught before shipping the previous two fixes
+
+Both earlier fixes (the CLI Guard feature itself, and the `SetIFEODebugger` error-logging fix) were correct in isolation -- they just assumed the calling process had the privilege to make the registry write succeed, which is true for the existing fsquirt.exe/Bluetooth IFEO block (task #113) *only because that gap was never actually verified live either* (flagged as a follow-up in the previous CHANGELOG entry, now elevated from "worth re-checking" to "very likely also broken" -- same code path, same unelevated caller).
+
+### Fix
+
+Mirrors the fix already used for the identical problem with USB blocking (`install-agent.ps1`'s existing `SeceoKnight DLP USB Block` task): added a new standalone agent mode, `seceoknight_agent.exe --apply-ifeo-guards` (`HandleApplyIfeoGuards()` in agent.cpp), that does nothing but register the 9 CLI Guard IFEO Debugger keys and exit. `install-agent.ps1` now registers a new **`SeceoKnight DLP CLI Guard`** scheduled task -- SYSTEM/Highest, `AtStartup` with a 15s delay, one-shot -- that runs it, and also triggers it once immediately at install time so the fix takes effect without waiting for a reboot. The main agent process no longer attempts this write itself (removed the doomed-to-fail call from `DLPAgent::Start()`, which was previously spamming an ERROR line every single startup for a failure it could never fix from that context). `manage-agent.ps1`'s `Uninstall-Agent` now also removes this new task alongside the other three.
+
+### Not fixed here: fsquirt.exe / wireless control (task #113)
+
+`ApplyWirelessControls()`'s `fsquirt.exe` IFEO block runs from the exact same unelevated main process and almost certainly has this exact same bug -- meaning the Bluetooth file-transfer block has likely never actually worked on any real deployment. Not fixed in this pass because it's architecturally harder: unlike CLI Guard (a static, always-on registration done once), wireless control is *dynamic* -- it needs to react to live policy changes (enforce/blockBt/blockNearby toggling), which a simple one-shot elevated task can't do on its own. Needs either a periodic elevated task that reads a cache file the main process writes, or an IPC bridge to a persistent elevated helper. Flagging as a real, confirmed follow-up, not a hypothetical one.
+
+### Deployment
+
+Windows agent (C++) + installer changes -- `agent.cpp`, `install-agent.ps1`, `manage-agent.ps1`. CI rebuilds the binary automatically. Existing installs need to re-run the install one-liner to pick up both the new binary and the new scheduled task; a fresh install gets it automatically.
+
+---
+
 ## 🔧 Fix SetIFEODebugger silently swallowing registry write failures (August 13, 2026)
 
 ### Summary

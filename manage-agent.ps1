@@ -56,6 +56,7 @@
   $TASK_NAME     = 'SeceoKnight DLP Agent'
   $WATCHDOG_TASK = 'SeceoKnight DLP Watchdog'
   $USB_TASK      = 'SeceoKnight DLP USB Block'
+  $CLIGUARD_TASK = 'SeceoKnight DLP CLI Guard'   # task #142/#145
 
   function Info($m) { Write-Host "[*] $m" -ForegroundColor Cyan }
   function Ok($m)   { Write-Host "[+] $m" -ForegroundColor Green }
@@ -322,7 +323,7 @@
     }
 
     # 3) Remove all three scheduled tasks this project registers.
-    foreach ($n in @($TASK_NAME, $WATCHDOG_TASK, $USB_TASK)) {
+    foreach ($n in @($TASK_NAME, $WATCHDOG_TASK, $USB_TASK, $CLIGUARD_TASK)) {
       if (Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) {
         Info "Removing scheduled task: $n"
         Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue

@@ -4583,20 +4583,29 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  logger.Warning("Network Exfiltration Monitor did not start");
              }
 
-             // Install the zero-race IFEO pre-launch guard for the scoped CLI
-             // tools (task #142/#143). Must come AFTER Start() above so the
-             // CLI-guard pipe server is already listening before Windows can
-             // possibly redirect a launch to us.
-             try {
-                 ApplyCliGuardIfeo(true);
-                 logger.Info("CLI Guard (IFEO zero-race pre-launch) installed for " +
-                             std::to_string(NetworkExfilMonitor::IfeoScopedExecutables().size()) +
-                             " executables");
-             } catch (const std::exception& e) {
-                 logger.Warning(std::string("CLI Guard IFEO install failed: ") + e.what());
-             } catch (...) {
-                 logger.Warning("CLI Guard IFEO install failed (unknown error)");
-             }
+             // NOTE (task #145): do NOT call ApplyCliGuardIfeo() from here.
+             // Confirmed live on a real endpoint: this main task runs
+             // UNELEVATED on purpose (RunLevel Limited -- see
+             // install-agent.ps1's principal comment: clipboard hooks and
+             // keyboard/mouse monitoring silently break under UIPI if this
+             // process is elevated), and a standard user's token only has
+             // ReadKey on the IFEO registry path -- RegCreateKeyExA reliably
+             // returns ACCESS_DENIED (rc=5) from this process, every single
+             // startup, for every scoped exe. Calling it here would just
+             // spam the log with expected, unfixable-from-here failures.
+             // install-agent.ps1 instead registers a SEPARATE SYSTEM/Highest
+             // one-shot scheduled task ("SeceoKnight DLP CLI Guard") that
+             // runs `seceoknight_agent.exe --apply-ifeo-guards`
+             // (HandleApplyIfeoGuards() below main()) at startup -- same
+             // elevation pattern already used for USB-block. The pipe
+             // server started just above still needs to be running
+             // regardless of which process performs the registry write,
+             // since that's what the elevated one-shot's installed
+             // Debugger redirect will connect back to.
+             logger.Info("CLI Guard pipe server ready for " +
+                         std::to_string(NetworkExfilMonitor::IfeoScopedExecutables().size()) +
+                         " executables (IFEO registration handled by the separate "
+                         "elevated CLI Guard scheduled task, not this process)");
          }
 
          logger.Info("Agent started successfully");
@@ -11491,7 +11500,78 @@ int HandleCliGuard(int argc, char* argv[]) {
     return (int)exitCode;
 }
 
+// Elevated one-shot mode (task #142/#145): registers the CLI Guard IFEO
+// "Debugger" redirects. Exists because the main "SeceoKnight DLP Agent"
+// scheduled task runs UNELEVATED on purpose (clipboard hooks/keyboard-mouse
+// monitoring/UIA all silently break under Windows UIPI if it runs elevated
+// -- see install-agent.ps1's principal comment), so it can never itself
+// write these HKLM keys: confirmed live, RegCreateKeyExA returns
+// ACCESS_DENIED from that process every time, because a standard user's
+// token only has ReadKey on that registry path. Mirrors the existing
+// USB-block fix for the identical problem: a SEPARATE SYSTEM/Highest
+// one-shot scheduled task ("SeceoKnight DLP CLI Guard") runs
+// `seceoknight_agent.exe --apply-ifeo-guards` at startup instead of
+// elevating the main task.
+int HandleApplyIfeoGuards(int /*argc*/, char* /*argv*/[]) {
+    Logger logger;
+    int okCount = 0, failCount = 0;
+    try {
+        char selfPath[MAX_PATH] = {0};
+        GetModuleFileNameA(nullptr, selfPath, MAX_PATH);
+        std::string dbg = std::string("\"") + selfPath + "\" --cli-guard";
+
+        for (const auto& exeName : NetworkExfilMonitor::IfeoScopedExecutables()) {
+            std::string sub = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\"
+                              "Image File Execution Options\\" + exeName;
+            HKEY k;
+            LSTATUS rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
+                                         REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr);
+            if (rc != ERROR_SUCCESS) {
+                try { logger.Error("apply-ifeo-guards: RegCreateKeyExA failed for " + exeName +
+                                   " rc=" + std::to_string(rc) +
+                                   " (this task should be running as SYSTEM/Highest -- check "
+                                   "the scheduled task's principal if this persists)"); } catch (...) {}
+                failCount++;
+                continue;
+            }
+            LSTATUS rc2 = RegSetValueExA(k, "Debugger", 0, REG_SZ,
+                                         reinterpret_cast<const BYTE*>(dbg.c_str()),
+                                         (DWORD)dbg.size() + 1);
+            RegCloseKey(k);
+            if (rc2 != ERROR_SUCCESS) {
+                try { logger.Error("apply-ifeo-guards: RegSetValueExA failed for " + exeName +
+                                   " rc=" + std::to_string(rc2)); } catch (...) {}
+                failCount++;
+            } else {
+                try { logger.Info("apply-ifeo-guards: Debugger set for " + exeName); } catch (...) {}
+                okCount++;
+            }
+        }
+        try {
+            logger.Info("apply-ifeo-guards: complete -- " + std::to_string(okCount) +
+                        " succeeded, " + std::to_string(failCount) + " failed");
+        } catch (...) {}
+    } catch (const std::exception& e) {
+        try { logger.Error(std::string("apply-ifeo-guards: exception: ") + e.what()); } catch (...) {}
+        return 1;
+    } catch (...) {
+        try { logger.Error("apply-ifeo-guards: unknown exception"); } catch (...) {}
+        return 1;
+    }
+    return failCount > 0 ? 1 : 0;
+}
+
 int main(int argc, char* argv[]) {
+    // Elevated CLI Guard registration hook (task #142/#145): the separate
+    // SYSTEM/Highest scheduled task install-agent.ps1 registers invokes us
+    // with this flag purely to write the IFEO Debugger keys, then exits --
+    // this is not a normal agent run.
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--apply-ifeo-guards") {
+            return HandleApplyIfeoGuards(argc, argv);
+        }
+    }
+
     // CLI Guard hook: we were run in place of a scoped CLI tool (curl.exe
     // etc.) because ApplyCliGuardIfeo() redirected it via IFEO. Decide
     // allow/block against the running service, then either exit (block) or

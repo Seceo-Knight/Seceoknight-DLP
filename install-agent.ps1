@@ -890,6 +890,52 @@ try {
         Write-ColorOutput "Could not create USB block task (non-fatal): $($_.Exception.Message)" -Type "Warning"
     }
 
+    # -- CLI Guard: one-shot elevated task at startup (task #142/#145) -------
+    # Same problem as USB block above: the main agent task runs unelevated
+    # (required for clipboard/hooks), but the CLI Guard zero-race feature's
+    # Image File Execution Options "Debugger" redirects need HKLM write
+    # access a standard user's token does not have (confirmed live:
+    # RegCreateKeyExA returns ACCESS_DENIED from the main task every time).
+    # Register a separate task that runs once at startup as SYSTEM to write
+    # them via `seceoknight_agent.exe --apply-ifeo-guards`.
+    $cliGuardTaskName = "SeceoKnight DLP CLI Guard"
+    try {
+        $cliGuardAction = New-ScheduledTaskAction `
+            -Execute $exePath `
+            -Argument "--apply-ifeo-guards" `
+            -WorkingDirectory $INSTALL_DIR
+
+        $cliGuardTrigger = New-ScheduledTaskTrigger -AtStartup
+        $cliGuardTrigger.Delay = "PT15S"
+
+        $cliGuardPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+        $cliGuardSettings = New-ScheduledTaskSettingsSet `
+            -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries `
+            -ExecutionTimeLimit (New-TimeSpan -Minutes 1)
+
+        $existingCliGuard = Get-ScheduledTask -TaskName $cliGuardTaskName -ErrorAction SilentlyContinue
+        if ($existingCliGuard) { Unregister-ScheduledTask -TaskName $cliGuardTaskName -Confirm:$false }
+
+        Register-ScheduledTask `
+            -TaskName $cliGuardTaskName `
+            -Action $cliGuardAction `
+            -Trigger $cliGuardTrigger `
+            -Principal $cliGuardPrincipal `
+            -Settings $cliGuardSettings `
+            -Description "SeceoKnight DLP - Register CLI Guard zero-race pre-launch IFEO redirects (requires SYSTEM elevation)" `
+            -Force | Out-Null
+
+        Write-ColorOutput "CLI Guard task created: $cliGuardTaskName" -Type "Success"
+
+        # Also run it immediately (best-effort) rather than making the user
+        # wait for the next reboot to see CLI Guard actually take effect.
+        try { Start-ScheduledTask -TaskName $cliGuardTaskName } catch {}
+    } catch {
+        Write-ColorOutput "Could not create CLI Guard task (non-fatal): $($_.Exception.Message)" -Type "Warning"
+    }
+
 } catch {
     Write-ColorOutput "Error creating scheduled task: $($_.Exception.Message)" -Type "Error"
     Write-ColorOutput "You can manually start it: Start-ScheduledTask -TaskName '$TASK_NAME'" -Type "Info"
