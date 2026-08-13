@@ -8,6 +8,42 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 📋 Disclose: Messaging App Attachment Control cannot inspect or block Teams content pre-send (August 13, 2026)
+
+### Summary
+
+Following up on the previous cross-thread UIA fix: live testing confirmed the UIA lookup also finds nothing for Teams' file-attach dialog (no `UIA cross-thread lookup matched` log line, safe honest `(unknown)` fallback used as designed). Researched a third option -- reading Teams' local IndexedDB (`replychains` object store, `properties.files` field) -- and determined it is not viable, for two independent reasons documented here for the record.
+
+### Why the IndexedDB route was ruled out
+
+1. **Timing**: Teams only writes the attachment's filename into `replychains.properties.files` once the message is actually *sent* (confirmed via a 2026 academic forensics paper analyzing the new WebView2-based Teams client's storage format, and a maintained open-source parser, `ms_teams_parser`/`forensicsim`). Our detection point is at file-picker dialog close, before Send. A reader built against this store would only ever see content *after* the message has already left the machine -- too late to block, only useful for after-the-fact alerting.
+2. **Format fragility**: Teams 2.x's IndexedDB uses a custom LevelDB key comparator (`idb_cmp1`) that already broke existing open-source forensic parsers (`forensicsim`, `LevelDBDumper`) when Microsoft changed the serialization format. It is undocumented, Microsoft-controlled, and can change with any Teams/Edge update with no notice to us. Building and maintaining a bespoke reader for it inside the agent would be an open-ended liability, not a fixed cost.
+
+### A more important finding: "Block" was already a no-op for Teams regardless
+
+Traced the actual enforcement path in `HandleBrowserDialogFromHwnd()` (network_exfil_monitor.cpp, ~line 2126):
+
+```cpp
+if (sensitive && isMessaging && mv.block) {
+    bool killed = TerminatePid(browserPid);   // force-kills the whole app process
+    f.action = "BLOCK";
+} else if (sensitive) {
+    f.action = "ALERT";
+}
+```
+
+`sensitive` is only ever true if file content was successfully read and classified as confidential/restricted. Since Teams' content can never be read before Send (three independent techniques now ruled out: Win32 child-window scan, UIA, IndexedDB), this branch is structurally unreachable for Teams -- `mv.block` being true never mattered, because content classification never got the chance to mark anything sensitive. This matches exactly what was observed live: policy set to Block, file still went through Teams unimpeded.
+
+Practical implication: on a Messaging App Attachment Control policy, switching the action from Block to Alert for Teams specifically is not a reduction in protection -- Block was already providing none. Alert is simply an honest label for what has been happening all along. Other managed apps in this policy's scope (WhatsApp, Telegram) may use plain Win32 file dialogs rather than a WebView2 host and could still classify and block correctly -- this has not been separately verified.
+
+Also worth noting for anyone reconsidering "Block" for a messaging app in the future: it terminates the entire process (`TerminatePid`), not just the one attachment -- ported from CyberSentinel-DLP as a blunt instrument, since there is no way to cancel a single already-selected file inside another vendor's app.
+
+### Status
+
+Documented as a known, permanent limitation for Teams pre-send content inspection. No further code changes planned here. The existing safety net (honest `(unknown)` instead of a false verdict) remains in place from the previous fix and is not affected by this decision.
+
+---
+
 ## 🔧 Add safe cross-thread UIA lookup attempt for Teams file-attach detection (August 12, 2026)
 
 ### Summary
