@@ -9,7 +9,7 @@ keep reporting from any network.
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, String, Boolean, DateTime
+from sqlalchemy import Column, String, Boolean, DateTime, SmallInteger
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 
@@ -33,3 +33,22 @@ class IPAllowlistEntry(Base):
 
     def __repr__(self):
         return f"<IPAllowlistEntry {self.cidr} enabled={self.is_enabled}>"
+
+
+class IPAllowlistSettings(Base):
+    """Singleton row (id=1) holding the master on/off switch (task #154).
+
+    Lets an admin pause enforcement without touching the configured CIDR
+    entries -- distinct from IPAllowlistEntry.is_enabled, which is per-entry.
+    Overall enforcement requires BOTH this flag to be true AND at least one
+    enabled entry to exist.
+    """
+    __tablename__ = "ip_allowlist_settings"
+
+    id = Column(SmallInteger, primary_key=True, default=1)
+    enabled = Column(Boolean, nullable=False, default=True, server_default="true")
+    updated_by = Column(UUID(as_uuid=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    def __repr__(self):
+        return f"<IPAllowlistSettings enabled={self.enabled}>"

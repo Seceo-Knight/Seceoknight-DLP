@@ -18,7 +18,7 @@ import structlog
 from app.core.security import require_role
 from app.core.database import get_db
 from app.models.user import User
-from app.models.ip_allowlist import IPAllowlistEntry
+from app.models.ip_allowlist import IPAllowlistEntry, IPAllowlistSettings
 from app.middleware.ip_allowlist import get_client_ip, bump_ip_allowlist_cache
 from app.services.audit_service import audit_log
 
@@ -29,6 +29,16 @@ router = APIRouter()
 class IPEntryCreate(BaseModel):
     cidr: str = Field(..., description="A single IP (203.0.113.7) or CIDR (203.0.113.0/24)")
     label: Optional[str] = Field(None, description="Human-readable note")
+
+
+class IPAllowlistToggle(BaseModel):
+    enabled: bool = Field(..., description="Master switch — pause/resume enforcement without touching entries")
+
+
+async def _get_master_enabled(db: AsyncSession) -> bool:
+    """Read the master toggle, defaulting to enabled if the singleton row is somehow missing."""
+    row = (await db.execute(select(IPAllowlistSettings).where(IPAllowlistSettings.id == 1))).scalar_one_or_none()
+    return True if row is None else bool(row.enabled)
 
 
 def _normalize_cidr(cidr: str) -> str:
@@ -56,12 +66,41 @@ async def list_ip_allowlist(
 ):
     rows = (await db.execute(select(IPAllowlistEntry).order_by(IPAllowlistEntry.created_at))).scalars().all()
     entries = [_entry_out(e) for e in rows]
-    enabled = any(e["is_enabled"] for e in entries)
+    master_enabled = await _get_master_enabled(db)
+    has_enabled_entry = any(e["is_enabled"] for e in entries)
     return {
         "entries": entries,
         "your_ip": get_client_ip(request),
-        "enforced": enabled,  # True once ≥1 enabled entry exists (control is on)
+        "enabled": master_enabled,  # master switch — independent of individual entries
+        "enforced": master_enabled and has_enabled_entry,  # actually restricting requests right now
     }
+
+
+@router.post("/ip-allowlist/toggle")
+async def toggle_ip_allowlist(
+    body: IPAllowlistToggle,
+    current_user: User = Depends(require_role("admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Master on/off switch (task #154) — pause/resume enforcement without
+    touching the configured CIDR entries. Distinct from each entry's own
+    is_enabled flag."""
+    row = (await db.execute(select(IPAllowlistSettings).where(IPAllowlistSettings.id == 1))).scalar_one_or_none()
+    if row is None:
+        row = IPAllowlistSettings(id=1, enabled=body.enabled, updated_by=current_user.id)
+        db.add(row)
+    else:
+        row.enabled = body.enabled
+        row.updated_by = current_user.id
+
+    await db.commit()
+    bump_ip_allowlist_cache()
+    await audit_log(
+        current_user.id,
+        "security.ip_allowlist.toggle",
+        {"enabled": body.enabled},
+    )
+    return {"enabled": body.enabled}
 
 
 @router.post("/ip-allowlist", status_code=status.HTTP_201_CREATED)

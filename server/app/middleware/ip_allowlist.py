@@ -6,6 +6,9 @@ Rules:
     Admin in Settings). It is cached for a few seconds to avoid a DB hit per
     request; management endpoints bump a generation to refresh immediately.
   * **Empty / all-disabled → fail-open** (the control is off).
+  * **Master toggle off (``ip_allowlist_settings.enabled = false``) →
+    fail-open** regardless of configured entries (task #154) — lets an admin
+    pause enforcement without deleting/disabling every CIDR one at a time.
   * **Loopback is always allowed** (health checks, local admin).
   * **Agent-ingestion + health endpoints are always exempt** so endpoints keep
     reporting from any network even while the portal is IP-restricted.
@@ -100,6 +103,19 @@ async def _load_nets() -> List[ipaddress._BaseNetwork]:
         from sqlalchemy import text
         if db.postgres_session_factory is not None:
             async with db.postgres_session_factory() as session:
+                # Master toggle (task #154) — if explicitly turned off, treat as
+                # empty regardless of configured entries. Missing row = default on.
+                setting = await session.execute(
+                    text("SELECT enabled FROM ip_allowlist_settings WHERE id = 1")
+                )
+                setting_row = setting.first()
+                master_enabled = True if setting_row is None else bool(setting_row[0])
+                if not master_enabled:
+                    _cache_nets = []
+                    _cache_time = now
+                    _cache_gen = _current_gen
+                    return []
+
                 rows = await session.execute(
                     text("SELECT cidr FROM ip_allowlist WHERE is_enabled = true")
                 )

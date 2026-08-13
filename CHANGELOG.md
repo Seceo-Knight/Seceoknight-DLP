@@ -8,6 +8,38 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔍 Gap-scan live CyberSentinel-DLP GitHub repo + port IP Allowlist master toggle (tasks #153/#154, August 13, 2026)
+
+### Summary
+
+User asked us to check whether CyberSentinel-DLP had shipped anything today that SeceoKnight is missing. The locally mounted `CyberSentinel-DLP` folder used for prior gap-scans (tasks #25/#93/#105/#119/#134) turned out to be a stale, non-git snapshot frozen around July 17, 2026 -- useless for checking "today." The user then supplied the actual live upstream: `https://github.com/effaaykhan/cybersentineldlp-prod`. Cloned it fresh (`git clone --depth 30`, public repo) and read real commit history/diffs instead of guessing from commit titles.
+
+### What was checked
+
+- **Today's commit** (`9b589f7`, "Fixed the CI logic with SHA tags") -- pure CI/build tooling (`.github/workflows/*.yml`, their `csdlp` ops CLI, `DEPLOYMENT.md`). No DLP-functionality content.
+- **"Implemented TLS 1.3"** (`639cbe3`) -- misleading title; the diff is only deletions of three old install/uninstall/update PowerShell scripts (replaced by the `csdlp` consolidated CLI), not a TLS change.
+- **"Added Nuitka flow for compilation"** (`8f19d2f`) -- compiles their Python server to a native binary via Nuitka for obfuscation/perf. Packaging choice, not a DLP capability; SeceoKnight's server ships as a normal Python/FastAPI container. Not pursued.
+- **"Added Whitelist Toggle, improved network exfiltration, added thick clients"** (`0003851`) -- the network-exfil CLI (aws/rclone/s3cmd/azcopy/scp/pscp/winscp.com blocking) and thick-client messaging attachment control (Teams/WhatsApp/Telegram/Slack/Discord/Signal, alert-by-default/block-when-policy-opts-in) described in this diff match what SeceoKnight already ported in tasks #121 and #115/#137-140 -- already covered.
+- **"Fixed numerous bugs, added hash capabilities, implemented policy import/export"** (`b3618b9`) -- policy import/export UI, pagination, incident coalescing script all match SeceoKnight's existing tasks #79/#80/#81 -- already covered.
+
+### The one genuine gap found: IP allowlist had no master on/off switch
+
+`0003851` also added a **master toggle** to CyberSentinel's IP-allowlist settings section (`IpAllowlistSection.tsx` + `toggleIpAllowlist`). SeceoKnight already has IP allowlisting (`server/app/middleware/ip_allowlist.py`, task #25-era port), but "enforced" was purely derived from *"does at least one entry have `is_enabled = true`"* -- there was no independent switch. To pause enforcement (e.g. an admin troubleshooting from a new office), you had to disable or delete every configured CIDR one at a time and remember to re-add them later. A single pause/resume switch that preserves the configured ranges is a real, low-risk usability/safety improvement, so it was ported.
+
+### What was built
+
+- **`server/alembic/versions/037_ip_allowlist_master_toggle.py`** -- new singleton table `ip_allowlist_settings (id=1, enabled boolean default true, updated_by, updated_at)`, seeded on migrate. Defaults to `enabled=true` so existing behavior is unchanged until someone touches the new switch.
+- **`server/app/models/ip_allowlist.py`** -- added `IPAllowlistSettings` model alongside the existing `IPAllowlistEntry`.
+- **`server/app/api/v1/ip_allowlist.py`** -- `GET /security/ip-allowlist` now also returns `enabled` (the master flag) separately from `enforced` (master flag AND >=1 enabled entry); new `POST /security/ip-allowlist/toggle` (admin-only, audit-logged as `security.ip_allowlist.toggle`).
+- **`server/app/middleware/ip_allowlist.py`** -- `_load_nets()` now reads `ip_allowlist_settings.enabled` first and short-circuits to fail-open (empty net list) if the master switch is off, regardless of how many CIDRs are configured. If the settings table doesn't exist yet (pre-migration), the existing DB-failure handler already fails open safely -- no crash risk during rollout.
+- **`dashboard/src/lib/api.ts`** + **`dashboard/src/components/settings/IpAllowlistSection.tsx`** -- added `toggleIpAllowlist()` and a switch UI next to the "Authorized IP Addresses" header, with three distinct states surfaced to the admin: **Off** (master switch disabled, ranges kept), **Not enforced** (master on but zero configured ranges), **Enforcing** (master on, >=1 active range).
+
+### Verified
+
+`python3 -m ast` parse-check on all four modified/added server files, `tsc --noEmit` on the dashboard confirms zero new type errors (the 25 pre-existing errors in unrelated files are untouched). Not yet deployed to the live server -- requires the standard `update.sh` cycle (runs alembic migrations automatically) plus a dashboard image rebuild, same as tasks #150-152.
+
+---
+
 ## 🆕 Build File Identity Denylist agent-side enforcement from scratch (task #152, August 13, 2026)
 
 ### Summary

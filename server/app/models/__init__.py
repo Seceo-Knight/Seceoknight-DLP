@@ -29,7 +29,7 @@ from app.models.google_drive import GoogleDriveConnection, GoogleDriveProtectedF
 from app.models.onedrive import OneDriveConnection, OneDriveProtectedFolder
 from app.models.report import Report
 from app.models.ioc import IOC, TAXIIFeed, TAXIIShareConfig
-from app.models.ip_allowlist import IPAllowlistEntry
+from app.models.ip_allowlist import IPAllowlistEntry, IPAllowlistSettings
 from app.models.retention_config import RetentionConfig
 from app.models.sanctioned_usb_device import SanctionedUsbDevice
 from app.models.sanctioned_printer import SanctionedPrinter
@@ -71,6 +71,7 @@ __all__ = [
     "TAXIIFeed",
     "TAXIIShareConfig",
     "IPAllowlistEntry",
+    "IPAllowlistSettings",
     "RetentionConfig",
     "SanctionedUsbDevice",
     "SanctionedPrinter",

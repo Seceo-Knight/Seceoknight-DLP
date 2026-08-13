@@ -5,14 +5,17 @@ import {
   getIpAllowlist,
   addIpAllowlist,
   deleteIpAllowlist,
+  toggleIpAllowlist,
   type IPAllowlistEntry,
 } from '@/lib/api'
 
 export default function IpAllowlistSection() {
   const [entries, setEntries] = useState<IPAllowlistEntry[]>([])
   const [yourIp, setYourIp] = useState('')
+  const [enabled, setEnabled] = useState(true)   // master switch (on by default)
   const [enforced, setEnforced] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [toggling, setToggling] = useState(false)
   const [cidr, setCidr] = useState('')
   const [label, setLabel] = useState('')
   const [busy, setBusy] = useState(false)
@@ -22,6 +25,7 @@ export default function IpAllowlistSection() {
       const data = await getIpAllowlist()
       setEntries(data.entries || [])
       setYourIp(data.your_ip || '')
+      setEnabled(data.enabled !== false)   // default to on if the field is absent
       setEnforced(!!data.enforced)
     } catch (err: any) {
       toast.error(err.response?.data?.detail || 'Failed to load IP allowlist')
@@ -33,6 +37,22 @@ export default function IpAllowlistSection() {
   useEffect(() => {
     load()
   }, [])
+
+  const handleToggle = async () => {
+    const next = !enabled
+    setToggling(true)
+    setEnabled(next)  // optimistic
+    try {
+      await toggleIpAllowlist(next)
+      toast.success(next ? 'IP allowlisting turned on' : 'IP allowlisting turned off')
+      await load()
+    } catch (err: any) {
+      setEnabled(!next)  // revert on failure
+      toast.error(err.response?.data?.detail || 'Failed to update allowlisting')
+    } finally {
+      setToggling(false)
+    }
+  }
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -75,9 +95,11 @@ export default function IpAllowlistSection() {
           <div className="flex items-center gap-2">
             <h3 className="section-title">Authorized IP Addresses</h3>
             {!loading && (
-              enforced
-                ? <span className="badge badge-success">Enforcing</span>
-                : <span className="badge badge-warning">Not enforced</span>
+              !enabled
+                ? <span className="badge badge-warning">Off</span>
+                : enforced
+                  ? <span className="badge badge-success">Enforcing</span>
+                  : <span className="badge badge-warning">Not enforced</span>
             )}
           </div>
           <p className="text-sm text-cs-muted">
@@ -85,12 +107,41 @@ export default function IpAllowlistSection() {
             reachable. Loopback is always allowed.
           </p>
         </div>
+        {/* Master switch — pause/resume enforcement without losing the configured ranges. */}
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <span className="text-xs font-medium text-cs-muted">
+            {enabled ? 'Allowlisting on' : 'Allowlisting off'}
+          </span>
+          <label
+            className="relative inline-flex items-center cursor-pointer"
+            title={enabled ? 'Turn IP allowlisting off' : 'Turn IP allowlisting on'}
+          >
+            <input
+              type="checkbox"
+              className="sr-only peer"
+              checked={enabled}
+              onChange={handleToggle}
+              disabled={loading || toggling}
+            />
+            <div className="w-11 h-6 bg-cs-hair-2 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-cs-indigo-faint rounded-cs-pill peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-cs-hair after:border after:rounded-cs-pill after:h-5 after:w-5 after:transition-all peer-checked:bg-cs-indigo peer-disabled:opacity-60 peer-disabled:cursor-not-allowed"></div>
+          </label>
+        </div>
       </div>
 
-      {!enforced && !loading && (
+      {!enabled && !loading && (
         <div className="mb-4 p-3 rounded-cs-sm border border-[color-mix(in_srgb,var(--cs-med)_30%,var(--cs-panel))] bg-[color-mix(in_srgb,var(--cs-med)_10%,var(--cs-panel))]">
           <p className="text-sm text-cs-ink-2">
-            The allowlist is empty, so this control is currently <strong>off</strong> — the portal
+            Allowlisting is turned <strong>off</strong> — the portal is reachable from any IP.
+            Your configured ranges below are kept and will apply again as soon as you switch this
+            back on.
+          </p>
+        </div>
+      )}
+
+      {enabled && !enforced && !loading && (
+        <div className="mb-4 p-3 rounded-cs-sm border border-[color-mix(in_srgb,var(--cs-med)_30%,var(--cs-panel))] bg-[color-mix(in_srgb,var(--cs-med)_10%,var(--cs-panel))]">
+          <p className="text-sm text-cs-ink-2">
+            The allowlist is empty, so this control isn't restricting anything yet — the portal
             is reachable from any IP. Add at least one range to start enforcing.
           </p>
         </div>

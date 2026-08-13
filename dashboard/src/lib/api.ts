@@ -843,7 +843,8 @@ export type IPAllowlistEntry = {
 export type IPAllowlistResponse = {
   entries: IPAllowlistEntry[]
   your_ip: string
-  enforced: boolean
+  enabled: boolean    // master switch — independent of individual entries
+  enforced: boolean   // actually restricting requests right now (enabled AND >=1 enabled entry)
 }
 
 export const getIpAllowlist = async (): Promise<IPAllowlistResponse> => {
@@ -858,6 +859,11 @@ export const addIpAllowlist = async (cidr: string, label?: string) => {
 
 export const deleteIpAllowlist = async (entryId: string) => {
   const { data } = await apiClient.delete(`/security/ip-allowlist/${entryId}`)
+  return data
+}
+
+export const toggleIpAllowlist = async (enabled: boolean) => {
+  const { data } = await apiClient.post('/security/ip-allowlist/toggle', { enabled })
   return data
 }
 
