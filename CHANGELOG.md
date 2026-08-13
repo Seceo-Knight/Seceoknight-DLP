@@ -8,6 +8,26 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 Fix Application Control policy stuck at "0 violations" despite real agent-side blocking (August 13, 2026)
+
+### Summary
+
+Found before any live testing, by code review ahead of guiding a live test: `application_control` was missing from `policy_transformer.py`'s `transform_frontend_config_to_backend()` dispatcher -- the exact same bug class as messaging_app_control (task #137). Falling through to the "unknown type" branch produces empty `conditions.rules`, which `DatabasePolicyEvaluator.evaluate_event()` skips unconditionally. Real-time enforcement was never affected (the Windows agent's `IsAppActionAllowed()` reads `GET /agents/{id}/application-control` directly, independent of this file), but the Policies page's violations count for Application Control would stay stuck at 0 even when the agent genuinely blocked a disallowed CLI tool (curl, wget, powershell, bitsadmin, certutil, rclone, cloud-CLI, SCP).
+
+### Fix
+
+Added `_transform_application_control_config()`: matches `event_subtype == "cli_upload"` (the single event subtype the CLI network-exfil path emits, regardless of whether the block reason was app-control or content-sensitivity), always reports `actions={"alert": {}}` regardless of `config.mode`/`applications` -- same reasoning as messaging_app_control: the agent already executed the real block/allow decision (`TerminatePid`) before the event was created, and the event's own honest `action` field is ground truth; mapping to a declarative "block" action here would let `ActionExecutor.execute_block()` stomp that with an unverified `blocked=True`.
+
+### Related gap, not fixed here
+
+`network_share_transfer_control`, `wireless_transfer_control`, `print_content_prevention`, and `printer_control` are the same agent-polled-config-toggle pattern and are also currently missing from this dispatcher -- same "0 violations" display bug likely applies to all four. Flagging for a follow-up pass; real-time enforcement for these is unaffected either way.
+
+### Deployment
+
+Server-side Python change only (`policy_transformer.py`). Requires a fresh `dlp-manager` image build via CI and `bash update.sh` on the server -- no Windows agent rebuild needed. Policy re-save not required for this fix (transform runs on next create/update of an `application_control` policy, or can be forced by re-saving an existing one through the Edit Policy wizard).
+
+---
+
 ## 📋 Disclose: Messaging App Attachment Control cannot inspect or block Teams content pre-send (August 13, 2026)
 
 ### Summary

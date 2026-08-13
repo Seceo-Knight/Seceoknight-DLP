@@ -41,6 +41,8 @@ def transform_frontend_config_to_backend(
         return _transform_email_config(config)
     elif policy_type == "messaging_app_control":
         return _transform_messaging_app_control_config(config)
+    elif policy_type == "application_control":
+        return _transform_application_control_config(config)
     else:
         # Unknown type, return empty defaults
         return (
@@ -531,6 +533,82 @@ def _transform_messaging_app_control_config(config: Dict[str, Any]) -> Tuple[Dic
                 "field": "event_subtype",
                 "operator": "equals",
                 "value": "messaging_file_selection",
+            }
+        ],
+    }
+    actions = {"alert": {}}
+
+    return conditions, actions
+
+
+def _transform_application_control_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform application control config to backend format.
+
+    Enforcement is 100% agent-side: the Windows agent polls
+    GET /agents/{id}/application-control directly (see
+    FetchApplicationControl()/IsAppActionAllowed() in agent.cpp) and decides
+    allow/block for each CLI-based network exfil attempt (curl, wget,
+    powershell, bitsadmin, certutil, rclone, cloud-CLI, SCP -- all funneled
+    through the single "cli_upload" event_subtype in
+    network_exfil_monitor.cpp) locally, before the event ever reaches the
+    server -- this policy's Policy.config is never read by
+    DatabasePolicyEvaluator for that live decision.
+
+    Same bug class as messaging_app_control (see that transform's docstring
+    for the original diagnosis): this policy_type was previously absent
+    from this dispatcher, falling through to the "unknown type" branch ->
+    empty conditions.rules -> evaluate_event() skips it unconditionally
+    (`if not conditions.get("rules"): continue`). Real-time enforcement
+    already worked correctly (it never depended on this file), but the
+    Policies page's violations count for "Application Control" would have
+    stayed stuck at 0 even when the agent genuinely blocked a disallowed
+    tool -- this transform exists purely so a real conditions.rules gets
+    persisted and matched events get counted.
+
+    Matches on event_subtype alone -- "cli_upload" is the one and only
+    subtype the CLI network-exfil path emits. Note this also counts CLI
+    uploads blocked purely for sensitive content, independent of any
+    application_control rule, since the event schema doesn't carry a field
+    distinguishing "blocked by app rule" from "blocked by content
+    classification" -- both are still genuine matches of "a CLI upload was
+    observed/blocked", consistent with how every other config-toggle policy
+    here (e.g. messaging_app_control) matches on event_subtype alone rather
+    than re-deriving the agent's own decision.
+
+    NOTE: network_share_transfer_control, wireless_transfer_control,
+    print_content_prevention and printer_control are the same
+    agent-polled-config-toggle style as this policy and messaging_app_control,
+    and are currently ALSO missing from this dispatcher -- same "0
+    violations" display bug likely applies to all four. Not fixed here
+    (out of scope for this pass); flagging for a follow-up.
+
+    IMPORTANT -- backend/reporting action is always "alert", never mapped
+    from config.mode/applications. Same reasoning as
+    messaging_app_control: the agent already made and executed the real
+    block/allow decision (TerminatePid) before this event was created, and
+    the event's own honest `action` field (BLOCK/ALLOW, written to
+    action_taken at ingest) is already ground truth. Using "block" here
+    would let ActionExecutor.execute_block()'s purely declarative
+    `event["blocked"] = True` override that -- with zero real-world
+    verification -- for events where nothing was actually terminated (e.g.
+    TerminatePid failed, or the app was in fact allowed).
+
+    Frontend format:
+    {
+        "mode": "blocklist" | "allowlist",
+        "applications": ["curl.exe", ...],
+        "channels": ["network"]   // optional, blank = all
+        "exceptions": {"applications": [...], "users": [...], "paths": [...], "file_types": [...]}
+    }
+    """
+    conditions = {
+        "match": "all",
+        "rules": [
+            {
+                "field": "event_subtype",
+                "operator": "equals",
+                "value": "cli_upload",
             }
         ],
     }
