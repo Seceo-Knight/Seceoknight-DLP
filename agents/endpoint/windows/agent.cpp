@@ -5094,8 +5094,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
 
      // Apply/reconcile the wireless-transfer controls. Reconciled both ways so
      // clearing the policy restores the channels. NOTE: covers the built-in
-     // Bluetooth file wizard + the Nearby Sharing/CDP policy; validate on
-     // real hardware before relying on this in production.
+     // Bluetooth file wizard + the Nearby Sharing/CDP policy.
+     //
+     // NOT called directly from FetchWirelessPolicy() anymore (task #147):
+     // confirmed live that this main agent task runs unelevated (same root
+     // cause as task #145's CLI Guard fix), so RegCreateKeyExA on the IFEO
+     // path reliably fails ACCESS_DENIED (rc=5) from this process, every
+     // sync cycle. Left defined/callable for completeness and for the
+     // elevated --apply-wireless-guard path below, which computes the same
+     // enforce/blockBt/blockNearby from the cache file and calls this.
      void ApplyWirelessControls(bool enforce, bool blockBt, bool blockNearby) {
          // Bluetooth file transfer -- redirect the fsquirt.exe wizard (via IFEO) to
          // THIS agent with --blocked-launch, so each attempt is logged + raised as a
@@ -5112,11 +5119,53 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                         "EnableCdp", 0, enforce && blockNearby);
      }
 
+     // Same directory-resolution rule as PolicyCachePath() above -- must be
+     // somewhere a STANDARD USER can write (this process's real privilege
+     // level), since a directory only SYSTEM can write to would just move
+     // the same ACCESS_DENIED problem one step earlier.
+     std::string WirelessStateCachePath() const {
+         const char* envLogDir = std::getenv("SECEOKNIGHT_LOG_DIR");
+         std::string dir = envLogDir ? envLogDir : "C:\\ProgramData\\SeceoKnight\\logs";
+         try { fs::create_directories(dir); } catch (...) {}
+         return dir + "\\wireless_state.cache";
+     }
+
+     // Writes the desired enforcement state for the elevated
+     // --apply-wireless-guard one-shot (task #147) to pick up. Deliberately
+     // simple pipe-delimited format (not JSON) -- the elevated reader is a
+     // minimal standalone function that shouldn't need a JSON parser for
+     // three booleans. Written on EVERY successful policy fetch (not just
+     // on a signature change) so the elevated task's periodic wake-up --
+     // running on its own independent schedule -- always sees the latest
+     // known state regardless of exact timing between the two processes.
+     void SaveWirelessStateToCache(bool enforce, bool blockBt, bool blockNearby) {
+         try {
+             std::ofstream f(WirelessStateCachePath(), std::ios::trunc | std::ios::binary);
+             if (!f.is_open()) {
+                 logger.Warning("Could not write wireless state cache: " + WirelessStateCachePath());
+                 return;
+             }
+             f << (enforce ? "1" : "0") << "|" << (blockBt ? "1" : "0") << "|" << (blockNearby ? "1" : "0");
+         } catch (const std::exception& e) {
+             logger.Warning(std::string("Failed to cache wireless state: ") + e.what());
+         } catch (...) {
+             logger.Warning("Failed to cache wireless state");
+         }
+     }
+
      // Pulls GET /agents/{id}/wireless-policy and reconciles enforcement each
-     // sync. Ported from CyberSentinel-DLP. Only touches the registry when the
-     // effective enforcement signature actually changed (lastWirelessSig), so
-     // a routine policy-sync tick with no change is a no-op, not a registry
-     // write every cycle.
+     // sync. Ported from CyberSentinel-DLP.
+     //
+     // NOTE (task #147): does NOT call ApplyWirelessControls() from here
+     // anymore -- confirmed live this process cannot write the IFEO key
+     // (same unelevated-process problem as task #145's CLI Guard). Instead
+     // writes the desired state to WirelessStateCachePath() on every
+     // successful fetch; a separate SYSTEM/Highest scheduled task
+     // ("SeceoKnight DLP Wireless Guard", registered by install-agent.ps1)
+     // runs `seceoknight_agent.exe --apply-wireless-guard` on a repeating
+     // timer, reads that cache, and does the actual registry write. Still
+     // tracks lastWirelessSig purely for the log-noise-reduction purpose it
+     // always had (only worth a DEBUG line when something changed).
      void FetchWirelessPolicy() {
          try {
              std::pair<int, std::string> resp = GetHttpClient()->Get(
@@ -5130,10 +5179,16 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              bool blockNearby  = ExtractJsonBool(response, "block_nearby_sharing");
              bool enforce      = enforced && mode == "enforce";   // audit => don't apply
 
+             SaveWirelessStateToCache(enforce, blockBt, blockNearby);
+
              std::string sig = std::string(enforce ? "1" : "0") +
                                (blockBt ? "b" : "-") + (blockNearby ? "n" : "-");
              if (sig != lastWirelessSig) {
-                 ApplyWirelessControls(enforce, blockBt, blockNearby);
+                 logger.Info("Wireless control state changed -- cached for the elevated "
+                             "Wireless Guard task to apply (enforce=" +
+                             std::string(enforce ? "true" : "false") + " bt=" +
+                             std::string(blockBt ? "block" : "allow") + " nearby=" +
+                             std::string(blockNearby ? "block" : "allow") + ")");
                  lastWirelessSig = sig;
              }
              logger.Debug("Wireless control: enforced=" + std::string(enforced ? "true" : "false") +
@@ -11561,7 +11616,143 @@ int HandleApplyIfeoGuards(int /*argc*/, char* /*argv*/[]) {
     return failCount > 0 ? 1 : 0;
 }
 
+// Elevated periodic mode (task #147): applies the Bluetooth fsquirt.exe IFEO
+// redirect + Nearby Sharing/CDP policy DWORD from the state cache the main
+// (unelevated) process writes in FetchWirelessPolicy(). Exists for the exact
+// same reason as HandleApplyIfeoGuards() above -- the main task cannot write
+// these HKLM keys itself (confirmed live: ACCESS_DENIED rc=5) -- but unlike
+// CLI Guard's static, set-once-at-startup registration, wireless control is
+// policy-driven and can change at any time, so this needs to run
+// PERIODICALLY (registered as a repeating SYSTEM/Highest scheduled task,
+// "SeceoKnight DLP Wireless Guard") rather than once at startup.
+//
+// Reads a simple "enforce|blockBt|blockNearby" (1/0 chars) line rather than
+// JSON -- deliberately minimal, no parser dependency for three booleans.
+// If the cache file doesn't exist yet (agent hasn't completed its first
+// sync since install), does nothing and exits cleanly -- applying a
+// guessed/default state would risk enforcing (or failing to enforce) the
+// wrong thing before the real policy is even known.
+int HandleApplyWirelessGuard(int /*argc*/, char* /*argv*/[]) {
+    Logger logger;
+    try {
+        const char* envLogDir = std::getenv("SECEOKNIGHT_LOG_DIR");
+        std::string dir = envLogDir ? envLogDir : "C:\\ProgramData\\SeceoKnight\\logs";
+        std::string cachePath = dir + "\\wireless_state.cache";
+
+        std::error_code ec;
+        if (!fs::exists(cachePath, ec) || ec) {
+            logger.Info("apply-wireless-guard: no state cache yet (agent hasn't synced "
+                        "with the server since install) -- nothing to apply this run");
+            return 0;
+        }
+
+        std::ifstream f(cachePath, std::ios::binary);
+        if (!f.is_open()) {
+            logger.Warning("apply-wireless-guard: could not open state cache " + cachePath);
+            return 1;
+        }
+        std::string line;
+        std::getline(f, line);
+        if (line.size() < 5 || line[1] != '|' || line[3] != '|') {
+            logger.Warning("apply-wireless-guard: malformed state cache content: " + line);
+            return 1;
+        }
+        bool enforce     = line[0] == '1';
+        bool blockBt     = line[2] == '1';
+        bool blockNearby = line[4] == '1';
+
+        // --- fsquirt.exe IFEO redirect ---
+        char selfPath[MAX_PATH] = {0};
+        GetModuleFileNameA(nullptr, selfPath, MAX_PATH);
+        std::string dbg = std::string("\"") + selfPath + "\" --blocked-launch";
+        bool blockBtNow = enforce && blockBt;
+
+        std::string ifeoSub = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\"
+                              "Image File Execution Options\\fsquirt.exe";
+        if (blockBtNow) {
+            HKEY k;
+            LSTATUS rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, ifeoSub.c_str(), 0, nullptr,
+                                         REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr);
+            if (rc != ERROR_SUCCESS) {
+                logger.Error("apply-wireless-guard: RegCreateKeyExA failed for fsquirt.exe rc=" +
+                            std::to_string(rc) + " (this task should be running as SYSTEM/Highest "
+                            "-- check the scheduled task's principal if this persists)");
+            } else {
+                LSTATUS rc2 = RegSetValueExA(k, "Debugger", 0, REG_SZ,
+                                             reinterpret_cast<const BYTE*>(dbg.c_str()),
+                                             (DWORD)dbg.size() + 1);
+                RegCloseKey(k);
+                if (rc2 != ERROR_SUCCESS) {
+                    logger.Error("apply-wireless-guard: RegSetValueExA failed for fsquirt.exe rc=" +
+                                std::to_string(rc2));
+                } else {
+                    logger.Info("apply-wireless-guard: fsquirt.exe IFEO block applied");
+                }
+            }
+        } else {
+            HKEY k;
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, ifeoSub.c_str(), 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+                RegDeleteValueA(k, "Debugger");
+                RegCloseKey(k);
+                logger.Info("apply-wireless-guard: fsquirt.exe IFEO block cleared (allowed)");
+            }
+        }
+
+        // --- Nearby Sharing / Connected Devices Platform policy ---
+        std::string cdpSub = "SOFTWARE\\Policies\\Microsoft\\Windows\\System";
+        bool blockNearbyNow = enforce && blockNearby;
+        if (blockNearbyNow) {
+            HKEY k;
+            LSTATUS rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, cdpSub.c_str(), 0, nullptr,
+                                         REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr);
+            if (rc != ERROR_SUCCESS) {
+                logger.Error("apply-wireless-guard: RegCreateKeyExA failed for EnableCdp rc=" +
+                            std::to_string(rc));
+            } else {
+                DWORD zero = 0;
+                LSTATUS rc2 = RegSetValueExA(k, "EnableCdp", 0, REG_DWORD,
+                                             reinterpret_cast<const BYTE*>(&zero), sizeof(zero));
+                RegCloseKey(k);
+                if (rc2 != ERROR_SUCCESS) {
+                    logger.Error("apply-wireless-guard: RegSetValueExA failed for EnableCdp rc=" +
+                                std::to_string(rc2));
+                } else {
+                    logger.Info("apply-wireless-guard: Nearby Sharing (CDP) blocked");
+                }
+            }
+        } else {
+            HKEY k;
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, cdpSub.c_str(), 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {
+                RegDeleteValueA(k, "EnableCdp");
+                RegCloseKey(k);
+                logger.Info("apply-wireless-guard: Nearby Sharing (CDP) restored (allowed)");
+            }
+        }
+
+        logger.Debug("apply-wireless-guard: complete -- enforce=" + std::string(enforce ? "true" : "false") +
+                    " bt=" + std::string(blockBt ? "block" : "allow") +
+                    " nearby=" + std::string(blockNearby ? "block" : "allow"));
+    } catch (const std::exception& e) {
+        try { logger.Error(std::string("apply-wireless-guard: exception: ") + e.what()); } catch (...) {}
+        return 1;
+    } catch (...) {
+        try { logger.Error("apply-wireless-guard: unknown exception"); } catch (...) {}
+        return 1;
+    }
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
+    // Elevated Wireless Guard hook (task #147): the repeating SYSTEM/Highest
+    // scheduled task install-agent.ps1 registers invokes us with this flag
+    // purely to reconcile the fsquirt.exe/Nearby-Sharing registry state from
+    // the cache file, then exits -- this is not a normal agent run.
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--apply-wireless-guard") {
+            return HandleApplyWirelessGuard(argc, argv);
+        }
+    }
+
     // Elevated CLI Guard registration hook (task #142/#145): the separate
     // SYSTEM/Highest scheduled task install-agent.ps1 registers invokes us
     // with this flag purely to write the IFEO Debugger keys, then exits --

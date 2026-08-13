@@ -48,6 +48,29 @@ This same silent-failure gap has existed since task #113 (Bluetooth fsquirt.exe 
 
 ---
 
+## 🔧 Fix fsquirt.exe/Bluetooth block: same unelevated-process bug as CLI Guard, now confirmed live (August 13, 2026)
+
+### Summary
+
+Live-tested the Wireless/Bluetooth Transfer Control policy for the first time since it shipped (task #113) -- exactly the concern flagged in the CLI Guard fix's CHANGELOG entry. Result: confirmed broken. Policy sync worked correctly (`Wireless control: enforced=true mode=enforce bt_file_transfer=block`), but `Get-ItemProperty` on the `fsquirt.exe` IFEO key came back empty, and the log showed the identical failure as CLI Guard: `SetIFEODebugger: RegCreateKeyExA failed for fsquirt.exe rc=5`. Same root cause as task #145 -- the main "SeceoKnight DLP Agent" task runs unelevated (`RunLevel: Limited`) on purpose, and a standard user's token only has `ReadKey` on that registry path. This means the Bluetooth file-transfer block has almost certainly never actually worked on any real deployment since it shipped.
+
+### Why this needed a different fix shape than CLI Guard
+
+CLI Guard's IFEO registration is static -- the same 9 exe names, set once, never changes -- so a one-shot elevated task at startup was sufficient. Wireless control is **policy-driven**: `enforce`/`block_bluetooth_file_transfer`/`block_nearby_sharing` can change at any time the server-side policy changes, and the existing code already re-evaluates it on every sync (via a `lastWirelessSig` change-signature check). A one-shot task can't react to that.
+
+### Fix
+
+- `FetchWirelessPolicy()` no longer calls `ApplyWirelessControls()` directly (would just repeat the same `ACCESS_DENIED` every sync, forever). Instead, on every successful policy fetch, it writes the desired state to a small cache file (`SaveWirelessStateToCache()` -> `C:\ProgramData\SeceoKnight\logs\wireless_state.cache`, deliberately a trivial `1|1|0`-style format, not JSON) -- the same directory already used for the offline policy cache (task #95/#107), chosen specifically because it's writable by a standard user, unlike the registry key that started this whole investigation.
+- New standalone agent mode `seceoknight_agent.exe --apply-wireless-guard` (`HandleApplyWirelessGuard()`): reads that cache and applies the `fsquirt.exe` IFEO redirect + the Nearby Sharing/CDP `EnableCdp` policy DWORD, with the same explicit return-code checking and logging as the CLI Guard fix (task #144's diagnostic-logging fix). No-ops cleanly (not a guessed default) if the cache doesn't exist yet.
+- `install-agent.ps1` registers a new **`SeceoKnight DLP Wireless Guard`** scheduled task -- SYSTEM/Highest, repeating every 2 minutes indefinitely (same trigger pattern as the existing Watchdog task) -- so a policy change takes effect within 2 minutes rather than needing a reboot, and also runs it once immediately at install time.
+- `manage-agent.ps1`'s `Uninstall-Agent` removes the new task on uninstall (the registry-key cleanup step from task #145 already covered `fsquirt.exe` itself).
+
+### Deployment
+
+Windows agent (C++) + installer changes -- `agent.cpp`, `install-agent.ps1`, `manage-agent.ps1`. CI rebuilds the binary automatically. Re-run the install one-liner on existing endpoints to pick up the new task; allow up to ~2 minutes after install (or after a wireless policy change) for the cache-then-apply cycle to complete before testing.
+
+---
+
 ## 🔧 Add IFEO zero-race pre-launch interception for CLI upload tools (August 13, 2026)
 
 ### Summary

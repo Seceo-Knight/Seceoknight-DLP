@@ -936,6 +936,53 @@ try {
         Write-ColorOutput "Could not create CLI Guard task (non-fatal): $($_.Exception.Message)" -Type "Warning"
     }
 
+    # -- Wireless Guard: repeating elevated task (task #147) -----------------
+    # Same unelevated-process problem as CLI Guard above, but wireless
+    # control is POLICY-DRIVEN (can change any time the server config
+    # changes), so a one-shot-at-startup task isn't enough -- this one
+    # repeats every 2 minutes, reading the state the main agent task caches
+    # to C:\ProgramData\SeceoKnight\logs\wireless_state.cache and applying
+    # it via `seceoknight_agent.exe --apply-wireless-guard`.
+    $wirelessGuardTaskName = "SeceoKnight DLP Wireless Guard"
+    try {
+        $wirelessGuardAction = New-ScheduledTaskAction `
+            -Execute $exePath `
+            -Argument "--apply-wireless-guard" `
+            -WorkingDirectory $INSTALL_DIR
+
+        $wirelessGuardTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes 2) `
+            -RepetitionDuration (New-TimeSpan -Days 3650)
+
+        $wirelessGuardPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+        $wirelessGuardSettings = New-ScheduledTaskSettingsSet `
+            -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries `
+            -ExecutionTimeLimit (New-TimeSpan -Minutes 1)
+
+        $existingWirelessGuard = Get-ScheduledTask -TaskName $wirelessGuardTaskName -ErrorAction SilentlyContinue
+        if ($existingWirelessGuard) { Unregister-ScheduledTask -TaskName $wirelessGuardTaskName -Confirm:$false }
+
+        Register-ScheduledTask `
+            -TaskName $wirelessGuardTaskName `
+            -Action $wirelessGuardAction `
+            -Trigger $wirelessGuardTrigger `
+            -Principal $wirelessGuardPrincipal `
+            -Settings $wirelessGuardSettings `
+            -Description "SeceoKnight DLP - Reconcile Bluetooth/Nearby Sharing IFEO and policy state every 2 minutes (requires SYSTEM elevation)" `
+            -Force | Out-Null
+
+        Write-ColorOutput "Wireless Guard task created: $wirelessGuardTaskName" -Type "Success"
+
+        # Best-effort immediate run -- will likely no-op on a fresh install
+        # (no cached state yet until the main task's first successful sync),
+        # but harmless, and picks up an existing cache instantly on upgrade.
+        try { Start-ScheduledTask -TaskName $wirelessGuardTaskName } catch {}
+    } catch {
+        Write-ColorOutput "Could not create Wireless Guard task (non-fatal): $($_.Exception.Message)" -Type "Warning"
+    }
+
 } catch {
     Write-ColorOutput "Error creating scheduled task: $($_.Exception.Message)" -Type "Error"
     Write-ColorOutput "You can manually start it: Start-ScheduledTask -TaskName '$TASK_NAME'" -Type "Info"
