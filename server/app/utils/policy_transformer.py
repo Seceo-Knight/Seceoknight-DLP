@@ -43,6 +43,8 @@ def transform_frontend_config_to_backend(
         return _transform_messaging_app_control_config(config)
     elif policy_type == "application_control":
         return _transform_application_control_config(config)
+    elif policy_type == "network_share_transfer_control":
+        return _transform_network_share_transfer_config(config)
     else:
         # Unknown type, return empty defaults
         return (
@@ -576,12 +578,32 @@ def _transform_application_control_config(config: Dict[str, Any]) -> Tuple[Dict[
     here (e.g. messaging_app_control) matches on event_subtype alone rather
     than re-deriving the agent's own decision.
 
-    NOTE: network_share_transfer_control, wireless_transfer_control,
-    print_content_prevention and printer_control are the same
-    agent-polled-config-toggle style as this policy and messaging_app_control,
-    and are currently ALSO missing from this dispatcher -- same "0
-    violations" display bug likely applies to all four. Not fixed here
-    (out of scope for this pass); flagging for a follow-up.
+    NOTE: wireless_transfer_control, print_content_prevention and
+    printer_control are the same agent-polled-config-toggle style as this
+    policy and messaging_app_control, and are currently ALSO missing from
+    this dispatcher -- same "0 violations" display bug likely applies to
+    all three. Not fixed here (out of scope for this pass); flagging for a
+    follow-up.
+
+    CORRECTION (task #151): network_share_transfer_control was originally
+    listed alongside these three here, but it does NOT belong in this
+    "agent already decided, this is a reporting-only gap" bucket -- unlike
+    those three, its content_aware mode calls EvaluatePolicyRealtime() ->
+    the shared, generic /agents/{id}/policy/evaluate endpoint, and the
+    agent's actual block/allow decision for that mode depends entirely on
+    DatabasePolicyEvaluator finding a matching Policy row with a "block"
+    action (evaluate_policy_realtime()'s should_block only ever becomes
+    True from an actual policy match or a Data Matching hit -- there is no
+    "classification == Restricted -> block anyway" fallback). With this
+    dispatcher falling through to the unknown-type branch, every
+    content_aware Network Share Transfer Control policy silently got empty
+    conditions.rules, which evaluate_event() skips outright -- meaning
+    network share content-aware blocking has been completely non-functional
+    (real enforcement, not just a violations counter), confirmed live: a
+    file with a validated, non-test-value SSN + Luhn-valid credit card
+    number classified at Confidence: 100% / Level: Restricted and still
+    came back Decision: allow. See _transform_network_share_transfer_config
+    below for the real fix.
 
     IMPORTANT -- backend/reporting action is always "alert", never mapped
     from config.mode/applications. Same reasoning as
@@ -613,6 +635,106 @@ def _transform_application_control_config(config: Dict[str, Any]) -> Tuple[Dict[
         ],
     }
     actions = {"alert": {}}
+
+    return conditions, actions
+
+
+def _transform_network_share_transfer_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform Network Share Transfer Control config to backend format.
+
+    Task #151. Unlike messaging_app_control/application_control (agent
+    already made and executed the decision before the event exists -- the
+    Policy row here only matters for the dashboard's violation count),
+    "content_aware" mode for this policy type is a genuine live-enforcement
+    dependency: NetworkShareTransferMonitor() in agent.cpp calls
+    EvaluatePolicyRealtime(..., "network_share_transfer") -> POST
+    /agents/{id}/policy/evaluate, and evaluate_policy_realtime() only ever
+    sets should_block=True from an actual DatabasePolicyEvaluator match (or
+    a Data Matching hit) -- there is no "classification came back Restricted,
+    block anyway" fallback. Before this fix, this policy_type had no case
+    in the dispatcher above, so it fell through to the unknown-type branch
+    and got empty conditions.rules, which evaluate_event() skips outright.
+    Confirmed live: content classified at Confidence: 100% / Level:
+    Restricted still came back Decision: allow, because zero Policy rows
+    ever matched the event.
+
+    Frontend format:
+    {
+        "mode": "block_all" | "content_aware" | "off",
+        "action": "audit" | "block",
+        "exception_shares": [...],   // not yet wired -- no matching agent
+                                      // event field exists to key off (see
+                                      // note below)
+        "exception_users": [...],    // same
+        "exception_paths": [...],
+        "exception_file_types": [...]
+    }
+
+    "block_all" and "off" enforce (or don't) entirely agent-side --
+    NetworkShareTransferMonitor() never even calls EvaluatePolicyRealtime()
+    for those modes, it quarantines directly off the local mode/action
+    config. The Policy row generated for those modes is for violation-count
+    reporting only, matching event_subtype alone with an alert-only action,
+    same reasoning as application_control/messaging_app_control: the agent
+    already decided, "block" here would just be a second, disconnected
+    opinion.
+
+    "content_aware" is the mode that actually depends on this Policy row
+    for its block/allow decision. Thresholds Confidential/Restricted at
+    "block" (configured action) or "alert" (audit) to match the same
+    severity tiers used server-side for USB in classification_engine.py's
+    _determine_classification, plus an event_subtype guard so this can
+    never accidentally match a different channel's event.
+    """
+    mode = config.get("mode", "block_all")
+    action = config.get("action", "audit")
+    exception_paths = config.get("exception_paths") or []
+    exception_file_types = config.get("exception_file_types") or []
+
+    rules: List[Dict[str, Any]] = [
+        {
+            "field": "event_subtype",
+            "operator": "equals",
+            "value": "network_share_transfer",
+        }
+    ]
+
+    if mode == "content_aware":
+        rules.append(
+            {
+                "field": "classification_level",
+                "operator": "in",
+                "value": ["Confidential", "Restricted"],
+            }
+        )
+        if exception_paths:
+            rules.append(
+                {
+                    "field": "source_path",
+                    "operator": "not_in",
+                    "value": exception_paths,
+                }
+            )
+        if exception_file_types:
+            rules.append(
+                {
+                    "field": "file_extension",
+                    "operator": "not_in",
+                    "value": exception_file_types,
+                }
+            )
+
+        conditions = {"match": "all", "rules": rules}
+        actions = (
+            {"block": {}, "alert": {"severity": "high"}}
+            if action == "block"
+            else {"alert": {"severity": "medium"}}
+        )
+    else:
+        # block_all / off: agent already decided locally. Reporting-only.
+        conditions = {"match": "all", "rules": rules}
+        actions = {"alert": {}}
 
     return conditions, actions
 
