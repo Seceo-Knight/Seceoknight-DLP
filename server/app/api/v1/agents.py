@@ -1241,6 +1241,74 @@ async def get_application_control(
     }
 
 
+@router.get("/{agent_id}/file-identity-denylist")
+async def get_file_identity_denylist(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(verify_agent_key),
+):
+    """
+    Task #152. The file-identity denylist policy the agent enforces locally
+    -- blocks/quarantines a file purely by extension or exact SHA-256 hash,
+    the same way an antivirus denylist works, independent of what's inside
+    the file. Driven by a Policy row with type="file_identity_denylist"
+    (same pattern as application_control/wireless_transfer_control above)
+    -- no dedicated table, just an extensions/hashes/action config.
+
+    Previously this policy type had a dashboard form and a server-side
+    config transform (_transform_file_identity_denylist_config in
+    policy_transformer.py, producing valid conditions/actions in the Policy
+    table) but NO agent-facing endpoint and NO agent-side enforcement code
+    at all -- confirmed via a full grep across agent.cpp for "denylist"/
+    "file_identity" turning up nothing. Configuring this policy did
+    literally nothing on any endpoint. This endpoint plus
+    FetchFileIdentityDenylist()/IsFileDenylisted() in agent.cpp close that
+    gap.
+
+    Picks the single highest-priority active file_identity_denylist policy,
+    same simplified "one policy wins" pattern as application-control/
+    wireless-policy above (not a union across multiple policies).
+
+    The agent polls this on the same cadence as policy sync and caches the
+    result. Requires ``X-Agent-Key`` header.
+    """
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policy = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "file_identity_denylist",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().first()
+
+    cfg = (policy.config or {}) if policy else {}
+    action = str(cfg.get("action") or "block").lower()
+    if action not in ("block", "quarantine", "alert", "log"):
+        action = "block"
+
+    def _str_list(v):
+        return [str(x) for x in (v or []) if str(x).strip()] if isinstance(v, list) else []
+
+    extensions = [s.lower().lstrip(".") for s in _str_list(cfg.get("extensions"))]
+    hashes = [s.lower() for s in _str_list(cfg.get("hashes"))]
+
+    # Only actually enforced if a policy exists AND has at least one
+    # extension or hash configured -- an empty denylist matching nothing
+    # is functionally the same as no policy, and treating it as "enforced"
+    # would just make the agent hash every file it sees for no reason.
+    enforced = bool(policy) and (bool(extensions) or bool(hashes))
+
+    return {
+        "enforced": enforced,
+        "action": action if enforced else "log",
+        "extensions": extensions,
+        "hashes": hashes,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @router.get("/{agent_id}/wireless-policy")
 async def get_wireless_policy(
     agent_id: str,

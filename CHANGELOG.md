@@ -8,6 +8,24 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🆕 Build File Identity Denylist agent-side enforcement from scratch (task #152, August 13, 2026)
+
+### Summary
+
+Before configuring this policy type for testing, checked whether it was actually wired end-to-end -- it wasn't. The dashboard create-policy form existed, and the server-side config transform (`_transform_file_identity_denylist_config`) correctly produced valid `conditions`/`actions` in the Policy table. But a full grep across `agent.cpp` for "denylist"/"file_identity" found zero matches: no agent-facing GET endpoint, no fetch function, no check function, nothing. Configuring a File Identity Denylist policy in the dashboard did literally nothing on any Windows endpoint -- worse than the Network Share bug (task #151), which at least had broken enforcement; this had none at all.
+
+### What was built
+
+- **Server**: `GET /agents/{id}/file-identity-denylist` in `agents.py`, mirroring the existing `application-control`/`wireless-policy` pattern -- picks the highest-priority active `file_identity_denylist` Policy row, returns `{enforced, action, extensions, hashes}`.
+- **Agent**: `FetchFileIdentityDenylist()` (polled on the standard policy-sync cadence, keeps last-known-good on error), `IsFileDenylisted()` (checks extension first, only computes a SHA-256 hash if the extension didn't match and a hash list is configured -- avoids hashing every file for an extension-only policy), `QuarantineDenylistedFile()` (copy-then-delete, cross-volume safe, same pattern as `QuarantineNetworkShareFile`), `SendFileIdentityDenylistEvent()`.
+- **Hook points**: `HandleNetworkShareNewFile()` and `HandleRemovableDriveFile()` (USB) -- the two channels that already reliably detect a file crossing an exfiltration boundary. Checked independently of each channel's own mode/policies, so a denylist match fires even if e.g. Network Share Transfer Control itself is set to "off".
+
+### Known scope gap (documented, not silently skipped)
+
+**Not** wired into `FileSystemMonitor()` (plain local file creation/modification). That thread only watches directories sourced from separate File System Monitoring policies (`monitoredDirectories`) -- a denylist-only deployment with no File System Monitoring policy configured would never see local file-write events at all. Covering that would need a general "watch everything" mechanism this agent doesn't have. Flagging as a follow-up rather than claiming full coverage.
+
+---
+
 ## 🔧 Fix Network Share Transfer Control never blocking -- missing policy dispatcher case (task #151, August 13, 2026)
 
 ### Summary

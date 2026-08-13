@@ -2656,6 +2656,16 @@ static ClassificationResult Classify(const std::string& content,
      std::set<std::string> appControlExceptTypes;        // extensions, no leading dot
      std::mutex appControlMutex;
 
+     // Synced from GET /agents/{id}/file-identity-denylist (task #152).
+     // Blocks/quarantines a file purely by extension or exact SHA-256 hash,
+     // independent of content. See FetchFileIdentityDenylist()/
+     // IsFileDenylisted() for the fetch/check logic.
+     std::atomic<bool> fileDenylistEnforced{false};
+     std::string fileDenylistAction;                     // "block" | "quarantine" | "alert" | "log"
+     std::set<std::string> fileDenylistExtensions;        // no leading dot, lowercase
+     std::set<std::string> fileDenylistHashes;            // lowercase sha256 hex
+     std::mutex fileDenylistMutex;
+
      // ── Messaging / thick-client app attachment control (task #115) ────────
      // Synced from GET /agents/{id}/messaging-app-policy. Ported from
      // CyberSentinel-DLP. The network-exfil monitor's file-dialog detector
@@ -4782,6 +4792,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          FetchWirelessPolicy();
          // Printer device control + print content inspection -- same reasoning, own endpoint.
          FetchPrinterPolicy();
+         // File Identity Denylist (task #152) -- same reasoning, own endpoint.
+         FetchFileIdentityDenylist();
      }
 
      // Pulls GET /agents/{id}/network-share-policy and caches it locally.
@@ -4897,6 +4909,158 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          bool listed = appControlApps.count(proc) > 0;
          if (appControlMode == "blocklist") return !listed;   // block listed apps
          return listed;                                       // allowlist: allow only listed
+     }
+
+     // ── File Identity Denylist (task #152) ───────────────────────────────
+     // Blocks/quarantines a file purely by extension or exact SHA-256 hash,
+     // independent of content -- an antivirus-style denylist, the same way
+     // the dashboard/server side already described it (see
+     // _transform_file_identity_denylist_config's docstring server-side).
+     // Previously had zero agent-side implementation at all: the dashboard
+     // form and server config transform existed, but nothing ever fetched
+     // or checked a denylist on this binary -- confirmed via a full grep for
+     // "denylist"/"file_identity" across this file turning up nothing.
+     //
+     // Checked from the USB (HandleRemovableDriveFile) and network-share
+     // (HandleNetworkShareNewFile) file-arrival hooks -- the two channels
+     // that already reliably see a file cross an exfiltration boundary
+     // today. NOT wired into FileSystemMonitor: that thread only watches
+     // directories sourced from separate File System Monitoring policies
+     // (monitoredDirectories), so a denylist-only deployment with no such
+     // policy configured would never see any local file-write events at
+     // all -- covering that would need a general "watch everything"
+     // mechanism this agent doesn't have yet. Known, documented gap (see
+     // CHANGELOG), not silently pretended to be full coverage.
+     void FetchFileIdentityDenylist() {
+         try {
+             std::pair<int, std::string> resp = GetHttpClient()->Get(
+                 "/agents/" + config.agentId + "/file-identity-denylist");
+             auto& [status, response] = resp;
+             if (status != 200) return;   // keep last-known-good on error/outage
+
+             bool enforced = ExtractJsonBool(response, "enforced");
+             std::string action = ToLower(config.ExtractJsonValue(response, "action"));
+             if (action.empty()) action = "block";
+
+             auto lc = [](std::vector<std::string> v) { for (auto& s : v) s = ToLower(s); return v; };
+             auto exts   = lc(ExtractJsonArray(response, "extensions"));
+             auto hashes = lc(ExtractJsonArray(response, "hashes"));
+
+             {
+                 std::lock_guard<std::mutex> lock(fileDenylistMutex);
+                 fileDenylistAction     = action;
+                 fileDenylistExtensions = std::set<std::string>(exts.begin(), exts.end());
+                 fileDenylistHashes     = std::set<std::string>(hashes.begin(), hashes.end());
+             }
+             fileDenylistEnforced.store(enforced);
+             logger.Debug("File identity denylist: enforced=" + std::string(enforced ? "true" : "false") +
+                         " action=" + action +
+                         " extensions=" + std::to_string(exts.size()) +
+                         " hashes=" + std::to_string(hashes.size()));
+         } catch (const std::exception& e) {
+             logger.Debug(std::string("FetchFileIdentityDenylist failed: ") + e.what());
+         } catch (...) {
+             logger.Debug("FetchFileIdentityDenylist failed");
+         }
+     }
+
+     // True if filePath matches the denylist by extension or SHA-256 hash.
+     // The hash is only computed when the extension didn't already match
+     // AND the hash list is non-empty, so an extension-only policy never
+     // pays the cost of hashing every file it sees.
+     bool IsFileDenylisted(const std::string& filePath, std::string& matchReason) {
+         if (!fileDenylistEnforced.load()) return false;
+
+         std::string ext = ToLower(fs::path(filePath).extension().string());
+         if (!ext.empty() && ext[0] == '.') ext.erase(0, 1);
+
+         bool needHash = false;
+         {
+             std::lock_guard<std::mutex> lock(fileDenylistMutex);
+             if (!ext.empty() && fileDenylistExtensions.count(ext)) {
+                 matchReason = "extension:" + ext;
+                 return true;
+             }
+             needHash = !fileDenylistHashes.empty();
+         }
+         if (!needHash) return false;
+
+         std::string hash;
+         try {
+             hash = ToLower(CalculateFileHash(filePath));
+         } catch (...) {
+             return false;
+         }
+         if (hash.empty()) return false;
+
+         std::lock_guard<std::mutex> lock(fileDenylistMutex);
+         if (fileDenylistHashes.count(hash)) {
+             matchReason = "hash:" + hash;
+             return true;
+         }
+         return false;
+     }
+
+     std::string GetFileDenylistAction() {
+         std::lock_guard<std::mutex> lock(fileDenylistMutex);
+         return fileDenylistAction;
+     }
+
+     // Copy-then-delete quarantine for a denylisted file, cross-volume safe
+     // -- same reasoning as QuarantineNetworkShareFile() below. Shared by
+     // every hook point that checks IsFileDenylisted().
+     bool QuarantineDenylistedFile(const std::string& filePath, const std::string& fileName) {
+         std::string quarantinePath = "C:\\ProgramData\\SeceoKnight\\quarantine";
+         std::string timestamp = std::to_string(time(NULL));
+         std::string quarantineFile = quarantinePath + "\\" + fileName + "_denylist_" + timestamp;
+         try {
+             fs::create_directories(quarantinePath);
+             if (!fs::exists(filePath)) return false;
+             fs::copy_file(filePath, quarantineFile, fs::copy_options::overwrite_existing);
+             fs::remove(filePath);
+             logger.Warning("  Quarantined denylisted file: " + filePath + " -> " + quarantineFile);
+             return true;
+         } catch (const std::exception& e) {
+             logger.Error("Failed to quarantine denylisted file " + filePath + ": " + e.what());
+             return false;
+         }
+     }
+
+     void SendFileIdentityDenylistEvent(const std::string& fileName, const std::string& filePath,
+                                         const std::string& channel, const std::string& matchReason,
+                                         const std::string& action, bool success) {
+         try {
+             size_t fileSize = 0;
+             try { if (fs::exists(filePath)) fileSize = fs::file_size(filePath); } catch (...) {}
+
+             std::string description = "File Identity Denylist match (" + matchReason + ") via " + channel;
+             description += "\nFile: " + fileName;
+             description += "\nAction: " + action;
+
+             JsonBuilder json;
+             json.AddString("event_id", GenerateUUID());
+             json.AddString("event_type", "file_identity_denylist");
+             json.AddString("event_subtype", "file_identity_denylist");
+             json.AddString("agent_id", config.agentId);
+             json.AddString("source_type", "agent");
+             json.AddString("user_email", GetUsername() + "@" + GetHostname());
+             json.AddString("description", description);
+             json.AddString("severity", "high");
+             json.AddString("action", action);
+             json.AddString("file_name", fileName);
+             json.AddString("file_path", filePath);
+             json.AddInt("file_size", static_cast<int>(fileSize));
+             json.AddString("channel", channel);
+             json.AddString("match_reason", matchReason);
+             json.AddBool("success", success);
+             json.AddString("timestamp", GetCurrentTimestampISO());
+
+             SendEvent(json.Build());
+             logger.Warning("File identity denylist event sent: " + action + " - " + fileName +
+                           " (" + matchReason + ")");
+         } catch (const std::exception& e) {
+             logger.Error("Failed to send file identity denylist event: " + std::string(e.what()));
+         }
      }
 
      // ── Messaging / thick-client app attachment control ─────────────────────
@@ -8979,8 +9143,30 @@ if (shouldMonitor) {
      
      void HandleRemovableDriveFile(const std::string& filePath) {
          try {
-             if (!allowEvents || !hasUsbTransferPolicies) return;
-             
+             if (!allowEvents) return;
+
+             // File Identity Denylist (task #152) -- independent of USB
+             // Transfer Monitoring policies (hasUsbTransferPolicies below is
+             // scoped to a *different* policy type), checked first so a
+             // denylisted extension/hash is caught even when no separate
+             // file-transfer-monitoring policy is configured for this path.
+             if (fs::exists(filePath)) {
+                 std::string denylistMatch;
+                 if (IsFileDenylisted(filePath, denylistMatch)) {
+                     std::string fileName = fs::path(filePath).filename().string();
+                     std::string denylistAction = GetFileDenylistAction();
+                     bool doBlock = (denylistAction == "block" || denylistAction == "quarantine");
+                     bool success = true;
+                     if (doBlock) success = QuarantineDenylistedFile(filePath, fileName);
+                     SendFileIdentityDenylistEvent(
+                         fileName, filePath, "usb", denylistMatch,
+                         doBlock ? (success ? "quarantined" : "quarantine_failed") : "alerted", success);
+                     if (doBlock && success) return;  // file is gone
+                 }
+             }
+
+             if (!hasUsbTransferPolicies) return;
+
              logger.Info("File detected on removable drive: " + filePath);
              
              if (!fs::exists(filePath)) return;
@@ -9918,6 +10104,23 @@ if (shouldMonitor) {
         if (IsNetShareExceptionMatch(uncPath, fileName, username)) {
             logger.Debug("Network share file exempted by policy exception: " + fileName);
             return;
+        }
+
+        // File Identity Denylist (task #152) -- independent of Network Share
+        // Transfer Control's own mode/action, checked first so a denylisted
+        // extension/hash is caught even when network-share mode is "off".
+        {
+            std::string denylistMatch;
+            if (IsFileDenylisted(shareFilePath, denylistMatch)) {
+                std::string denylistAction = GetFileDenylistAction();
+                bool doBlock = (denylistAction == "block" || denylistAction == "quarantine");
+                bool success = true;
+                if (doBlock) success = QuarantineDenylistedFile(shareFilePath, fileName);
+                SendFileIdentityDenylistEvent(
+                    fileName, shareFilePath, "network_share", denylistMatch,
+                    doBlock ? (success ? "quarantined" : "quarantine_failed") : "alerted", success);
+                if (doBlock && success) return;  // file is gone, nothing left to evaluate
+            }
         }
 
         std::string mode, action;
