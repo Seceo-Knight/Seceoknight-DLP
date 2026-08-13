@@ -615,6 +615,26 @@ class ClassificationEngine:
             context_adjustment * 0.20
         )
 
+        # Floor: once content has already cleared the false-positive check
+        # above (not a known test value, no example/doc/test-file signal),
+        # a validated, high-confidence rule match -- Luhn-checked card
+        # numbers, format-matched SSNs, multiple corroborating rule types
+        # firing together, etc. -- is about as close to ground truth as
+        # static analysis gets. The ML sub-score is a probabilistic
+        # *opinion* layered on top for cases the rules are unsure about; it
+        # should never be able to single-handedly pull a already-strong,
+        # non-suspicious rule verdict down into a lower classification
+        # tier. Confirmed live (task #150): real (non-test) SSN + Luhn-
+        # valid credit card together gave rule_confidence=1.0, but a
+        # middling ml_confidence (~0.7) dragged the 50/30/20 blend down to
+        # 0.71 -- Confidential/allow instead of Restricted/block, for
+        # content with zero false-positive evidence. 0.8 matches
+        # _determine_classification's own Restricted cutoff, so this only
+        # kicks in when the rules alone would already have called it
+        # Restricted.
+        if rule_confidence >= 0.8:
+            combined = max(combined, rule_confidence)
+
         return max(0.0, min(1.0, combined))
 
     async def _evaluate_rule_with_validation(

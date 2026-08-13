@@ -44,12 +44,45 @@ class TestCombineScores:
 
     def test_weighted_combination(self, db_session):
         engine = ClassificationEngine(db_session)
+        # rule_confidence kept below the 0.8 high-confidence floor (see
+        # test_high_confidence_rule_match_not_diluted_by_ml below) so this
+        # test isolates the raw 50/30/20 blend math.
+        combined = engine._combine_scores(
+            rule_confidence=0.7, ml_confidence=0.6, context_adjustment=0.5,
+            is_false_positive=False,
+        )
+        # 0.7*0.5 + 0.6*0.3 + 0.5*0.2 = 0.35 + 0.18 + 0.1 = 0.63
+        assert combined == pytest.approx(0.63, abs=1e-6)
+
+    def test_high_confidence_rule_match_not_diluted_by_ml(self, db_session):
+        """
+        Task #150 regression test. Confirmed live: a real (non-test-value)
+        SSN + Luhn-valid credit card number together produced
+        rule_confidence=1.0 with zero false-positive signal, but a middling
+        ml_confidence (~0.7) dragged the raw 50/30/20 blend down to 0.71 --
+        Confidential/allow instead of Restricted/block. Once content clears
+        the false-positive check, a validated high-confidence rule match
+        must not be pulled below its own rule-only confidence by the ML
+        opinion layered on top.
+        """
+        engine = ClassificationEngine(db_session)
+        combined = engine._combine_scores(
+            rule_confidence=1.0, ml_confidence=0.7, context_adjustment=0.0,
+            is_false_positive=False,
+        )
+        # Raw blend would be 1.0*0.5 + 0.7*0.3 + 0.0*0.2 = 0.71 -- the
+        # rule_confidence >= 0.8 floor must raise this back to 1.0.
+        assert combined == 1.0
+
+    def test_high_confidence_floor_boundary(self, db_session):
+        engine = ClassificationEngine(db_session)
+        # Exactly at the 0.8 floor threshold: raw blend is
+        # 0.8*0.5 + 0.6*0.3 + 0.5*0.2 = 0.68, floor raises it to 0.8.
         combined = engine._combine_scores(
             rule_confidence=0.8, ml_confidence=0.6, context_adjustment=0.5,
             is_false_positive=False,
         )
-        # 0.8*0.5 + 0.6*0.3 + 0.5*0.2 = 0.4 + 0.18 + 0.1 = 0.68
-        assert combined == pytest.approx(0.68, abs=1e-6)
+        assert combined == 0.8
 
     def test_false_positive_hard_cap(self, db_session):
         engine = ClassificationEngine(db_session)
