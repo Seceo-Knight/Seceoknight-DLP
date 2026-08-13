@@ -4999,18 +4999,40 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
      // without touching audio/HID profiles. This is the one genuinely
      // IFEO-based control in the agent (application_control above is NOT
      // IFEO -- see task #112's CHANGELOG entry).
+     // Checks + logs every registry API return code -- previously this swallowed
+     // failures completely silently, which is exactly the "lies about success"
+     // pattern this project has fixed elsewhere (task #15 USB block, #133 print
+     // content honesty). Task #142/#143 needs this: without it, a failed IFEO
+     // write for a CLI Guard tool looks IDENTICAL in the log to a successful
+     // one ("installed for 9 executables" either way), silently leaving that
+     // tool completely unprotected with no way to tell from the log alone.
      void SetIFEODebugger(const std::string& exeName, const std::string& debuggerValue, bool block) {
          std::string sub = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\"
                            "Image File Execution Options\\" + exeName;
          if (block) {
              HKEY k;
-             if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
-                                 REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr) == ERROR_SUCCESS) {
-                 RegSetValueExA(k, "Debugger", 0, REG_SZ,
-                                reinterpret_cast<const BYTE*>(debuggerValue.c_str()),
-                                (DWORD)debuggerValue.size() + 1);
-                 RegCloseKey(k);
+             LSTATUS rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
+                                          REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr);
+             if (rc != ERROR_SUCCESS) {
+                 try { logger.Error("SetIFEODebugger: RegCreateKeyExA failed for " + exeName +
+                                    " rc=" + std::to_string(rc) +
+                                    (rc == ERROR_ACCESS_DENIED ?
+                                     " (ACCESS DENIED -- antivirus/EDR real-time protection may be "
+                                     "blocking this write; IFEO Debugger tampering is a well-known "
+                                     "technique (MITRE T1546.012) many AV products flag/block by "
+                                     "default, even for a legitimate DLP agent)" : "")); } catch (...) {}
+                 return;
              }
+             LSTATUS rc2 = RegSetValueExA(k, "Debugger", 0, REG_SZ,
+                                          reinterpret_cast<const BYTE*>(debuggerValue.c_str()),
+                                          (DWORD)debuggerValue.size() + 1);
+             if (rc2 != ERROR_SUCCESS) {
+                 try { logger.Error("SetIFEODebugger: RegSetValueExA failed for " + exeName +
+                                    " rc=" + std::to_string(rc2)); } catch (...) {}
+             } else {
+                 try { logger.Debug("SetIFEODebugger: Debugger set for " + exeName); } catch (...) {}
+             }
+             RegCloseKey(k);
          } else {
              HKEY k;
              if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, KEY_SET_VALUE, &k) == ERROR_SUCCESS) {

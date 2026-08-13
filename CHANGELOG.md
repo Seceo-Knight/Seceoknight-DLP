@@ -8,6 +8,22 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 Fix SetIFEODebugger silently swallowing registry write failures (August 13, 2026)
+
+### Summary
+
+Live testing of the CLI Guard feature below found it had no effect at all: `Get-ItemProperty` on `HKLM:\...\Image File Execution Options\curl.exe` came back empty even though the log clearly showed `CLI Guard (IFEO zero-race pre-launch) installed for 9 executables` and the pipe server thread had started. `SetIFEODebugger()` (used by both this feature and the existing Bluetooth fsquirt.exe block from task #113) never checked the return value of `RegCreateKeyExA`/`RegSetValueExA` — a failed write and a successful one produced byte-for-byte identical log output, so there was no way to tell from the log that anything had gone wrong.
+
+### Fix
+
+`SetIFEODebugger()` now checks and logs every registry API return code. If `RegCreateKeyExA` fails with `ERROR_ACCESS_DENIED` specifically, the log now says so explicitly and flags the likely cause: writing a `Debugger` value under Image File Execution Options for a well-known executable is a documented technique (MITRE ATT&CK T1546.012, "IFEO Injection") that antivirus and EDR real-time protection commonly block by default, even for a legitimate agent doing it for defensive reasons. Re-test after this fix will surface the actual Win32 error code so the real cause (AV block vs. a permissions/service-account issue vs. something else) can be confirmed rather than guessed at.
+
+### Note
+
+This same silent-failure gap has existed since task #113 (Bluetooth fsquirt.exe block) — if that write has also been silently failing on any endpoint, the Bluetooth transfer block would have been a no-op there too despite the log/dashboard showing "wireless controls applied". Worth re-verifying fsquirt blocking on a real endpoint once CLI Guard is confirmed working, using the same registry check.
+
+---
+
 ## 🔧 Add IFEO zero-race pre-launch interception for CLI upload tools (August 13, 2026)
 
 ### Summary
