@@ -8,6 +8,20 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 Fix ML blend diluting high-confidence rule matches below block threshold (August 13, 2026)
+
+### Summary
+
+Retested Network Share Transfer Control after task #148's log-truncation fix, this time with genuine non-canonical content (`Customer SSN: 234-56-7890` + a Luhn-valid, non-test-value credit card number). Both rules matched at full weight and the false-positive check correctly cleared it (not a known test value, no example/test wording) -- yet the file still came back `Level: Confidential, Confidence: 71%, Decision: allow`.
+
+Root cause: `_combine_scores()` blends rule confidence (50%), ML confidence (30%), and context adjustment (20%) into one score. With `rule_confidence=1.0` and `is_false_positive=False`, the raw blend was `1.0*0.5 + 0.7*0.3 + 0.0*0.2 = 0.71` -- a middling ML sub-score alone dragged an already fully-validated, dual-signal rule match (Luhn-checked card + format-matched SSN) down from what should be certain-Restricted to Confidential/allow, with zero false-positive evidence involved.
+
+Fixed by flooring the blend: once content isn't flagged a false positive and `rule_confidence >= 0.8` (the same cutoff `_determine_classification` uses for Restricted), `combined = max(combined, rule_confidence)`. The ML score can still pull down weaker/ambiguous rule matches below 0.8, but can no longer single-handedly override a validated high-confidence detection. Added regression tests reproducing the exact live scenario (`test_high_confidence_rule_match_not_diluted_by_ml`) and the floor boundary (`test_high_confidence_floor_boundary`); adjusted the existing weighted-blend test to use a sub-floor rule confidence so it still isolates the raw math.
+
+This is the third distinct classification-engine issue found via live end-to-end testing today (see also the KNOWN_TEST_VALUES false-positive explanation and the matched_rules array-truncation fix below) -- underscores why testing with real, non-canonical values matters: the known-test-value suppression was masking this separate, more serious bug the first time around.
+
+---
+
 ## 🔍 Explain Network Share Transfer Control "allow" result + fix agent log truncation bug (August 13, 2026)
 
 ### Summary
