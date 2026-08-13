@@ -10323,10 +10323,30 @@ if (shouldMonitor) {
                         }
 
                         // Extract matched_rules array (simplified - just get rule names)
+                        //
+                        // BUG FIX (task #148): this used to close the array with a
+                        // naive classificationObj.find("]", arrayStart), which finds
+                        // the FIRST "]" after the array opens. Every matched-rule
+                        // object contains its own nested array field
+                        // ("classification_labels": ["PII","SSN"], etc.), so that
+                        // naive find() almost always landed on the closing bracket
+                        // of rule #1's nested array instead of the outer
+                        // matched_rules array -- silently truncating the parsed list
+                        // to just the first matched rule and dropping every
+                        // additional rule matched in the same evaluation (confirmed
+                        // live: a file matching both "US Social Security Number
+                        // (SSN)" and "Credit Card Number" only ever logged "Credit
+                        // Card Number"). Doesn't affect the block/allow decision --
+                        // that comes from the separate top-level "action" field --
+                        // but it under-reported detected data types in the agent
+                        // log. Now uses the same depth-aware FindMatchingBracket
+                        // helper already used for the outer classification object.
                         size_t rulesPos = classificationObj.find("\"matched_rules\"");
                         if (rulesPos != std::string::npos) {
                             size_t arrayStart = classificationObj.find("[", rulesPos);
-                            size_t arrayEnd = classificationObj.find("]", arrayStart);
+                            size_t arrayEnd = (arrayStart != std::string::npos)
+                                ? FindMatchingBracket(classificationObj, arrayStart, '[', ']')
+                                : std::string::npos;
                             if (arrayStart != std::string::npos && arrayEnd != std::string::npos) {
                                 std::string rulesArray = classificationObj.substr(arrayStart + 1, arrayEnd - arrayStart - 1);
 
