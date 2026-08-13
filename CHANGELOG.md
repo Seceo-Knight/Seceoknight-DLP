@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔍 Explain Network Share Transfer Control "allow" result + fix agent log truncation bug (August 13, 2026)
+
+### Summary
+
+Live-tested Network Share Transfer Control (`content_aware` mode) against a real UNC share (`\\192.168.1.4\d\Vaibhav`) with a test file containing `Customer SSN: 123-45-6789` and `Test card: 4111111111111111`. The file was evaluated but **allowed** (`Level: Public, Confidence: 25%`), while the local screen-capture/OCR classifier scanning the same content two seconds later correctly scored it `Restricted` (`score=1.8`). This looked like a real detection gap between two classification engines.
+
+### Root cause: not a bug -- both test values are hardcoded false-positive suppressions
+
+`server/app/services/context_analyzer.py`'s `KNOWN_TEST_VALUES` list explicitly includes `"123-45-6789"` (labeled "Universal test SSN") and `"4111111111111111"` (labeled "Visa test card") -- these are two of the most widely used placeholder/sandbox values in the industry (tutorials, Stripe/payment test docs, etc.), and the classification engine is deliberately built (see `ENTERPRISE_AUDIT.md`) to recognize known test/example values and suppress them so they don't trigger blocking actions in production.
+
+`classify_content()` in `classification_engine.py` still runs the full regex pipeline first -- both the SSN rule (weight 0.9) and Credit Card Number rule (weight 0.95) matched, giving `rule_confidence = min(1.0, total_weight) = 1.0`. But `_combine_scores()` then hard-caps any content flagged as a false positive: `min(0.25, rule_confidence * 0.3) = min(0.25, 0.3) = 0.25` -- exactly the observed 25%, which lands under the 0.3 "Internal" cutoff and rounds down to `Public`/`allow`. The math confirms this is the exact code path, not a coincidence.
+
+This explains the earlier-observed inconsistency too: the local OCR/screen-capture classifier (`stage4-ocr` in the Windows agent) has no context-analyzer/false-positive-reduction logic at all -- it's a simpler, standalone pattern matcher, so it has no mechanism to recognize "these are textbook example values" and correctly flagged them as Restricted. The server-side `ClassificationEngine` (used by Network Share Transfer Control and USB Transfer via `EvaluatePolicyRealtime()`) is the newer, more sophisticated path, and is working exactly as designed.
+
+**Action for re-testing:** use a non-canonical fake SSN/card (any properly-formatted but not-industry-famous value, e.g. not `123-45-6789` / `4111111111111111` / the other entries in `KNOWN_TEST_VALUES`) to verify the underlying block/allow decision still fires correctly for Network Share Transfer Control.
+
+### Real bug found and fixed along the way: agent log silently dropped matched rules past the first
+
+While tracing this, found that `agent.cpp`'s `EvaluatePolicyRealtime()` response parser used `classificationObj.find("]", arrayStart)` to find the end of the `matched_rules` JSON array. Every matched-rule object contains its own nested array (`classification_labels: [...]`), so this naive search almost always landed on the closing bracket of the *first* rule's nested array instead of the outer array -- silently truncating the parsed rule list to one entry. This is why the agent log only ever printed `Credit Card Number` even when the server-side response actually matched both the SSN and Credit Card Number rules. Doesn't affect the block/allow decision (that comes from a separate top-level `action` field) -- it only under-reported detected data types in the log, which still matters for audit/triage accuracy. Fixed by reusing the existing depth-aware `FindMatchingBracket()` helper instead of a plain `find("]")`.
+
+---
+
 ## 🔧 Fix CLI Guard IFEO writes: main agent task runs unelevated, needs a separate SYSTEM task (August 13, 2026)
 
 ### Summary
