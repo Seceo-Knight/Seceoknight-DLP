@@ -40,6 +40,7 @@
 #include <tlhelp32.h>
 #include <psapi.h>
 #include <shlobj.h>
+#include <sddl.h>
 
 // UIAutomation
 #include <UIAutomation.h>
@@ -106,6 +107,7 @@ std::mutex g_cfgMutex;            // Protects g_cfg reads after Start()
 
 std::thread g_cliThread;
 std::thread g_browserThread;
+std::thread g_cliGuardThread;   // IFEO zero-race pre-launch pipe server (task #142/#143)
 
 // Dedup: avoid classifying the same pid twice (WMI can flap)
 std::mutex g_seenMutex;
@@ -992,6 +994,250 @@ void HandleCandidateProcess(DWORD pid,
         LogDbg("No classification match; process resumed pid=" +
                std::to_string(pid));
     }
+}
+
+// Pre-launch decision path (task #142/#143): runs the SAME classification +
+// application-control logic as HandleCandidateProcess() above, but BEFORE
+// any process exists. Called from the CLI-guard named-pipe server while an
+// IFEO-redirected launch of a scoped exe (see IfeoScopedExecutables()) is
+// blocked waiting for our verdict. If this returns true, the stub
+// (HandleCliGuard() in agent.cpp) never launches the real binary at all --
+// zero bytes ever leave the machine, and there is no WMI-polling race to
+// lose, unlike the WMI-only path this supplements.
+//
+// Deliberately does NOT touch g_seenPids, SuspendPid/ResumePid/TerminatePid,
+// or any live-process state -- there is nothing to suspend or terminate yet.
+bool EvaluatePreLaunch(const std::string& exeName, const std::string& cmdLine) {
+    const std::string exeLower = ToLower(exeName);
+    if (!IsMonitoredExe(exeLower)) return false;   // should never happen; fail open just in case
+
+    LogInfo("NETWORK_REQUEST_DETECTED pid=0 exe=" + exeName + " source=ifeo_pre_launch");
+    LogDbg("cmdline: " + cmdLine);
+
+    std::string expandedCmd = cmdLine;
+    std::string evasionMarker;
+    if (exeLower == "powershell.exe" || exeLower == "pwsh.exe") {
+        std::string decoded = DecodePowerShellEncodedCommand(cmdLine);
+        if (!decoded.empty()) {
+            evasionMarker = "powershell_encoded_command";
+            expandedCmd += "  <<decoded>> " + decoded;
+        }
+    }
+
+    auto paths = ExtractFilePathsFromCmdline(exeLower, expandedCmd);
+
+    std::string aggregate;
+    std::string firstPath;
+    size_t      firstSize = 0;
+
+    if (!paths.empty()) {
+        for (const auto& p : paths) {
+            size_t cap = g_cfg.maxFileBytes;
+            if ((exeLower.find("python") != std::string::npos) &&
+                (ToLower(p).size() >= 3 && p.substr(p.size() - 3) == ".py")) {
+                cap = g_cfg.maxScriptBytes;
+            }
+            std::string content = ReadFileSafely(p, cap);
+            if (!content.empty()) {
+                if (firstPath.empty()) {
+                    firstPath = p;
+                    try { firstSize = (size_t)fs::file_size(p); } catch(...) {}
+                }
+                if (LooksLikeZip(content) && evasionMarker.empty()) {
+                    evasionMarker = "zip_compressed_payload";
+                }
+                if (LooksMostlyBase64(content) && evasionMarker.empty()) {
+                    std::string decoded = TryBase64Decode(content);
+                    if (!decoded.empty()) {
+                        evasionMarker = "base64_encoded_payload";
+                        aggregate += decoded;
+                        aggregate.push_back('\n');
+                    }
+                }
+                aggregate += content;
+                aggregate.push_back('\n');
+            }
+        }
+    }
+
+    if (aggregate.empty() && exeLower.find("python") != std::string::npos) {
+        for (const auto& p : paths) {
+            std::string sc = ReadFileSafely(p, g_cfg.maxScriptBytes);
+            if (!sc.empty() && PythonScriptLooksLikeUploader(sc)) {
+                aggregate = sc;
+                if (firstPath.empty()) {
+                    firstPath = p;
+                    try { firstSize = (size_t)fs::file_size(p); } catch(...) {}
+                }
+                break;
+            }
+        }
+    }
+
+    if (aggregate.empty()) aggregate = expandedCmd;
+
+    ClassifyResult cls;
+    try {
+        cls = g_cfg.classify(aggregate, "network_exfil");
+    } catch (...) {
+        LogErr("EvaluatePreLaunch: classify callback threw for exe=" + exeName);
+    }
+
+    std::string catLower = ToLower(cls.category);
+    bool sensitive = (catLower == "confidential" || catLower == "restricted");
+
+    LogInfo("CLASSIFICATION_RESULT pid=0 exe=" + exeName +
+            " category=" + (cls.category.empty() ? "none" : cls.category) +
+            " score=" + std::to_string(cls.score) +
+            " rule=" + cls.matchedRule + " source=ifeo_pre_launch");
+
+    EventFields f;
+    f.eventSubtype = "cli_upload";
+    f.channel = "CLI";
+    f.processName = exeName;
+    f.pid = 0;   // no process exists yet at decision time
+    f.commandLine = cmdLine;
+    f.fileName = firstPath.empty() ? "" : fs::path(firstPath).filename().string();
+    f.filePath = firstPath;
+    f.fileSize = firstSize;
+    f.category = cls.category;
+    f.classificationScore = cls.score;
+    f.matchedRule = cls.matchedRule;
+    f.labels = cls.labels;
+    f.evasion = evasionMarker;
+
+    bool appBlocked = false;
+    if (g_cfg.appAction) {
+        std::string ext = firstPath.empty() ? std::string()
+                                            : fs::path(firstPath).extension().string();
+        try { appBlocked = g_cfg.appAction(exeName, firstPath, ext); } catch (...) {}
+    }
+
+    if (sensitive || appBlocked) {
+        f.action = "BLOCK";
+        f.severity = (catLower == "restricted") ? "critical" : "high";
+        if (appBlocked && !sensitive) {
+            f.reason = "Blocked " + exeName + " launch by application control (pre-launch, zero-race)";
+            if (f.matchedRule.empty()) f.matchedRule = "Application Control";
+        } else {
+            f.reason = "Blocked " + exeName + " transfer of sensitive data (" + cls.category +
+                       ") -- pre-launch, zero-race";
+        }
+        LogWarn("NETWORK_BLOCKED pid=0 exe=" + exeName +
+                (appBlocked && !sensitive ? " reason=app_control" : (" category=" + cls.category)) +
+                " source=ifeo_pre_launch");
+        LogInfo("POLICY_DECISION pid=0 decision=BLOCK source=ifeo_pre_launch");
+        EmitEvent(f);
+        return true;
+    } else if (!cls.category.empty()) {
+        f.action = "ALLOW";
+        f.severity = "low";
+        f.reason = "Transfer allowed - classification=" + cls.category + " (pre-launch, zero-race)";
+        LogInfo("POLICY_DECISION pid=0 decision=ALLOW source=ifeo_pre_launch");
+        if (!firstPath.empty()) EmitEvent(f);
+        return false;
+    }
+
+    LogDbg("EvaluatePreLaunch: no classification match; allowing exe=" + exeName);
+    return false;
+}
+
+} // anonymous namespace
+
+
+// =============================================================================
+// CLI Guard named-pipe server (IFEO zero-race pre-launch path, task #142/#143)
+//
+// The IFEO stub (agent.exe --cli-guard, launched by Windows IN PLACE OF the
+// real curl.exe/wget.exe/etc. via the Debugger redirect ApplyCliGuardIfeo()
+// installs in agent.cpp) connects here, sends the exe name + full original
+// command line, and blocks waiting for a single-byte verdict: 'A' = allow,
+// 'B' = block. The stub fails OPEN (launches the real exe normally) on any
+// connect failure, timeout, or unexpected error -- this server being briefly
+// unavailable (agent restarting, etc.) must never leave the user unable to
+// run these tools.
+// =============================================================================
+namespace {
+
+const wchar_t* kCliGuardPipeName = L"\\\\.\\pipe\\SeceoKnightCliGuard";
+constexpr DWORD kCliGuardBufSize = 8192;
+constexpr char  kCliGuardFieldSep = '\x01';
+
+void HandleCliGuardConnection(HANDLE hPipe) {
+    std::vector<char> buf(kCliGuardBufSize);
+    DWORD bytesRead = 0;
+    BOOL ok = ReadFile(hPipe, buf.data(), (DWORD)buf.size() - 1, &bytesRead, nullptr);
+    if (!ok || bytesRead == 0) { CloseHandle(hPipe); return; }
+    std::string msg(buf.data(), bytesRead);
+
+    size_t sep = msg.find(kCliGuardFieldSep);
+    std::string exeName = (sep == std::string::npos) ? msg : msg.substr(0, sep);
+    std::string cmdLine = (sep == std::string::npos) ? std::string() : msg.substr(sep + 1);
+
+    char reply = 'A';   // fail open by default
+    try {
+        reply = EvaluatePreLaunch(exeName, cmdLine) ? 'B' : 'A';
+    } catch (...) {
+        LogErr("CliGuard: EvaluatePreLaunch threw for exe=" + exeName + " -- failing open");
+        reply = 'A';
+    }
+
+    DWORD written = 0;
+    WriteFile(hPipe, &reply, 1, &written, nullptr);
+    FlushFileBuffers(hPipe);
+    DisconnectNamedPipe(hPipe);
+    CloseHandle(hPipe);
+}
+
+void CliGuardPipeServerThread() {
+    // Explicit DACL: SYSTEM (the running service) creates this pipe, but any
+    // standard logged-in user must be able to connect (they're the ones
+    // launching curl.exe etc.) -- SYSTEM's default DACL does not grant that
+    // by itself, so without this every non-admin invocation would silently
+    // fail to connect and fail OPEN, quietly disabling zero-race enforcement
+    // for standard users. SDDL "D:(A;;GRGW;;;WD)" = allow Everyone (WD)
+    // generic read+write on the pipe.
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    ConvertStringSecurityDescriptorToSecurityDescriptorA(
+        "D:(A;;GRGW;;;WD)", SDDL_REVISION_1, &sd, nullptr);
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = sd;
+    sa.bInheritHandle = FALSE;
+
+    LogInfo("CliGuard: pipe server thread starting");
+
+    while (!g_stopRequested.load()) {
+        HANDLE hPipe = CreateNamedPipeW(
+            kCliGuardPipeName,
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+            PIPE_UNLIMITED_INSTANCES,
+            kCliGuardBufSize, kCliGuardBufSize,
+            0,
+            sd ? &sa : nullptr);
+
+        if (hPipe == INVALID_HANDLE_VALUE) {
+            LogErr("CliGuard: CreateNamedPipe failed err=" + std::to_string(GetLastError()));
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            continue;
+        }
+
+        // Blocks until a real client connects, or Stop() wakes us with a
+        // disposable dummy connection so shutdown never hangs waiting for a
+        // client that may never come.
+        BOOL connected = ConnectNamedPipe(hPipe, nullptr) ?
+            TRUE : (GetLastError() == ERROR_PIPE_CONNECTED);
+
+        if (g_stopRequested.load()) { CloseHandle(hPipe); break; }
+        if (!connected) { CloseHandle(hPipe); continue; }
+
+        try { HandleCliGuardConnection(hPipe); }
+        catch (...) { CloseHandle(hPipe); }
+    }
+
+    if (sd) LocalFree(sd);
+    LogInfo("CliGuard: pipe server thread exiting");
 }
 
 } // anonymous namespace
@@ -2278,6 +2524,12 @@ bool Start(const Config& cfg) {
         } catch (...) {
             LogErr("Failed to launch CLI monitor thread");
         }
+        try {
+            g_cliGuardThread = std::thread(CliGuardPipeServerThread);
+        } catch (...) {
+            LogErr("Failed to launch CLI guard pipe server thread -- IFEO-scoped exes "
+                   "will fail open to WMI-only detection");
+        }
     }
     if (cfg.enableBrowserDetector) {
         try {
@@ -2296,15 +2548,46 @@ void Stop() {
     if (!g_running.load()) return;
     g_stopRequested.store(true);
 
+    // Wake the CLI-guard pipe server out of its blocking ConnectNamedPipe()
+    // call with a disposable connection -- otherwise Stop() could hang
+    // indefinitely waiting for a real client that may never arrive.
+    if (g_cliGuardThread.joinable()) {
+        HANDLE h = CreateFileW(kCliGuardPipeName, GENERIC_READ | GENERIC_WRITE,
+                                0, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    }
+
     // Give threads time to notice and exit cleanly
-    if (g_cliThread.joinable())     { try { g_cliThread.join();     } catch(...) {} }
-    if (g_browserThread.joinable()) { try { g_browserThread.join(); } catch(...) {} }
+    if (g_cliThread.joinable())      { try { g_cliThread.join();      } catch(...) {} }
+    if (g_browserThread.joinable())  { try { g_browserThread.join();  } catch(...) {} }
+    if (g_cliGuardThread.joinable()) { try { g_cliGuardThread.join(); } catch(...) {} }
 
     g_running.store(false);
 }
 
 bool IsRunning() {
     return g_running.load();
+}
+
+// Third-party CLI tools that are safe to intercept via Image File Execution
+// Options (IFEO) "Debugger" redirection for zero-race, pre-launch blocking
+// (task #142/#143). Deliberately a STRICT SUBSET of IsMonitoredExe() above --
+// excludes powershell.exe, pwsh.exe, powershell_ise.exe, python*.exe,
+// bitsadmin.exe and certutil.exe, all of which are used pervasively by
+// Windows itself and other legitimate software (Group Policy processing,
+// Windows Update helper scripts, boot-time tooling, other agents/installers),
+// so hijacking their system-wide launch path is too risky to do here. Those
+// stay on the existing WMI-polling detection path -- it still works, just
+// with the same latency race documented in the August 13, 2026 CHANGELOG
+// entry. Every name below is a third-party / optional developer utility
+// never relied on by core OS plumbing, so hooking it carries essentially
+// zero risk of breaking Windows itself.
+std::vector<std::string> IfeoScopedExecutables() {
+    return {
+        "curl.exe", "wget.exe",
+        "rclone.exe", "s3cmd.exe", "azcopy.exe", "aws.exe",
+        "scp.exe", "pscp.exe", "winscp.com"
+    };
 }
 
 // =============================================================================

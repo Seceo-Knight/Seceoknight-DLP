@@ -8,6 +8,39 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 Add IFEO zero-race pre-launch interception for CLI upload tools (August 13, 2026)
+
+### Summary
+
+Live testing of the Application Control fix below surfaced a real detection gap: the CLI network-exfil monitor relies on WMI's `__InstanceCreationEvent` (`WITHIN 0.5`) to notice a new process, but WMI's real-world delivery latency is not bounded by that request — a fast, small `curl.exe -T file url` upload can fully complete (including the server's HTTP response) before WMI ever tells the agent the process exists. A 5-run live test on the endpoint confirmed this concretely: two log lines proved genuine blocks did happen (`NETWORK_BLOCKED pid=30892 exe=curl.exe reason=app_control` at 11:36:25, `pid=30988` at 11:48:55 matching a run that printed no output at all), but in a tight loop of 5 identical small-file curl invocations, only 1 was caught — the other 4 got real HTTP responses from the target server, meaning the request was never interrupted. Roughly a 1-in-5 catch rate is not an acceptable reliability bar for a security control.
+
+### Root cause
+
+WMI process-creation notification is fundamentally a polling mechanism with unpredictable real-world latency, not a guaranteed pre-execution hook — there is no way to tighten the existing `WITHIN` clause or add retries that closes this race; the only fix is not depending on WMI for the decision at all.
+
+### Fix: Image File Execution Options (IFEO) zero-race interception
+
+Added a second, higher-precedence detection path for a **scoped subset** of CLI tools, using the same IFEO "Debugger" redirect mechanism already used for the Bluetooth fsquirt.exe block (task #113), extended with a genuine allow/block decision instead of an always-block:
+
+- **Scope — `NetworkExfilMonitor::IfeoScopedExecutables()`**: `curl.exe`, `wget.exe`, `rclone.exe`, `s3cmd.exe`, `azcopy.exe`, `aws.exe`, `scp.exe`, `pscp.exe`, `winscp.com`. Deliberately **excludes** `powershell.exe`, `pwsh.exe`, `powershell_ise.exe`, `python*.exe`, `bitsadmin.exe`, `certutil.exe` — those are used pervasively by Windows itself and other legitimate software (Group Policy processing, Windows Update helper scripts, boot-time tooling, other installers/agents), so hijacking their system-wide launch path is too risky. They remain on the existing WMI-polling path with the same race documented above, which the team accepted as residual risk rather than block on a much larger, riskier change.
+- **Mechanism**: `ApplyCliGuardIfeo()` (agent.cpp) sets `Debugger = "<agent.exe>" --cli-guard` under `HKLM\...\Image File Execution Options\<exe>` for each scoped tool, installed automatically on every agent startup (idempotent). When Windows launches one of these tools, it launches the agent instead. `HandleCliGuard()` connects to a new named pipe (`\\.\pipe\SeceoKnightCliGuard`) served by a new thread the running agent starts alongside the existing CLI monitor, sends the exe name + full original command line, and blocks briefly for a verdict.
+- **On BLOCK**: the stub exits immediately without ever starting the real binary. Zero bytes ever leave the machine — this is strictly better than the old suspend-then-maybe-too-late-terminate approach, and there is no race window at all: the decision is made and enforced *before* the process exists, not after.
+- **On ALLOW**: the stub copies the real binary to a randomly-named temp file and launches that (never the original path again — IFEO matches by filename only, so re-launching the original name would just redirect back to us; a differently-named copy is not intercepted), waits for it, and relays its exact exit code, so scripts checking `%ERRORLEVEL%`/`$LASTEXITCODE` see no difference from running the tool directly.
+- **Decision logic** (`EvaluatePreLaunch()` in network_exfil_monitor.cpp): identical to the existing WMI path's `HandleCandidateProcess()` — same file-path extraction, same content read + classify, same `application_control` app-action check — just invoked before a process exists instead of after, and without any suspend/resume/terminate (nothing to suspend yet). Emits the same `NETWORK_REQUEST_DETECTED`/`NETWORK_BLOCKED`/dashboard-event shapes, tagged `source=ifeo_pre_launch` in the log for anyone diagnosing which path caught a given block.
+- **Fail-open by design**: every error path in the stub (pipe unreachable, connect timeout, write/read failure) defaults to ALLOW, so an agent restart, crash, or update can never leave the user unable to run these tools. Only a failure to even stage the temp copy (disk full, permissions) genuinely fails the call, with a clear stderr message — deliberately not falling back to re-launching the original path, since that would risk real infinite IFEO recursion if the underlying problem persists.
+- **Pipe security**: the server side installs an explicit DACL (`D:(A;;GRGW;;;WD)`) granting any authenticated user read/write on the pipe — the service runs as SYSTEM, whose default DACL would otherwise silently block standard (non-admin) users from ever reaching the guard, quietly disabling it for exactly the accounts most likely to be running these tools.
+- **Uninstall hygiene**: `manage-agent.ps1`'s `Uninstall-Agent` now clears every IFEO `Debugger` value this agent may have set (fsquirt.exe from task #113, plus all 9 CLI Guard tools) before deleting the install directory, checking that the registered debugger string actually references `seceoknight_agent` before removing it (so a third party's own legitimate IFEO debugger entry, if any, is left untouched). Skipping this would have left the redirected tools **completely unable to launch** after uninstall, since Windows would try to run a debugger executable that no longer exists.
+
+### What this does not fix
+
+`powershell.exe`/`python*.exe`-based uploads (`Invoke-WebRequest`, `requests`, raw sockets, etc.) and `certutil.exe`/`bitsadmin.exe` still rely on WMI polling alone and carry the same race documented above. This is an accepted, disclosed tradeoff, not an oversight — see "Scope" above for the reasoning.
+
+### Deployment
+
+Windows agent (C++) change only — `agent.cpp`, `network_exfil_monitor.cpp`, `network_exfil_monitor.h`, plus `manage-agent.ps1` for uninstall cleanup. CI rebuilds `seceoknight_agent.exe` automatically on push to `main`. Requires `powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install-agent.ps1 | iex"` on each Windows endpoint to pick up the new binary; the IFEO registry keys are installed automatically the next time the agent service starts — no manual registry work needed. No server-side change.
+
+---
+
 ## 🔧 Fix Application Control policy stuck at "0 violations" despite real agent-side blocking (August 13, 2026)
 
 ### Summary

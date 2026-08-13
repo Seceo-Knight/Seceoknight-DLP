@@ -108,6 +108,18 @@ void Stop();
 // True if Start() has been called and Stop() has not yet been invoked.
 bool IsRunning();
 
+// Third-party CLI executables eligible for Image File Execution Options
+// (IFEO) zero-race, pre-launch interception (task #142/#143) -- a strict
+// subset of the exes IsMonitoredExe() covers internally. See
+// network_exfil_monitor.cpp's IfeoScopedExecutables() for the full
+// rationale on why powershell/python/certutil/bitsadmin are excluded. The
+// host agent uses this list to install/remove the IFEO "Debugger" registry
+// redirect for each name (see ApplyCliGuardIfeo() in agent.cpp); the actual
+// pre-launch decision is served over a named pipe
+// (\\.\pipe\SeceoKnightCliGuard) that Start() launches automatically when
+// cfg.enableCliMonitor is true.
+std::vector<std::string> IfeoScopedExecutables();
+
 // -----------------------------------------------------------------------------
 // Dedicated classifier for network-exfil content.
 //

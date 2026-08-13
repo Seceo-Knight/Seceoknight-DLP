@@ -4582,6 +4582,21 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              } else {
                  logger.Warning("Network Exfiltration Monitor did not start");
              }
+
+             // Install the zero-race IFEO pre-launch guard for the scoped CLI
+             // tools (task #142/#143). Must come AFTER Start() above so the
+             // CLI-guard pipe server is already listening before Windows can
+             // possibly redirect a launch to us.
+             try {
+                 ApplyCliGuardIfeo(true);
+                 logger.Info("CLI Guard (IFEO zero-race pre-launch) installed for " +
+                             std::to_string(NetworkExfilMonitor::IfeoScopedExecutables().size()) +
+                             " executables");
+             } catch (const std::exception& e) {
+                 logger.Warning(std::string("CLI Guard IFEO install failed: ") + e.what());
+             } catch (...) {
+                 logger.Warning("CLI Guard IFEO install failed (unknown error)");
+             }
          }
 
          logger.Info("Agent started successfully");
@@ -5002,6 +5017,29 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  RegDeleteValueA(k, "Debugger");
                  RegCloseKey(k);
              }
+         }
+     }
+
+     // ── CLI Guard: zero-race pre-launch interception (task #142/#143) ──────
+     // Registers/clears the SAME IFEO Debugger mechanism as fsquirt.exe above,
+     // but for NetworkExfilMonitor::IfeoScopedExecutables() (curl.exe,
+     // wget.exe, rclone.exe, s3cmd.exe, azcopy.exe, aws.exe, scp.exe,
+     // pscp.exe, winscp.com) -- deliberately excludes powershell/python/
+     // certutil/bitsadmin, which stay on the WMI-only path (see that
+     // function's own comment for why). Debugger = "<selfPath>" --cli-guard,
+     // so Windows launches THIS agent in place of the real tool; HandleCliGuard()
+     // in main() asks the running service (over \\.\pipe\SeceoKnightCliGuard)
+     // for an allow/block verdict BEFORE the real binary ever starts, then
+     // either exits immediately (block) or launches a temp-named copy of the
+     // real exe and relays its exit code (allow). Idempotent -- safe to call
+     // on every agent startup; only actually changes anything the first time
+     // or after a manual registry edit.
+     void ApplyCliGuardIfeo(bool enforce) {
+         char selfPath[MAX_PATH] = {0};
+         GetModuleFileNameA(nullptr, selfPath, MAX_PATH);
+         std::string dbg = std::string("\"") + selfPath + "\" --cli-guard";
+         for (const auto& exeName : NetworkExfilMonitor::IfeoScopedExecutables()) {
+             SetIFEODebugger(exeName, dbg, enforce);
          }
      }
 
@@ -11300,7 +11338,149 @@ int HandleBlockedLaunch(int argc, char* argv[]) {
     return 0;   // never run fsquirt
 }
 
+// Invoked when Windows launches us in place of a CLI Guard-scoped tool
+// (curl.exe, wget.exe, rclone.exe, s3cmd.exe, azcopy.exe, aws.exe, scp.exe,
+// pscp.exe, winscp.com) via the IFEO Debugger set by ApplyCliGuardIfeo()
+// (task #142/#143). Unlike HandleBlockedLaunch() above (fsquirt is ALWAYS
+// blocked), most invocations here must actually run: we ask the running
+// agent service for a verdict over \\.\pipe\SeceoKnightCliGuard, then either
+// exit immediately without ever starting the real binary (block -- zero
+// bytes ever leave the machine, no race window at all) or launch a
+// randomly-named TEMP COPY of the real binary with the original arguments
+// and relay its exit code (allow -- transparent to the calling script).
+//
+// The temp-copy step exists solely to avoid infinite IFEO recursion: IFEO
+// redirects by filename only, so calling CreateProcess on the ORIGINAL path
+// again would just redirect back to us. A copy under a different name is
+// not intercepted.
+//
+// MUST fail open (launch the real binary, unmodified) on every error path --
+// pipe unreachable, timeout, unexpected exception -- so a problem with the
+// agent service (stopped, restarting, etc.) can never leave the user unable
+// to run these tools. Only a failure to even STAGE the copy (disk full,
+// permissions) genuinely fails the call, with a clear error to stderr,
+// rather than risk looping back through IFEO again.
+int HandleCliGuard(int argc, char* argv[]) {
+    // Everything after --cli-guard is: <real exe full path> <original args...>
+    std::vector<std::string> parts;
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--cli-guard") {
+            for (int j = i + 1; j < argc; j++) parts.push_back(argv[j]);
+            break;
+        }
+    }
+    if (parts.empty()) return 1;   // nothing to do -- shouldn't happen
+
+    std::string realExePath = parts[0];
+
+    auto quoteIfNeeded = [](const std::string& s) {
+        if (s.find_first_of(" \t\"") == std::string::npos) return s;
+        std::string out = "\"";
+        for (char c : s) { if (c == '"') out += "\\\""; else out += c; }
+        out += "\"";
+        return out;
+    };
+
+    std::string exeNameOnly = realExePath;
+    {
+        size_t slash = exeNameOnly.find_last_of("\\/");
+        if (slash != std::string::npos) exeNameOnly = exeNameOnly.substr(slash + 1);
+    }
+    std::string exeNameLower = exeNameOnly;
+    std::transform(exeNameLower.begin(), exeNameLower.end(), exeNameLower.begin(), ::tolower);
+
+    std::string fullArgs = quoteIfNeeded(realExePath);
+    for (size_t i = 1; i < parts.size(); i++) { fullArgs += " "; fullArgs += quoteIfNeeded(parts[i]); }
+
+    // --- Ask the running agent service for a verdict (fail OPEN on any error) ---
+    bool block = false;
+    {
+        const char* pipeName = "\\\\.\\pipe\\SeceoKnightCliGuard";
+        std::string msg = exeNameLower + '\x01' + fullArgs;
+        HANDLE hPipe = INVALID_HANDLE_VALUE;
+        DWORD start = GetTickCount();
+        const DWORD kConnectTimeoutMs = 800;
+        while (true) {
+            hPipe = CreateFileA(pipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+                                 OPEN_EXISTING, 0, nullptr);
+            if (hPipe != INVALID_HANDLE_VALUE) break;
+            if (GetLastError() != ERROR_PIPE_BUSY) break;   // no server -> fail open
+            if (GetTickCount() - start > kConnectTimeoutMs) break;
+            if (!WaitNamedPipeA(pipeName, 200)) break;
+        }
+
+        if (hPipe != INVALID_HANDLE_VALUE) {
+            DWORD mode = PIPE_READMODE_MESSAGE;
+            SetNamedPipeHandleState(hPipe, &mode, nullptr, nullptr);
+            DWORD written = 0;
+            if (WriteFile(hPipe, msg.data(), (DWORD)msg.size(), &written, nullptr)) {
+                char reply = 'A';
+                DWORD bytesRead = 0;
+                if (ReadFile(hPipe, &reply, 1, &bytesRead, nullptr) && bytesRead == 1) {
+                    block = (reply == 'B');
+                }
+            }
+            CloseHandle(hPipe);
+        }
+        // else: pipe unreachable (service not running/starting up yet) -- fail open
+    }
+
+    if (block) {
+        return 0;   // zero-race block: the real binary never starts
+    }
+
+    // --- Allow: launch a temp-named copy of the real binary, relay its exit code ---
+    char tempDir[MAX_PATH] = {0};
+    GetTempPathA(MAX_PATH, tempDir);
+    std::string tempCopyPath = std::string(tempDir) + "sk_" +
+                               std::to_string(GetCurrentProcessId()) + "_" + exeNameOnly;
+
+    if (!CopyFileA(realExePath.c_str(), tempCopyPath.c_str(), FALSE)) {
+        DWORD err = GetLastError();
+        std::cerr << "seceoknight_agent (cli-guard): failed to stage " << exeNameOnly
+                  << " for execution (error " << err << "). This is a SeceoKnight DLP "
+                  << "agent issue, not a problem with " << exeNameOnly << " itself."
+                  << std::endl;
+        return (int)err;
+    }
+
+    std::string cmdLine = quoteIfNeeded(tempCopyPath);
+    for (size_t i = 1; i < parts.size(); i++) { cmdLine += " "; cmdLine += quoteIfNeeded(parts[i]); }
+
+    STARTUPINFOA si; ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si);
+    PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi));
+    std::vector<char> cmdBuf(cmdLine.begin(), cmdLine.end());
+    cmdBuf.push_back('\0');
+
+    DWORD exitCode = 1;
+    if (CreateProcessA(tempCopyPath.c_str(), cmdBuf.data(), nullptr, nullptr,
+                        TRUE /* inherit our (already-inherited) console/stdio handles */,
+                        0, nullptr, nullptr, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    } else {
+        std::cerr << "seceoknight_agent (cli-guard): failed to launch " << exeNameOnly
+                  << " (error " << GetLastError() << ")" << std::endl;
+    }
+
+    DeleteFileA(tempCopyPath.c_str());   // best-effort cleanup
+    return (int)exitCode;
+}
+
 int main(int argc, char* argv[]) {
+    // CLI Guard hook: we were run in place of a scoped CLI tool (curl.exe
+    // etc.) because ApplyCliGuardIfeo() redirected it via IFEO. Decide
+    // allow/block against the running service, then either exit (block) or
+    // relay to a temp-copy of the real binary (allow). Handle this BEFORE
+    // any normal startup, same as --blocked-launch below.
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--cli-guard") {
+            return HandleCliGuard(argc, argv);
+        }
+    }
+
     // Blocked-launch hook: we were run in place of fsquirt.exe (Bluetooth file
     // transfer) because the wireless policy blocks it. Log + emit an event,
     // then exit without running fsquirt. Handle this BEFORE any normal

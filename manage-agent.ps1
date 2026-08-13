@@ -297,6 +297,30 @@
     }
     Start-Sleep -Milliseconds 150
 
+    # 2b) Clear every Image File Execution Options "Debugger" redirect this
+    #     agent may have installed -- the Bluetooth fsquirt.exe block (task
+    #     #113) and the CLI Guard zero-race pre-launch redirects (task
+    #     #142/#143: curl.exe, wget.exe, rclone.exe, s3cmd.exe, azcopy.exe,
+    #     aws.exe, scp.exe, pscp.exe, winscp.com). Leaving any of these behind
+    #     after the agent.exe binary is deleted below would leave the
+    #     redirected tool COMPLETELY UNABLE TO LAUNCH (Windows tries to run a
+    #     debugger that no longer exists) until someone manually clears the
+    #     registry -- this must run before directory deletion, not after.
+    $ifeoGuardedExes = @(
+      'fsquirt.exe', 'curl.exe', 'wget.exe', 'rclone.exe', 's3cmd.exe',
+      'azcopy.exe', 'aws.exe', 'scp.exe', 'pscp.exe', 'winscp.com'
+    )
+    foreach ($exe in $ifeoGuardedExes) {
+      $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$exe"
+      if (Test-Path $ifeoPath) {
+        $dbg = (Get-ItemProperty -Path $ifeoPath -Name Debugger -ErrorAction SilentlyContinue).Debugger
+        if ($dbg -and $dbg -match 'seceoknight_agent') {
+          Remove-ItemProperty -Path $ifeoPath -Name Debugger -ErrorAction SilentlyContinue
+          Info "Cleared IFEO redirect for $exe"
+        }
+      }
+    }
+
     # 3) Remove all three scheduled tasks this project registers.
     foreach ($n in @($TASK_NAME, $WATCHDOG_TASK, $USB_TASK)) {
       if (Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) {
