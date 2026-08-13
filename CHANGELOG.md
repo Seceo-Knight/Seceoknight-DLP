@@ -8,6 +8,20 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 Fix Network Share Transfer Control never blocking -- missing policy dispatcher case (task #151, August 13, 2026)
+
+### Summary
+
+After tasks #148 and #150 fixed the classification pipeline itself, retesting still showed `Decision: allow` for a file that classified at `Confidence: 100% / Level: Restricted`. Traced it to `policy_transformer.py`'s `transform_frontend_config_to_backend()` dispatcher: it had no case for `network_share_transfer_control`, so it fell through to the unknown-type branch and returned empty `conditions.rules`. `DatabasePolicyEvaluator.evaluate_event()` unconditionally skips any policy with empty rules -- so every content_aware Network Share Transfer Control policy anyone has ever created silently matched nothing, regardless of classification result.
+
+This is a real, complete enforcement gap, not just a dashboard reporting bug: `evaluate_policy_realtime()`'s `should_block` only ever becomes `True` from an actual `DatabasePolicyEvaluator` match or a Data Matching hit -- there is no "classification says Restricted, block anyway" fallback anywhere in the pipeline.
+
+Fixed by adding `_transform_network_share_transfer_config()`: content_aware mode now matches `event_subtype == network_share_transfer` AND `classification_level in [Confidential, Restricted]`, with block+alert or alert-only actions depending on the configured action. Also corrected a prior docstring note that had incorrectly grouped this policy type with the genuinely agent-side-only ones (wireless/print/printer control) as a "reporting-only" gap.
+
+**Important:** existing Policy rows created before this fix have the old empty conditions baked into the database -- the transform only runs at create/update time. Any already-created Network Share Transfer Control policy needs to be opened and re-saved via the dashboard to pick up the fix.
+
+---
+
 ## 🔧 Fix ML blend diluting high-confidence rule matches below block threshold (August 13, 2026)
 
 ### Summary
