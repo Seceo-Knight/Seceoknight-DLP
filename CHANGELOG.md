@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 install.sh now packages the browser extension automatically (August 18, 2026 evening)
+
+### Why
+
+Walking the user through a real deployment surfaced two problems the single-command installer needs to solve on its own, not leave as manual follow-up steps:
+
+1. `python3 scripts/pack-extension.py` needs the `cryptography` package on the HOST (not the manager container), and a fresh server has neither `pip` nor `cryptography` installed by default -- hit exactly this running it live.
+2. `pack-extension.py` also needs the extension's own source tree (`agents/browser-extension/`) on disk to zip -- which `install.sh` otherwise deliberately never does (see its own header comment: "no source code is ever placed on the production server"). A plain `git clone` into the install dir would work but breaks that stated principle.
+
+### What changed
+
+`install.sh` now packages the extension as part of the normal install flow, after the containers come up healthy:
+- Installs `python3-pip` and the `cryptography` package if missing (non-fatal if it can't -- the rest of the install still completes).
+- Clones the repo into a **temp directory** (`mktemp -d`), runs `pack-extension.py --out <install dir>/server/extension_dist`, then **deletes the temp clone immediately** (`trap ... EXIT` guarantees this even on early failure) -- so source code is only ever present transiently during packaging, never left on disk, consistent with the installer's existing principle.
+- The signing key it generates (`/etc/seceoknightdlp/extension-signing.pem`) is the one thing that's meant to persist -- same as before, back it up.
+- Every step here is best-effort/non-fatal: a server that can't package the extension for any reason still finishes installing everything else normally, same as today.
+
+Verified by actually running the exact new block against the real, just-pushed repo (fresh clone, real packaging, real cleanup) -- confirmed correct `extension.json`/`.crx` output and that the temp directory is gone afterward, not just reading the code and assuming it works.
+
+### Not yet done: `update.sh`
+
+This fix is for a **fresh** `install.sh` run only. `update.sh` (used on an already-running server) doesn't call `pack-extension.py` at all yet -- an existing deployment that already has an extension published doesn't need anything, but a server that never packaged one still needs the manual command. Flagged to the user as a follow-up decision rather than silently added, since repackaging on every routine update has its own tradeoffs (repacking with an unchanged source produces the same output, but it's still worth deciding deliberately rather than bolting on).
+
+---
+
 ## 🔍 Gap-scan CyberSentinel-DLP (second pass, August 18, 2026 evening)
 
 Checked for updates again before continuing deployment, per request -- 6 new commits since the earlier scan, all from CyberSentinel iterating on their OWN force-install deploy/repair tooling (deleting-and-redownloading a cached extension corrupts Chrome's internal record of it; detecting "is a browser actually open" via `Get-Process` is wrong because background processes outlive closed windows; etc.).

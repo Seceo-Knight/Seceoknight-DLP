@@ -237,6 +237,72 @@ else
         || c_yellow "[!] Could not stamp Alembic revision — run it manually: docker exec seceoknight-manager alembic stamp head"
 fi
 
+# ─── 8c. Package + publish the browser extension (force-install) ──────
+# Gap-scan of CyberSentinel-DLP (August 18, 2026): the DLP browser extension
+# is force-installed to endpoints via Chrome/Edge enterprise policy
+# (ExtensionInstallForcelist), which needs a signed, stable-id package the
+# server serves at /api/v1/extension/*. scripts/pack-extension.py builds
+# that, but it needs the extension's small source tree (agents/browser-
+# extension/, 5 files) on disk to zip -- which this installer otherwise
+# never does (see the top of this file: "no source code is ever placed on
+# the production server"). So it's fetched into a TEMP directory here and
+# deleted immediately after packaging, not left on disk -- the only thing
+# that persists is the packaged output (server/extension_dist/, served by
+# the running container) and the signing key
+# (/etc/seceoknightdlp/extension-signing.pem, which IS meant to persist --
+# it's the extension's permanent identity, back it up).
+#
+# Entirely best-effort / non-fatal: a server that never gets an extension
+# packaged just doesn't force-install one, same as any other deployment
+# that doesn't use this feature -- it must never abort the rest of the install.
+say "Packaging the browser extension for force-install"
+
+if ! python3 -m pip --version >/dev/null 2>&1; then
+    say "Installing python3-pip (needed to package the browser extension)"
+    apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq python3-pip >/dev/null 2>&1 \
+        || c_yellow "[!] Could not install python3-pip -- skipping extension packaging (non-fatal)"
+fi
+
+if python3 -m pip --version >/dev/null 2>&1; then
+    python3 -m pip show cryptography >/dev/null 2>&1 || {
+        say "Installing the 'cryptography' package"
+        python3 -m pip install --quiet cryptography --break-system-packages >/dev/null 2>&1 \
+            || python3 -m pip install --quiet cryptography >/dev/null 2>&1 \
+            || c_yellow "[!] Could not install 'cryptography' -- skipping extension packaging (non-fatal)"
+    }
+fi
+
+if command -v git >/dev/null 2>&1 && python3 -m pip show cryptography >/dev/null 2>&1; then
+    EXT_TMP="$(mktemp -d)"
+    # Cleaned up on exit no matter how the script ends -- this directory
+    # must never be what's left behind on the server.
+    trap 'rm -rf "${EXT_TMP}"' EXIT
+
+    if git clone --quiet --depth 1 "https://github.com/${GITHUB_REPO}.git" "${EXT_TMP}/repo" 2>/dev/null \
+        && [ -f "${EXT_TMP}/repo/scripts/pack-extension.py" ]; then
+        HOST_IP_FOR_EXT="$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)"
+        if python3 "${EXT_TMP}/repo/scripts/pack-extension.py" \
+            --out "${INSTALL_DIR}/server/extension_dist" \
+            --server "http://${HOST_IP_FOR_EXT}" ; then
+            say "Browser extension packaged and published -- endpoints force-install it automatically"
+        else
+            c_yellow "[!] Extension packaging failed (non-fatal) -- run it manually later:"
+            c_yellow "    git clone https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
+            c_yellow "    python3 scripts/pack-extension.py --out ${INSTALL_DIR}/server/extension_dist --server http://<this-server>"
+        fi
+    else
+        c_yellow "[!] Could not fetch the extension source -- skipping (non-fatal, same manual command as above)"
+    fi
+
+    rm -rf "${EXT_TMP}"
+    trap - EXIT
+else
+    c_yellow "[!] git or 'cryptography' unavailable -- skipping extension packaging (non-fatal)"
+    c_yellow "    Install them and run manually later:"
+    c_yellow "    git clone https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
+    c_yellow "    python3 scripts/pack-extension.py --out ${INSTALL_DIR}/server/extension_dist --server http://<this-server>"
+fi
+
 # ─── 9. Print connection details ──────────────────────────────────────
 HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)"
 
