@@ -17,6 +17,11 @@
 
 const NATIVE_HOST = "com.seceoknightdlp.dlp";
 const AGENT_TIMEOUT_MS = 7000;
+// GenAI / Web Activity Control (web-activity.js): a genai reply can be long
+// and classification of it takes longer than a small upload decision does —
+// separate, more generous timeout so a slow-but-legitimate response isn't
+// mistaken for a hung agent.
+const WEB_ACTIVITY_TIMEOUT_MS = 16000;
 
 function log(...a) { console.log("[SK-DLP]", ...a); }
 function warn(...a) { console.warn("[SK-DLP]", ...a); }
@@ -24,6 +29,13 @@ function warn(...a) { console.warn("[SK-DLP]", ...a); }
 let port = null;
 const waiters = new Map(); // requestId -> respond (fans out to every piggybacked caller, see inFlightByKey)
 const requestKeys = new Map(); // requestId -> coalesce key, ONLY set for requests we're willing to cache
+
+// GenAI / Web Activity Control (web-activity.js) requests. Deliberately a
+// separate, simpler map from waiters/requestKeys/inFlightByKey above — a
+// genai prompt/response isn't a chunked upload, so there's no equivalent
+// need for cross-request coalescing/piggybacking here; each request just
+// gets its own waiter.
+const waWaiters = new Map(); // requestId -> respond
 
 // In-flight requests, keyed the same way as recentDecisions. A completed
 // decision only gets cached AFTER the native host responds — so two
@@ -84,6 +96,17 @@ function fetchExtraHosts() {
   catch (e) { warn("fetchExtraHosts: postMessage failed:", e && e.message); }
 }
 
+// Web Activity Control's watched-destination list + whether the feature is
+// actually configured — see skdlp_host.py's fetch_app_catalog(). Refreshed
+// on the same cadence as fetchExtraHosts (self-test triggers + the
+// recurring alarm below).
+function fetchAppCatalog() {
+  if (!port) connect();
+  if (!port) { warn("fetchAppCatalog: no native host available"); return; }
+  try { port.postMessage({ type: "get_app_catalog" }); }
+  catch (e) { warn("fetchAppCatalog: postMessage failed:", e && e.message); }
+}
+
 function failOpenAll(reason) {
   for (const [, respond] of waiters) { try { respond({ action: "allow", reason }); } catch (e) {} }
   waiters.clear();
@@ -94,6 +117,8 @@ function failOpenAll(reason) {
   // a new leader, silently fail-closed-by-omission forever after one
   // disconnect. Safe to drop: nothing here has a decision yet anyway.
   inFlightByKey.clear();
+  for (const [, respond] of waWaiters) { try { respond({ action: "allow", reason }); } catch (e) {} }
+  waWaiters.clear();
 }
 
 function connect() {
@@ -106,6 +131,24 @@ function connect() {
         const domains = Array.isArray(msg.domains) ? msg.domains : [];
         chrome.storage.local.set({ skdlpExtraHosts: domains });
         log("extra cloud hosts updated:", domains.length, domains.length ? "(" + domains.join(", ") + ")" : "");
+        return;
+      }
+      if (msg && msg.type === "app_catalog") {
+        const domains = Array.isArray(msg.domains) ? msg.domains : [];
+        const enforced = !!msg.enforced;
+        chrome.storage.local.set({ skdlpAppCatalog: domains, skdlpWebActivityEnforced: enforced });
+        log("app catalog updated:", domains.length, "domains, web-activity enforced:", enforced);
+        return;
+      }
+      if (msg && msg.requestId && waWaiters.has(msg.requestId)) {
+        const respond = waWaiters.get(msg.requestId);
+        waWaiters.delete(msg.requestId);
+        const decision = {
+          action: msg.action || "allow", appCategory: msg.appCategory,
+          level: msg.level, reason: msg.reason, redactedContent: msg.redactedContent,
+        };
+        log("web-activity decision", msg.requestId, "->", decision.action, decision.appCategory || "");
+        respond(decision);
         return;
       }
       if (!msg || !msg.requestId) return;
@@ -169,18 +212,50 @@ selfTest(); // also fires when the service worker first spins up
 // on a recurring alarm — MV3 service workers can be terminated between page
 // loads, so a plain setInterval isn't reliable; chrome.alarms survives that.
 fetchExtraHosts();
+fetchAppCatalog();
 chrome.runtime.onStartup.addListener(fetchExtraHosts);
+chrome.runtime.onStartup.addListener(fetchAppCatalog);
 chrome.runtime.onInstalled.addListener(fetchExtraHosts);
+chrome.runtime.onInstalled.addListener(fetchAppCatalog);
 try {
   chrome.alarms.create(HOSTS_REFRESH_ALARM, { periodInMinutes: 15 });
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === HOSTS_REFRESH_ALARM) fetchExtraHosts();
+    if (alarm.name === HOSTS_REFRESH_ALARM) { fetchExtraHosts(); fetchAppCatalog(); }
   });
 } catch (e) {
-  warn("chrome.alarms unavailable, extra-hosts list will only refresh on browser/extension restart:", e && e.message);
+  warn("chrome.alarms unavailable, extra-hosts/app-catalog lists will only refresh on browser/extension restart:", e && e.message);
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message && message.kind === "webActivity") {
+    // GenAI / Web Activity Control path — simpler than "classify" below,
+    // no coalescing (see waWaiters' own comment for why).
+    if (!port) connect();
+    if (!port) {
+      warn("webActivity: no native host available → allow (fail-open)");
+      sendResponse({ action: "allow", reason: "agent-unavailable" });
+      return false;
+    }
+    waWaiters.set(message.requestId, sendResponse);
+    try {
+      port.postMessage(Object.assign({ type: "web_activity", requestId: message.requestId }, message.meta));
+    } catch (e) {
+      waWaiters.delete(message.requestId);
+      warn("webActivity postMessage to host failed:", e && e.message);
+      sendResponse({ action: "allow", reason: "send-failed" });
+      return false;
+    }
+    setTimeout(() => {
+      if (waWaiters.has(message.requestId)) {
+        const respond = waWaiters.get(message.requestId);
+        waWaiters.delete(message.requestId);
+        warn("webActivity agent timeout for", message.requestId);
+        respond({ action: "allow", reason: "agent-timeout" });
+      }
+    }, WEB_ACTIVITY_TIMEOUT_MS);
+    return true; // async response
+  }
+
   if (!message || message.kind !== "classify") return false;
   const destHost = (message.meta && message.meta.host) || "";
   const coalesceKey = coalesceKeyFor(message.meta);

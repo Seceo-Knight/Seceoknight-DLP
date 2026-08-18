@@ -57,11 +57,26 @@ DEFAULT_ACTION = "allow"
 # consults. Everything else in the full cross-product is a non-cell -- e.g.
 # "webmail x ai_response" doesn't mean anything, so it's left out rather
 # than silently defaulting to some action nobody configured.
+#
+# SCOPE (this build): only cells the browser extension actually emits are
+# listed as meaningful. "upload"/"attach"/"download" are real activities in
+# the ACTIVITIES vocabulary above and the server-side evaluator handles
+# them correctly if sent -- but the extension's file-upload interception
+# still runs through the OLDER, separate cloud_upload_hosts/CLOUD_HOSTS
+# path (native-host "classify" message, POST /policy/evaluate with
+# event_type=cloud_upload) rather than this new evaluate_web_activity()
+# path, to avoid double-submitting/double-logging the same upload through
+# two different classifiers. Unifying those two paths is future work, not
+# done in this pass -- documented here rather than silently claiming
+# "upload" cells work when nothing currently reaches them. "post" (GenAI
+# prompts) and "send" (webmail/collaboration composed messages) are NOT
+# file-bearing, so they have no such overlap and are fully wired end to
+# end, including "ai_response" -- the actual headline capability this
+# feature exists for.
 MEANINGFUL_CELLS: List[Tuple[str, str]] = [
-    ("webmail", "upload"), ("webmail", "attach"), ("webmail", "send"), ("webmail", "download"),
-    ("file_sharing", "upload"), ("file_sharing", "download"),
-    ("collaboration", "upload"), ("collaboration", "attach"), ("collaboration", "send"), ("collaboration", "download"),
-    ("genai", "post"), ("genai", "upload"), ("genai", "ai_response"),
+    ("webmail", "send"),
+    ("collaboration", "send"),
+    ("genai", "post"), ("genai", "ai_response"),
 ]
 
 

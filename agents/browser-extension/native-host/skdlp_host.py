@@ -260,6 +260,129 @@ _hosts_cache = {"domains": [], "expires_at": 0}
 _HOSTS_CACHE_TTL = 120  # seconds
 
 
+_catalog_cache = {"domains": [], "enforced": False, "expires_at": 0}
+_CATALOG_CACHE_TTL = 120  # seconds — same TTL reasoning as _hosts_cache below
+
+
+def fetch_app_catalog():
+    """Web Activity Control's watched-destination domain list (webmail/
+    file_sharing/collaboration/genai), plus whether the feature is actually
+    configured at all right now. Fail-open to the last-known (or empty)
+    list on any error, same posture as fetch_extra_hosts() below -- this
+    must never block a page load waiting on the DLP server."""
+    now = time.time()
+    if _catalog_cache["expires_at"] > now:
+        return _catalog_cache["domains"], _catalog_cache["enforced"]
+    if requests is None or not CFG["agent_key"]:
+        return _catalog_cache["domains"], _catalog_cache["enforced"]
+    try:
+        r = requests.get(
+            "%s/agents/%s/app-catalog" % (CFG["server_url"].rstrip("/"), CFG["agent_id"]),
+            headers={"X-Agent-Key": CFG["agent_key"]},
+            timeout=6,
+            verify=CFG.get("verify_tls", False),
+        )
+        r.raise_for_status()
+        body = r.json()
+        domains = body.get("domains") or []
+        enforced = bool(body.get("web_activity_enforced"))
+        _catalog_cache["domains"] = domains
+        _catalog_cache["enforced"] = enforced
+        _catalog_cache["expires_at"] = now + _CATALOG_CACHE_TTL
+        return domains, enforced
+    except Exception as e:
+        log("fetch_app_catalog failed: %s" % e)
+        return _catalog_cache["domains"], _catalog_cache["enforced"]
+
+
+def evaluate_web_activity(meta):
+    """Web Activity Control decision. Returns (action, category, level,
+    reason, redacted_content, labels_redacted). action in
+    {allow, alert, block, redact}. See app/core/web_activity.py /
+    app/api/v1/agents.py's evaluate_web_activity() server-side for the
+    actual matrix logic -- this is a thin client, same design as evaluate()
+    below for the older cloud-upload-only path."""
+    if requests is None or not CFG["agent_key"]:
+        return "allow", None, None, "host-unconfigured", None, []
+    try:
+        payload = {
+            "host": meta.get("host") or "",
+            "activity": meta.get("activity") or "",
+            "content": meta.get("content") or "",
+            "file_name": meta.get("fileName"),
+            "file_content_b64": meta.get("contentB64") or None,
+        }
+        r = requests.post(
+            "%s/agents/%s/web-activity/evaluate" % (CFG["server_url"].rstrip("/"), CFG["agent_id"]),
+            headers={"X-Agent-Key": CFG["agent_key"], "Content-Type": "application/json"},
+            json=payload,
+            timeout=10,  # a genai response can be long; give classification room
+            verify=CFG.get("verify_tls", False),
+        )
+        r.raise_for_status()
+        body = r.json()
+        return (
+            body.get("action") or "allow",
+            body.get("app_category"),
+            body.get("classification_level"),
+            body.get("reason"),
+            body.get("redacted_content"),
+            body.get("labels_redacted") or [],
+        )
+    except Exception as e:
+        log("evaluate_web_activity failed: %s" % e)
+        return "allow", None, None, "evaluate-error", None, []
+
+
+def emit_web_activity_event(meta, category, activity, action_taken, severity, level, blocked):
+    """Emit one Web Activity Control event. Mirrors emit_event() below --
+    field names match the server's EventCreate schema."""
+    if requests is None or not CFG["agent_key"]:
+        return
+    try:
+        requests.post(
+            "%s/events/" % CFG["server_url"].rstrip("/"),
+            headers={"X-Agent-Key": CFG["agent_key"], "Content-Type": "application/json"},
+            json={
+                "event_id": "webact-" + uuid.uuid4().hex,
+                "agent_id": CFG["agent_id"],
+                "event_type": "web_activity",
+                "event_subtype": "web_activity_%s" % (activity or "unknown"),
+                "severity": severity,
+                "action": action_taken,             # logged | alerted | blocked | redacted
+                "blocked": bool(blocked),
+                "destination": meta.get("host") or meta.get("url"),
+                "destination_type": category or "web",
+                "file_path": meta.get("fileName"),
+                "classification_level": level,
+                "description": "Web activity (%s/%s) %s to %s" % (
+                    category or "unclassified", activity or "?", action_taken, meta.get("host")
+                ),
+            },
+            timeout=5,
+            verify=CFG.get("verify_tls", False),
+        )
+    except Exception as e:
+        log("emit_web_activity_event failed: %s" % e)
+
+
+def handle_web_activity(meta):
+    activity = meta.get("activity") or ""
+    action, category, level, reason, redacted_content, labels_redacted = evaluate_web_activity(meta)
+
+    if action == "block":
+        emit_web_activity_event(meta, category, activity, "alerted", "high", level, blocked=False)
+        emit_web_activity_event(meta, category, activity, "blocked", "critical", level, blocked=True)
+    elif action == "redact":
+        emit_web_activity_event(meta, category, activity, "redacted", "medium", level, blocked=False)
+    elif action == "alert":
+        emit_web_activity_event(meta, category, activity, "alerted", "medium", level, blocked=False)
+    else:
+        emit_web_activity_event(meta, category, activity, "logged", "info", level, blocked=False)
+
+    return action, category, level, reason, redacted_content, labels_redacted
+
+
 def fetch_extra_hosts():
     """Admin-added cloud-upload destinations from the dashboard, on top of
     the extension's built-in baseline CLOUD_HOSTS list. Fail-open to the
@@ -324,6 +447,32 @@ def main():
             # additions) — see fetch_extra_hosts() for the fail-open/caching
             # behavior.
             send_message({"type": "hosts", "domains": fetch_extra_hosts()})
+            continue
+        if msg.get("type") == "get_app_catalog":
+            # Web Activity Control's watched-destination list + whether the
+            # feature is configured at all — see fetch_app_catalog().
+            domains, enforced = fetch_app_catalog()
+            send_message({"type": "app_catalog", "domains": domains, "enforced": enforced})
+            continue
+        if msg.get("type") == "web_activity":
+            # New: GenAI / web-activity control path (upload/attach/send/
+            # post/ai_response against webmail/file_sharing/collaboration/
+            # genai destinations) — distinct from "classify" below (the
+            # older cloud-upload-only path) so that well-tested flow is
+            # never touched by this addition.
+            req_id = msg.get("requestId")
+            meta = {k: msg.get(k) for k in
+                    ("host", "url", "activity", "content", "fileName", "fileSize", "mimeType", "contentB64")}
+            try:
+                action, category, level, reason, redacted_content, labels_redacted = handle_web_activity(meta)
+            except Exception as e:
+                log("handle_web_activity error: %s" % e)
+                action, category, level, reason = "allow", None, None, "host-error"
+                redacted_content, labels_redacted = None, []
+            send_message({
+                "requestId": req_id, "action": action, "appCategory": category, "level": level,
+                "reason": reason, "redactedContent": redacted_content, "labelsRedacted": labels_redacted,
+            })
             continue
         if msg.get("type") != "classify":
             continue

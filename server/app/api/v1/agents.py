@@ -1045,6 +1045,42 @@ async def get_cloud_upload_hosts(
     return {"domains": list(rows)}
 
 
+@router.get("/{agent_id}/app-catalog")
+async def get_agent_app_catalog(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(verify_agent_key),
+):
+    """
+    The watched-destination domain list for Web Activity Control, plus
+    whether any web_activity_control policy is currently active. Polled by
+    the browser extension's native host (skdlp_host.py) so it knows which
+    hosts to intercept traffic for at all -- mirrors get_cloud_upload_hosts
+    above, just for the broader webmail/file_sharing/collaboration/genai
+    catalog instead of only cloud-upload destinations.
+
+    ``web_activity_enforced`` lets the extension skip the more invasive
+    response-buffering interception path (needed for redacting/blocking a
+    GenAI reply, see ai_response in app/core/web_activity.py) entirely when
+    nobody has configured this feature -- so installations that never touch
+    Web Activity Control pay zero streaming-latency cost for it.
+    Requires ``X-Agent-Key`` header — same auth as policy sync/evaluate.
+    """
+    from sqlalchemy import select as _select
+    from app.models.app_catalog import AppCatalogEntry as _AppCatalogEntry
+    from app.models.policy import Policy as _Policy
+
+    domains = (await db.execute(_select(_AppCatalogEntry.domain))).scalars().all()
+    active_policy = (await db.execute(
+        _select(_Policy.id).where(
+            _Policy.type == "web_activity_control",
+            _Policy.status == "active",
+            _Policy.deleted_at.is_(None),
+        ).limit(1)
+    )).scalar_one_or_none()
+    return {"domains": list(domains), "web_activity_enforced": active_policy is not None}
+
+
 @router.get("/{agent_id}/usb-allowlist")
 async def get_usb_allowlist(
     agent_id: str,

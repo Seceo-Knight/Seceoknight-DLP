@@ -8,6 +8,41 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🆕 Web Activity Control / GenAI DLP — browser extension enforcement (part 2 of 3, August 18, 2026)
+
+### Summary
+
+Second increment following the server-side foundation (part 1). This wires the browser extension up to actually detect GenAI prompts/replies and webmail/collaboration message sends, call the new `/web-activity/evaluate` endpoint, and enforce allow/alert/block/redact in real time -- including live redaction of a GenAI response before it reaches the page. Part 3 (dashboard policy-builder UI) is still separate and not yet built, so there's currently no way for an admin to actually turn this on from the dashboard -- deploying this part alone changes nothing observable yet, same "safe to deploy standalone" posture as part 1.
+
+### Deliberate scope decision: a new, separate interceptor file
+
+Added `agents/browser-extension/src/web-activity.js`, loaded AFTER the existing `inject.js` in the manifest, rather than extending `inject.js` itself. `inject.js` is the mature, already-hardened Cloud Upload Guard file-upload interceptor (chunked-upload coalescing, real file capture, filename recovery, ...) -- editing it directly for a materially different, newer feature risked regressing a well-tested path. The two compose safely (each patches `window.fetch` once, in sequence; the second only acts on hosts/bodies it cares about and calls through to the first otherwise).
+
+**What's covered end to end:** `post` (a text prompt sent to a GenAI destination -- ChatGPT, Copilot, Gemini, Claude, ...), `send` (a substantial composed-message body to webmail/collaboration, best-effort text-length heuristic since there's no reliable way to detect "the user clicked Send" from network traffic alone), and `ai_response` -- the reply streaming back from a GenAI destination, the actual headline capability this whole feature exists for.
+
+**What's explicitly NOT covered by this part (documented, not silent):** `upload`/`attach`/`download` file-bearing activities still route through the OLDER, separate `CLOUD_HOSTS`/native-host `classify` path so the same file upload is never double-submitted/double-logged through two different classifiers -- unifying the two upload paths is future work. Matching this, `web_activity.py`'s `MEANINGFUL_CELLS` was narrowed in part 1 to only the cells this extension build actually reaches (`webmail.send`, `collaboration.send`, `genai.post`, `genai.ai_response`) rather than advertising cells nothing currently triggers. XHR-based streaming responses aren't intercepted either (modern GenAI chat UIs overwhelmingly use `fetch()` + `ReadableStream`).
+
+### How `ai_response` redaction actually works
+
+`window.fetch` is wrapped so that for a watched host, `resp.clone().text()` reads a COPY of the response body for classification while the original `resp` (and its stream) is left completely untouched -- if the verdict is "allow", the pristine original `Response` object is returned to the page. If "redact", a new `Response` is constructed from the server's redacted text (with `content-length`/`content-encoding` headers stripped, since a redacted body is neither the original byte length nor still gzip/br-encoded). If "block", an empty `403`-equivalent `Response` is returned instead.
+
+Honest limitation: this whole decision requires the FULL response text to be buffered and classified before ANYTHING is returned to the page, which means live token-by-token streaming rendering is sacrificed for any GenAI reply while this feature is active -- there's no way to guarantee a sensitive value never reaches the page mid-stream without waiting for the stream to finish first. This only engages at all when the server reports a `web_activity_control` policy is actually active (`web_activity_enforced`), so an installation that hasn't configured this feature pays zero streaming-latency cost.
+
+### What was built
+
+- **`agents/browser-extension/src/web-activity.js`** (new) -- the interceptor described above.
+- **`agents/browser-extension/manifest.json`** -- loads the new file after `inject.js` in the same MAIN-world content script entry.
+- **`agents/browser-extension/src/content.js`** -- relays the new `webActivity` classify request / `webActivityDecision` response message pair (parallel to the existing `classify`/`decision` pair, kept fully separate), plus the `appCatalog` domain-list push (mirrors the existing `extraHosts` push) and a new on-page banner for block/redact/alert notices.
+- **`agents/browser-extension/src/background.js`** -- new `waWaiters` map (deliberately simpler than the existing upload-coalescing `waiters`/`inFlightByKey`, since GenAI prompts/replies aren't chunked the way uploads are), a longer `WEB_ACTIVITY_TIMEOUT_MS` (16s vs. the existing 7s, since classifying a full GenAI reply takes longer than a small upload decision), and `fetchAppCatalog()` refreshed on the same alarm/startup triggers as the existing extra-hosts fetch.
+- **`agents/browser-extension/native-host/skdlp_host.py`** -- new `evaluate_web_activity()` (calls `POST /agents/{id}/web-activity/evaluate`), `emit_web_activity_event()` (logs to `/events` with `event_type=web_activity`), `handle_web_activity()`, and `fetch_app_catalog()` (calls the new agent-facing `GET /agents/{id}/app-catalog`) -- all parallel to the existing cloud-upload-only functions, wired into the message loop as new `web_activity`/`get_app_catalog` message types that don't touch the existing `classify`/`get_hosts` handling at all.
+- **`server/app/api/v1/agents.py`** -- new `GET /agents/{agent_id}/app-catalog`, mirroring the existing `get_cloud_upload_hosts` pattern: returns the watched-domain list plus `web_activity_enforced` (whether any `web_activity_control` policy is currently active), which is what lets the extension skip the response-buffering interception path entirely when the feature isn't configured.
+
+### Verified
+
+`node --check` on all four modified/new JavaScript files and `python3 -m json.load` on manifest.json (valid JSON after the content-script array change) -- no browser/extension runtime available in this environment to load-test the actual extension, so this needs a real end-to-end test on your Windows endpoint the way File Identity Denylist and other agent-side features were tested earlier (build/deploy the extension, visit a GenAI site, confirm the native host log shows `web_activity` requests and a configured policy actually blocks/redacts).
+
+---
+
 ## 🆕 Web Activity Control / GenAI DLP — server-side foundation (part 1 of 3, August 18, 2026)
 
 ### Summary

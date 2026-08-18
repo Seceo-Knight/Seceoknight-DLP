@@ -19,7 +19,7 @@
     },
     {
       "matches": ["<all_urls>"],
-      "js": ["src/inject.js"],
+      "js": ["src/inject.js", "src/web-activity.js"],
       "run_at": "document_start",
       "all_frames": true,
       "world": "MAIN"
