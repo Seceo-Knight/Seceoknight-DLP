@@ -310,6 +310,78 @@
     [PSCustomObject]@{ ExtensionId = $extId; Forced = $forced }
   }
 
+  # Every Chrome/Edge profile on this machine, across every Windows user
+  # account -- not just whoever is running this script, since the browser
+  # that matters may belong to a different logged-in user.
+  function Get-BrowserProfileDirs {
+    $roots = @(
+      @{ Browser = 'Chrome'; Base = 'AppData\Local\Google\Chrome\User Data' },
+      @{ Browser = 'Edge';   Base = 'AppData\Local\Microsoft\Edge\User Data' }
+    )
+    $out = @()
+    foreach ($u in (Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue)) {
+      foreach ($r in $roots) {
+        $userDataDir = Join-Path $u.FullName $r.Base
+        if (-not (Test-Path $userDataDir)) { continue }
+        foreach ($prof in (Get-ChildItem $userDataDir -Directory -ErrorAction SilentlyContinue)) {
+          if ($prof.Name -eq 'Default' -or $prof.Name -like 'Profile *') {
+            $out += [PSCustomObject]@{ Browser = $r.Browser; User = $u.Name; Name = $prof.Name; Path = $prof.FullName }
+          }
+        }
+      }
+    }
+    $out
+  }
+
+  # Where did the browser actually get this extension from? Ported from
+  # CyberSentinel-DLP (commit 8c207b5), hit live on this exact deployment:
+  # manifest.json pins the signing key, so a "Load unpacked" copy (loaded
+  # via the OLD documented manual-install flow, before force-install
+  # existed) has the SAME extension id as the published, force-installed
+  # build -- that's deliberate (you debug what you deploy), but it means a
+  # leftover unpacked folder occupies the id slot the policy is trying to
+  # fill, and the managed build never visibly takes over. Every symptom
+  # then points somewhere else: Remove is still clickable, and nothing
+  # about the registry policy or the server looks wrong, because neither
+  # of them ARE wrong.
+  #
+  # Chrome records the origin in each profile's Preferences JSON as a
+  # numeric `location` under extensions.settings.<id>:
+  #   1  = installed from a packaged .crx
+  #   4  = LOADED UNPACKED  <- the one that shadows everything
+  #   5  = component
+  #   10 = installed by enterprise policy (what force-install produces)
+  function Get-ExtensionInstallSources {
+    param([string]$ExtId)
+    $out = @()
+    foreach ($p in (Get-BrowserProfileDirs)) {
+      foreach ($file in @('Secure Preferences', 'Preferences')) {
+        $path = Join-Path $p.Path $file
+        if (-not (Test-Path $path)) { continue }
+        try {
+          $json = Get-Content $path -Raw -ErrorAction Stop | ConvertFrom-Json
+          $entry = $json.extensions.settings.$ExtId
+          if (-not $entry) { continue }
+          $loc = $entry.location
+          $label = switch ($loc) {
+            1  { 'packaged .crx' }
+            4  { 'LOADED UNPACKED' }
+            5  { 'component' }
+            10 { 'enterprise policy' }
+            default { "location $loc" }
+          }
+          $out += [PSCustomObject]@{
+            Browser = $p.Browser; User = $p.User; Profile = $p.Name
+            Location = $loc; Label = $label
+            Path = $entry.path; Version = $entry.manifest.version
+          }
+          break   # one record per profile is enough
+        } catch { }
+      }
+    }
+    $out
+  }
+
   function Show-BrowserControls {
     Write-Host ''
     Info 'Browser controls'
@@ -341,6 +413,27 @@
       # running in an already-open browser window yet.
       Write-Host '     (checks the registry policy, not chrome://extensions itself -- close and' -ForegroundColor DarkGray
       Write-Host '      reopen the browser once, or wait for its normal policy refresh, to confirm)' -ForegroundColor DarkGray
+
+      $sources = Get-ExtensionInstallSources $extStatus.ExtensionId
+      $unpacked = @($sources | Where-Object { $_.Location -eq 4 })
+      if (@($unpacked).Count -gt 0) {
+        Write-Host ''
+        Err '     AN UNPACKED COPY IS LOADED, AND IT IS WHAT CHROME/EDGE IS SHOWING YOU.'
+        foreach ($u in $unpacked) {
+          Warn "       $($u.Browser) / $($u.User) / $($u.Profile)  v$($u.Version)"
+          if ($u.Path) { Warn "         from: $($u.Path)" }
+        }
+        Warn '       It has the same extension id as the published build (the signing key'
+        Warn '       is pinned so you debug what you deploy), so it occupies the slot the'
+        Warn '       policy is trying to fill -- the popup, icon and behavior you see all'
+        Warn '       come from that folder, and a Remove button stays visible, until it is'
+        Warn '       gone. This is expected if you set the extension up manually (Load'
+        Warn '       unpacked) before force-install existed.'
+        Warn '       FIX: chrome://extensions -> SeceoKnight DLP -> Remove. Close and'
+        Warn '            reopen the browser -- it reinstalls from the policy instead.'
+      } elseif (@($sources | Where-Object { $_.Location -eq 10 }).Count -gt 0) {
+        Ok '     Confirmed installed via enterprise policy in at least one browser profile.'
+      }
     }
 
     Write-Host ''

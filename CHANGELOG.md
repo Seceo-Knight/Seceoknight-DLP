@@ -8,6 +8,27 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Detect an unpacked copy shadowing the force-installed extension (August 18, 2026 evening)
+
+### What happened
+
+Hit live, on the very first real endpoint this was deployed to: the registry policy was correctly set (`ExtensionInstallForcelist` had the right entry), the scheduled task ran successfully, the server was serving the right extension id -- and Chrome still showed a Remove button. Every layer of the new mechanism was working, and it still looked broken.
+
+Root cause: this endpoint had earlier been set up manually via "Load unpacked" (the only install method that existed before today's force-install work), from `C:\SecEoKnight\browser-extension`. Because `pack-extension.py` pins the signing key into `manifest.json`, an unpacked copy has the exact same extension id as the packaged, force-installed build -- deliberately, so the same thing you debug is what you deploy. But that means the leftover unpacked folder occupies the id slot the policy is trying to fill, and Chrome keeps showing that copy (Remove button and all) instead of the managed one. Confirmed identical to CyberSentinel-DLP's own `8c207b5` ("detect an unpacked copy shadowing the managed extension") -- they hit and fixed the exact same trap yesterday.
+
+### Fix
+
+Ported their diagnostic (not their whole deploy-tooling rewrite, just the detection) into `manage-agent.ps1`'s `[4] Browser` status view:
+- `Get-BrowserProfileDirs` -- enumerates every Chrome/Edge profile across every Windows user account on the machine.
+- `Get-ExtensionInstallSources` -- reads each profile's `Preferences`/`Secure Preferences` JSON and decodes the numeric `extensions.settings.<id>.location` field Chrome itself uses to record where an extension came from (1 = packaged crx, 4 = loaded unpacked, 10 = enterprise policy).
+- `Show-BrowserControls` now calls this and, if any profile shows `location 4` for the published extension id, prints exactly which profile/folder it's coming from and the fix (Remove it in `chrome://extensions`, restart the browser) -- instead of a healthy-looking "policy set" status sitting next to a very confused admin.
+
+### Immediate remediation for the affected endpoint
+
+Told the user directly: `chrome://extensions` -> SeceoKnight DLP -> Remove -> close and reopen the browser. The policy is already correctly in place, so it reinstalls from the managed build on the next start.
+
+---
+
 ## 🔧 install.sh now packages the browser extension automatically (August 18, 2026 evening)
 
 ### Why
