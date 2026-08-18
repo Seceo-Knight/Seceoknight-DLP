@@ -327,11 +327,20 @@
       Write-Host "     Extension id: $($extStatus.ExtensionId)"
       foreach ($b in $BROWSERS) {
         if ($extStatus.Forced -contains $b.Name) {
-          Ok "     $($b.Name): force-installed"
+          Ok "     $($b.Name): policy set (force-install entry present)"
         } else {
           Warn "     $($b.Name): NOT force-installed yet (installed browser, or guard task hasn't run)"
         }
       }
+      # Honest caveat (gap-scan of CyberSentinel-DLP found this the hard way,
+      # across several of their own iterations today): this reads the
+      # REGISTRY POLICY, not whether the browser has actually picked it up.
+      # Chrome/Edge apply ExtensionInstallForcelist live, but only check for
+      # it when the browser starts (or on its own periodic policy refresh) --
+      # a "policy set" line above does not mean the extension is loaded and
+      # running in an already-open browser window yet.
+      Write-Host '     (checks the registry policy, not chrome://extensions itself -- close and' -ForegroundColor DarkGray
+      Write-Host '      reopen the browser once, or wait for its normal policy refresh, to confirm)' -ForegroundColor DarkGray
     }
 
     Write-Host ''

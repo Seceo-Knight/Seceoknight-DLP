@@ -8,6 +8,16 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔍 Gap-scan CyberSentinel-DLP (second pass, August 18, 2026 evening)
+
+Checked for updates again before continuing deployment, per request -- 6 new commits since the earlier scan, all from CyberSentinel iterating on their OWN force-install deploy/repair tooling (deleting-and-redownloading a cached extension corrupts Chrome's internal record of it; detecting "is a browser actually open" via `Get-Process` is wrong because background processes outlive closed windows; etc.).
+
+None of it is a bug in what SeceoKnight just shipped -- confirmed by reading each commit, not assumed: SeceoKnight's `HandleApplyBrowserExtensionGuard()` never deletes on-disk extension files or toggles the forcelist entry off-and-on to force a refresh (the exact thing that kept breaking their flow); it only ever adds/updates a registry value and lets Chrome's own update-feed polling do the rest. Their "Send and Post were one gesture with two names" dashboard-matrix finding also doesn't apply -- SeceoKnight's `WebActivityControlPolicyForm.tsx` already renders one row per meaningful cell individually rather than a category-by-activity grid with cells that don't apply.
+
+One honest caveat adopted from their findings: `manage-agent.ps1`'s Browser Controls status check reads the `ExtensionInstallForcelist` registry value, which confirms the POLICY is set, not that the browser has actually picked it up yet (Chrome/Edge only check for it at browser startup or their own periodic refresh). Reworded the status line and added a note about closing/reopening the browser to confirm, rather than let "policy set" read as "definitely protecting you right now."
+
+---
+
 ## 🔒 Browser extension force-install + Incognito/InPrivate lockdown (August 18, 2026)
 
 ### Summary
