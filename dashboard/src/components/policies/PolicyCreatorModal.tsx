@@ -19,7 +19,8 @@ import {
   PrintContentPreventionConfig,
   MessagingAppControlConfig,
   PrinterControlConfig,
-  EmailConfig
+  EmailConfig,
+  WebActivityControlConfig
 } from '@/types/policy'
 import { validatePolicy } from '@/utils/policyUtils'
 import PolicyTypeSelector from './PolicyTypeSelector'
@@ -39,6 +40,7 @@ import PrintContentPreventionPolicyForm from './PrintContentPreventionPolicyForm
 import MessagingAppControlPolicyForm from './MessagingAppControlPolicyForm'
 import PrinterControlPolicyForm from './PrinterControlPolicyForm'
 import EmailPolicyForm from './EmailPolicyForm'
+import WebActivityControlPolicyForm from './WebActivityControlPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
 import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react'
@@ -71,6 +73,7 @@ type TraditionalPolicyConfig =
   | MessagingAppControlConfig
   | PrinterControlConfig
   | EmailConfig
+  | WebActivityControlConfig
 
 const getDefaultConfig = (type: PolicyType): TraditionalPolicyConfig | {} => {
   switch (type) {
@@ -215,6 +218,11 @@ const getDefaultConfig = (type: PolicyType): TraditionalPolicyConfig | {} => {
         action: 'block',
         triggerLevels: ['Confidential', 'Restricted']
       } as EmailConfig
+
+    case 'web_activity_control':
+      return {
+        matrix: {}
+      } as WebActivityControlConfig
   }
 }
 
@@ -736,6 +744,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'email_send_prevention' && (
                   <EmailPolicyForm
                     config={config as EmailConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'web_activity_control' && (
+                  <WebActivityControlPolicyForm
+                    config={config as WebActivityControlConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}

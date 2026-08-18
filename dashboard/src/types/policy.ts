@@ -22,6 +22,7 @@ export type PolicyType =
   | 'messaging_app_control'
   | 'printer_control'
   | 'email_send_prevention'
+  | 'web_activity_control'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
 export type ClipboardAction = 'alert' | 'log'
@@ -234,6 +235,30 @@ export interface EmailConfig {
   triggerLevels: EmailTriggerLevel[]
 }
 
+// New capability (GenAI / Web Activity Control) -- new server-side gap
+// scan, task #135. See server/app/core/web_activity.py for the shared
+// vocabulary this mirrors. A policy's real configuration is a matrix of
+// (app category, activity) -> action, keyed as flat strings ("genai.post")
+// exactly matching wa.cell_key() server-side so policy.config round-trips
+// through the generic policies API without any server-side reshaping (the
+// same "config saved verbatim" pattern printer_control/
+// file_identity_denylist already use).
+//
+// Only the 4 currently-meaningful/enforced cells are exposed here --
+// MEANINGFUL_CELLS in web_activity.py deliberately leaves upload/attach/
+// download unwired (see that file's docstring), so this form never shows a
+// control that silently does nothing.
+export type WebActivityAction = 'allow' | 'alert' | 'block' | 'redact'
+
+export interface WebActivityControlConfig {
+  matrix: {
+    'webmail.send'?: WebActivityAction
+    'collaboration.send'?: WebActivityAction
+    'genai.post'?: WebActivityAction
+    'genai.ai_response'?: WebActivityAction
+  }
+}
+
 // Classification-aware policy types
 export interface PolicyCondition {
   field: string
@@ -279,6 +304,7 @@ export type PolicyConfig =
   | MessagingAppControlConfig
   | PrinterControlConfig
   | EmailConfig
+  | WebActivityControlConfig
 
 export interface Policy {
   id: string

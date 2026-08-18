@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield, Globe, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield, Globe, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail, Bot } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -121,6 +121,12 @@ const policyTypes: Array<{
     label: 'Email DLP (Outbound)',
     description: 'Inspect outbound email content via the SMTP relay and block/alert on sensitive data',
     icon: Mail
+  },
+  {
+    type: 'web_activity_control',
+    label: 'Web Activity Control (GenAI DLP)',
+    description: 'Detect and control sensitive data sent to/from ChatGPT, Copilot, Gemini, Claude, webmail, and collaboration tools',
+    icon: Bot
   }
 ]
 

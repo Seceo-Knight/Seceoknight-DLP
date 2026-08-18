@@ -19,9 +19,10 @@ import {
   PrintContentPreventionConfig,
   MessagingAppControlConfig,
   PrinterControlConfig,
-  EmailConfig
+  EmailConfig,
+  WebActivityControlConfig
 } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail, Bot } from 'lucide-react'
 
 /**
  * Get icon component for policy type
@@ -60,6 +61,8 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return Printer
     case 'email_send_prevention':
       return Mail
+    case 'web_activity_control':
+      return Bot
     default:
       return FileText
   }
@@ -102,6 +105,8 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Printer Device Control'
     case 'email_send_prevention':
       return 'Email DLP (Outbound)'
+    case 'web_activity_control':
+      return 'Web Activity Control (GenAI DLP)'
     default:
       return 'Unknown'
   }
@@ -244,6 +249,13 @@ export const formatPolicyConfig = (policy: Policy): string => {
         const c = config as EmailConfig
         const levels = (c.triggerLevels || []).join(', ') || 'None selected'
         return `Action: ${c.action || 'block'} | Triggers on: ${levels}`
+      }
+
+      case 'web_activity_control': {
+        const c = config as WebActivityControlConfig
+        const cells = Object.entries(c.matrix || {}).filter(([, action]) => !!action)
+        if (cells.length === 0) return 'No activities configured yet'
+        return cells.map(([cell, action]) => `${cell}: ${action}`).join(' | ')
       }
 
       default:
@@ -682,6 +694,8 @@ const getDefaultConfig = (type: PolicyType): any => {
       return { mode: 'enforce', scope: 'block_network' }
     case 'email_send_prevention':
       return { action: 'block', triggerLevels: ['Confidential', 'Restricted'] }
+    case 'web_activity_control':
+      return { matrix: {} }
     default:
       return {}
   }

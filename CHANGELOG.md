@@ -8,6 +8,40 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🆕 Web Activity Control / GenAI DLP — dashboard policy form (part 3 of 3, August 18, 2026)
+
+### Summary
+
+Final increment of the Web Activity Control / GenAI DLP build. Parts 1 (server foundation) and 2 (browser extension enforcement) shipped everything needed to detect and act on GenAI prompts/replies and webmail/collaboration sends, but there was no way for an admin to actually create a `web_activity_control` policy from the dashboard -- the only way to configure one was hand-writing `policy.config` JSON via the API directly. This part adds the actual policy-builder UI, completing the feature end to end.
+
+### Deliberate scope decision: 4 rows, not a full matrix grid
+
+`server/app/core/web_activity.py`'s `MEANINGFUL_CELLS` (set in part 1) only wires up `webmail.send`, `collaboration.send`, `genai.post`, and `genai.ai_response` -- `upload`/`attach`/`download` across all 4 app categories have nothing reaching them yet (see part 1/2 entries for why). A full 4-category x 6-activity checkbox/dropdown grid would render 24 controls, 20 of which would silently do nothing if configured -- the same trap already avoided once when narrowing `MEANINGFUL_CELLS` itself. So `WebActivityControlPolicyForm.tsx` renders exactly 4 rows, one per meaningful cell, each with a 5-way picker (Not configured / Allow / Alert / Redact / Block). Every control on the form does something real.
+
+### Config shape
+
+`policy.config` is `{ matrix: { "genai.post": "block", "genai.ai_response": "redact", ... } }` -- the flat string keys match `wa.cell_key()` server-side exactly (`"{category}.{activity}"`), so the form's output round-trips through the generic policies create/update endpoints unmodified, saved verbatim into `policy.config` the same way `printer_control`/`file_identity_denylist`/etc. already work (confirmed by reading `policies.py`'s create/update handlers in part 1 -- config is never reshaped server-side for this policy type). `server/app/api/v1/agents.py`'s `evaluate_web_activity()` (part 1) reads `(policy.config or {}).get("matrix")` directly, matching this shape.
+
+### What was built
+
+- **`dashboard/src/types/policy.ts`** -- added `'web_activity_control'` to the `PolicyType` union, new `WebActivityAction` (`allow`/`alert`/`block`/`redact`) and `WebActivityControlConfig` (`{ matrix: {...4 optional cell keys...} }`) types, added to the `PolicyConfig` union.
+- **`dashboard/src/components/policies/WebActivityControlPolicyForm.tsx`** (new) -- the 4-row form described above, following the established form-component contract (`{ config, onChange }` props) used by every other traditional policy type.
+- **`dashboard/src/components/policies/PolicyTypeSelector.tsx`** -- added the "Web Activity Control (GenAI DLP)" tile to the type-selection grid.
+- **`dashboard/src/components/policies/PolicyCreatorModal.tsx`** -- added the new config type to the `TraditionalPolicyConfig` union, a `getDefaultConfig()` case (`{ matrix: {} }`), and the conditional render block for the new form, matching the pattern every other policy type already uses.
+- **`dashboard/src/utils/policyUtils.ts`** -- added `web_activity_control` cases to `getPolicyTypeIcon` (Bot icon), `getPolicyTypeLabel`, `formatPolicyConfig` (lists configured cell:action pairs, or "No activities configured yet"), and the internal `getDefaultConfig` helper `transformApiPolicyToFrontend` falls back to.
+
+No changes needed to `policyUtils.ts`'s `validatePolicy` -- like `network_share_transfer_control`/`print_content_prevention`/`messaging_app_control`, the default config (`{ matrix: {} }`, meaning "nothing configured yet") is always structurally valid; an admin can save a policy with zero rows set (equivalent to "off"), same posture as the other config-driven policy types.
+
+### Verified
+
+`npx tsc --noEmit` across the dashboard: same 24 pre-existing, unrelated errors present before this change (all in `ClassificationPolicyForm.tsx`, `ClipboardPolicyForm.tsx`, `GoogleDriveCloudPolicyForm.tsx`/`OneDriveCloudPolicyForm.tsx`, pre-existing `PolicyCreatorModal.tsx` `SetStateAction` typing gaps, `PolicyDetailsModal.tsx`, `PolicyRow.tsx`, `RuleModal.tsx`, `lib/utils.ts`) -- zero new errors introduced by this change.
+
+### Still required before this is live
+
+This completes the 3-part build in the repository, but nothing in any of the 3 parts is deployed to the live server yet. Deploying requires: `sudo bash update.sh` on the server (applies migrations 038 and 039, deploys the new API endpoints and this dashboard UI); rebuilding and deploying a new Windows agent binary (for the printer explicit-deny `agent.cpp` changes from earlier today); and rebuilding and deploying the updated browser extension package (for this whole GenAI/Web Activity Control feature -- parts 1-3 all need the extension update to do anything).
+
+---
+
 ## 🆕 Web Activity Control / GenAI DLP — browser extension enforcement (part 2 of 3, August 18, 2026)
 
 ### Summary
