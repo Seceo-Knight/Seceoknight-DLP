@@ -8,6 +8,42 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔍 Gap-scan CyberSentinel-DLP (4-day batch) + port printer explicit-deny (August 18, 2026)
+
+### Summary
+
+Follow-up gap-scan at the user's request, checking the live `effaaykhan/cybersentineldlp-prod` GitHub repo for anything shipped since the last check (task #154, August 13/14). 36 commits had landed in the intervening 4 days.
+
+### What was checked and skipped
+
+- 11 commits consolidating their dashboard's dialog/modal design system ("one overlay instead of nineteen," shared form kit, colour tokens) -- internal UI consistency work on their end, not a DLP capability. SeceoKnight has its own coherent design system already.
+- SSO/SIEM role + ABAC mapping (`ad46e71`) -- wiring their DLP into their own separate SIEM product's role vocabulary. Not relevant unless we're integrating an actual SIEM.
+- Extension/CI build plumbing (force-install packaging, repack idempotency, versioning) -- deployment mechanics for their specific browser-extension pipeline.
+- USB "honour an explicit denial when the manager is unreachable" (`98b47af`) -- checked against our own `get_usb_allowlist()` and confirmed we do NOT have this bug: our design is strict default-deny (a denied serial and an unlisted serial already have the identical effect in enforce mode), so there's no failure mode to inherit here.
+
+### The big one, deliberately deferred: GenAI / web-activity control + real-time redaction
+
+CyberSentinel shipped a new control layer (`f435920`, `d3ed5e4`, `f02edfe`): a matrix of app category (webmail / file-sharing / collaboration / **generative AI** -- ChatGPT, Copilot, Gemini) crossed with activity type (upload / download / attach / send / post / **AI response**), each cell settable to allow/block/**redact**/alert. Redact strips just the sensitive values out of the live outgoing payload (not just what gets logged) and lets the rest through.
+
+Confirmed SeceoKnight has zero GenAI/AI-chat coverage anywhere in the codebase, and our browser extension's actual scope is narrowly "Cloud Upload Guard" (upload-to-cloud-host interception only). Their base matrix alone was ~2,400 lines across 17 files. This is a real, current gap (LLM leakage is a live 2026 DLP concern) but is multi-day feature work comparable to the SMTP relay or Data Matching builds -- deliberately scoped as a separate initiative per the user's explicit choice, not started this session.
+
+### What was built: printer explicit-deny
+
+`b7dc3f3` added a `decision` ('allow'|'deny') column to CyberSentinel's printer registry, checked in every policy scope, so a single printer can be explicitly blocked without moving the whole fleet into allowlist mode. Checked our own `SanctionedPrinter`/`printers.py`/`get_printer_policy()` and confirmed the identical limitation: allow-only (`is_enabled` bool), and the sanctioned list is only even consulted when scope=="allowlist". Also found and fixed two stale docstrings/UI copy claiming "the Windows agent doesn't monitor print jobs yet, so nothing is enforced" -- that was true when this module was first ported but is no longer accurate since tasks #114/#130-133 shipped real print device-control and content-inspection enforcement.
+
+- **`server/alembic/versions/038_printer_deny.py`** -- adds `decision VARCHAR(10) DEFAULT 'allow'` to `sanctioned_printers`.
+- **`server/app/models/sanctioned_printer.py`** -- added `decision`, mirroring the exact pattern `SanctionedUsbDevice.decision` already uses (tasks #58-59).
+- **`server/app/api/v1/printers.py`** -- `approve_printer`/`update_printer` accept `decision`; `list_printers` returns `allow_count`/`deny_count` alongside the existing list, same shape as the USB devices endpoint. Corrected the stale "no agent enforcement" docstrings.
+- **`server/app/api/v1/agents.py`** -- `get_printer_policy()` now returns `denied_printers` (deny-decision rows) **unconditionally**, regardless of `scope` -- unlike the existing `printers` allow-list, which still only ships in `scope=="allowlist"` as before.
+- **`agents/endpoint/windows/agent.cpp`** -- new `deniedPrinters` set, populated in `FetchPrinterPolicy()`. `ShouldBlockPrinter()` checks the deny set first, in every scope, before falling back to the existing scope-based allow logic.
+- **`dashboard/src/lib/printers-api.ts`** + **`dashboard/src/pages/Printers.tsx`** -- rebuilt the Printers page to split into "Sanctioned" and "Disallowed" sections with a flip button per row, same UX pattern as the USB Devices page. Corrected the page's stale "nothing is blocked" warning banner.
+
+### Verified
+
+`python3 -m ast` parse-check on all modified server files; a manual brace-balance check on the two touched `agent.cpp` functions (the whole-file naive scanner reports a false imbalance elsewhere in this 10k+-line file due to raw string literals it doesn't parse, same caveat noted for prior C++ edits); `tsc --noEmit` shows zero new dashboard type errors (same 25 pre-existing, unrelated errors as before). Not yet deployed -- needs `update.sh` (runs the migration) plus a new Windows agent binary + Update on endpoints, same two-step deployment as File Identity Denylist (task #152).
+
+---
+
 ## 🔍 Gap-scan live CyberSentinel-DLP GitHub repo + port IP Allowlist master toggle (tasks #153/#154, August 13, 2026)
 
 ### Summary

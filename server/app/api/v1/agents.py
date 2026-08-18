@@ -1390,6 +1390,14 @@ async def get_printer_policy(
     content. audit mode logs "would block" only. Independent of and additive
     to content inspection.
 
+    Explicit deny (ported from CyberSentinel commit b7dc3f3): a
+    SanctionedPrinter row with decision="deny" is returned in
+    `denied_printers` UNCONDITIONALLY -- regardless of `scope` -- and beats
+    an allow row for the same name. This is what makes "block this one
+    printer, leave the rest of the fleet alone" expressible without moving
+    the whole estate into allowlist scope (the allow list in `printers`
+    below is still scope-gated as before).
+
     Content inspection (driven by a Policy row of type="print_content_prevention"):
     when active, the agent pauses the job, extracts real text from the
     spooled document (EMF/RAW ASCII + UTF-16LE string runs -- not just the
@@ -1428,7 +1436,22 @@ async def get_printer_policy(
         printers = [
             n for (n,) in (await db.execute(
                 _select(SanctionedPrinter.printer_name).where(
-                    SanctionedPrinter.is_enabled.is_(True)
+                    SanctionedPrinter.is_enabled.is_(True),
+                    SanctionedPrinter.decision == "allow",
+                )
+            )).all()
+        ]
+
+    # Deny rows ship unconditionally (any scope, as long as device control
+    # is enforced at all) -- see the docstring above and SanctionedPrinter's
+    # own module docstring for why this is deliberately not scope-gated.
+    denied_printers = []
+    if enforced:
+        denied_printers = [
+            n for (n,) in (await db.execute(
+                _select(SanctionedPrinter.printer_name).where(
+                    SanctionedPrinter.is_enabled.is_(True),
+                    SanctionedPrinter.decision == "deny",
                 )
             )).all()
         ]
@@ -1512,6 +1535,7 @@ async def get_printer_policy(
         "mode": mode,
         "scope": scope,
         "printers": printers,
+        "denied_printers": denied_printers,
         "content_inspection": content_inspection,
         "content_mode": content_mode,
         "unknown_content_action": unknown_content_action,

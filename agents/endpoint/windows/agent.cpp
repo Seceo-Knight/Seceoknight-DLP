@@ -2722,7 +2722,12 @@ static ClassificationResult Classify(const std::string& content,
      std::atomic<bool> printerControlEnforced{false};
      std::string printerControlMode;                     // "enforce" | "audit" | "off"
      std::string printerControlScope;                    // block_all|block_network|block_local|allowlist|none
-     std::set<std::string> sanctionedPrinters;           // enabled allowlist printer names (UPPERCASE)
+     std::set<std::string> sanctionedPrinters;           // enabled allow-decision printer names (UPPERCASE)
+     // Explicit deny (ported from CyberSentinel commit b7dc3f3): checked in
+     // EVERY scope, not just "allowlist" -- lets an admin block one specific
+     // printer without moving the whole fleet into allowlist mode. Beats an
+     // allow row for the same name. See ShouldBlockPrinter().
+     std::set<std::string> deniedPrinters;                // enabled deny-decision printer names (UPPERCASE)
      std::atomic<bool> printContentInspection{false};    // a print_content_prevention policy is active
      std::string printContentMode;                       // "enforce" | "audit" | "off"
      // "allow" | "block" -- enterprise-grade fail-closed option (CONFIRMED
@@ -5405,21 +5410,30 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          if (!printerControlEnforced.load()) return false;
          std::string mode, scope;
          bool sanctioned = false;
+         bool denied = false;
          {
              std::lock_guard<std::mutex> lock(printerPolicyMutex);
              mode = printerControlMode;
              scope = printerControlScope;
-             sanctioned = sanctionedPrinters.count(NormalizePrinter(printerName)) > 0;
+             std::string normalized = NormalizePrinter(printerName);
+             sanctioned = sanctionedPrinters.count(normalized) > 0;
+             denied = deniedPrinters.count(normalized) > 0;
          }
-         bool matches = false;
-         if (scope == "block_all")          matches = true;
-         else if (scope == "block_network") matches = IsNetworkPrinter(printerName);
-         else if (scope == "block_local")   matches = !IsNetworkPrinter(printerName);
-         else if (scope == "allowlist")     matches = !sanctioned;   // block anything not sanctioned
+         // Explicit deny beats everything else and applies in EVERY scope
+         // (ported from CyberSentinel commit b7dc3f3) -- checked before the
+         // scope-based `matches` logic below, which only ever looks at
+         // allow-decision rows and only in "allowlist" scope.
+         bool matches = denied;
+         if (!matches) {
+             if (scope == "block_all")          matches = true;
+             else if (scope == "block_network") matches = IsNetworkPrinter(printerName);
+             else if (scope == "block_local")   matches = !IsNetworkPrinter(printerName);
+             else if (scope == "allowlist")     matches = !sanctioned;   // block anything not sanctioned
+         }
          if (!matches) return false;
          if (mode == "audit") {
              logger.Info("PRINT_DEVICE_AUDIT: would block printer " + printerName +
-                         " (scope " + scope + ")");
+                         " (scope " + scope + (denied ? ", explicit deny" : "") + ")");
              return false;
          }
          return true;   // enforce
@@ -5443,6 +5457,10 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              std::set<std::string> printers;
              for (const auto& p : rawPrinters) printers.insert(NormalizePrinter(p));
 
+             auto rawDenied = ExtractJsonArray(response, "denied_printers");
+             std::set<std::string> denied;
+             for (const auto& p : rawDenied) denied.insert(NormalizePrinter(p));
+
              bool contentInspection = ExtractJsonBool(response, "content_inspection");
              std::string contentMode = ToLower(config.ExtractJsonValue(response, "content_mode"));
              std::string unknownContentAction = ToLower(config.ExtractJsonValue(response, "unknown_content_action"));
@@ -5458,6 +5476,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  printerControlMode = mode;
                  printerControlScope = scope;
                  sanctionedPrinters = printers;
+                 deniedPrinters = denied;
                  printContentMode = contentMode;
                  printUnknownContentAction = unknownContentAction;
                  printContentSeverity = contentSeverity;
@@ -5473,6 +5492,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              logger.Debug("Printer control: enforced=" + std::string(enforced ? "true" : "false") +
                          " mode=" + (mode.empty() ? "off" : mode) +
                          " scope=" + (scope.empty() ? "none" : scope) +
+                         " allowed=" + std::to_string(printers.size()) +
+                         " denied=" + std::to_string(denied.size()) +
                          " content_inspection=" + std::string(contentInspection ? "true" : "false") +
                          " content_mode=" + (contentMode.empty() ? "off" : contentMode) +
                          " unknown_content_action=" + unknownContentAction +
