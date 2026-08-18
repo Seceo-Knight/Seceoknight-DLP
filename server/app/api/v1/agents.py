@@ -2055,3 +2055,180 @@ def _severity_rank(severity: str) -> int:
     """Convert severity to numeric rank for comparison"""
     ranks = {"low": 1, "medium": 2, "high": 3, "critical": 4}
     return ranks.get(severity.lower(), 0)
+
+
+# ── Web Activity Control (GenAI / web-activity, new capability) ────────────
+# Ported in spirit from CyberSentinel-DLP commits f435920/d3ed5e4/f02edfe,
+# adapted to SeceoKnight's own architecture (see app/core/web_activity.py
+# and app/core/masking.py for the design rationale) rather than copied
+# file-for-file. This is a SEPARATE endpoint from evaluate_policy_realtime
+# above rather than a branch inside it: the matrix lives in policy.config
+# and is read directly (see _transform_web_activity_config's docstring in
+# policy_transformer.py for why), which is a different evaluation shape
+# than DatabasePolicyEvaluator's generic conditions/rules matching every
+# other channel through evaluate_policy_realtime uses.
+
+_app_catalog_cache: Dict[str, Any] = {"rows": [], "expires_at": 0.0}
+_APP_CATALOG_CACHE_TTL = 30  # seconds — short, admin edits should show up fast
+
+
+async def _load_app_catalog(db: AsyncSession):
+    import time as _time
+    from sqlalchemy import select as _select
+    from app.models.app_catalog import AppCatalogEntry as _AppCatalogEntry
+    now = _time.monotonic()
+    if _app_catalog_cache["expires_at"] > now and _app_catalog_cache["rows"]:
+        return _app_catalog_cache["rows"]
+    rows = (await db.execute(_select(_AppCatalogEntry.domain, _AppCatalogEntry.category))).all()
+    pairs = [(r[0], r[1]) for r in rows]
+    _app_catalog_cache["rows"] = pairs
+    _app_catalog_cache["expires_at"] = now + _APP_CATALOG_CACHE_TTL
+    return pairs
+
+
+class WebActivityEvaluationRequest(BaseModel):
+    """Request model for Web Activity Control evaluation. Sent by the
+    browser extension (via the native host, same bridge pattern as the
+    existing cloud-upload classify call) for a page action against a
+    destination host."""
+    host: str = Field(..., description="The destination hostname, e.g. 'chatgpt.com'")
+    activity: str = Field(..., description="upload | download | attach | send | post | ai_response")
+    content: Optional[str] = Field(None, description="Plain text to classify — a prompt, pasted body, or AI response text")
+    file_name: Optional[str] = Field(None)
+    file_content_b64: Optional[str] = Field(None, description="Base64 raw file bytes for upload/attach activities")
+
+
+class WebActivityEvaluationResponse(BaseModel):
+    app_category: Optional[str] = Field(None, description="webmail | file_sharing | collaboration | genai | null if unclassified")
+    action: str = Field(..., description="allow | alert | block | redact")
+    reason: str
+    classification_level: str = Field("Public")
+    confidence: float = Field(0.0)
+    matched_rules: List[Dict[str, Any]] = Field(default_factory=list)
+    # Only populated when action == "redact" and at least one span was
+    # actually substituted — see app/core/masking.py. The caller (extension)
+    # forwards THIS text instead of the original when present.
+    redacted_content: Optional[str] = Field(None)
+    labels_redacted: List[str] = Field(default_factory=list)
+
+
+@router.post("/{agent_id}/web-activity/evaluate", response_model=WebActivityEvaluationResponse)
+async def evaluate_web_activity(
+    agent_id: str,
+    request: WebActivityEvaluationRequest,
+    http_request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Real-time evaluation for Web Activity Control (GenAI / web-activity).
+
+    Flow:
+      1. classify the destination host into an app_category via app_catalog
+         (unrecognized host -> allow immediately, not a watched destination)
+      2. find the active web_activity_control policy (none configured ->
+         allow) and look up its matrix cell for (category, activity)
+      3. classify the content (when provided) same as every other channel
+      4. gate the cell's configured action on what was actually found:
+         "block"/"alert" only fire when the content is genuinely sensitive
+         (Confidential/Restricted for block, Internal+ for alert) --
+         otherwise this degrades to "allow", same content-aware philosophy
+         used everywhere else in this product (never punish innocuous
+         data). "redact" only fires when there's something to redact.
+
+    Requires ``X-Agent-Key`` header, same as evaluate_policy_realtime.
+    """
+    await verify_agent_key(http_request)
+
+    from sqlalchemy import select as _select
+    from app.core import web_activity as wa
+    from app.core.masking import redact_content as _redact_content
+    from app.models.policy import Policy as _Policy
+
+    try:
+        catalog = await _load_app_catalog(db)
+        category = wa.classify_host(request.host, catalog)
+        if not category:
+            return WebActivityEvaluationResponse(
+                app_category=None, action="allow", reason="destination not in app catalog",
+            )
+
+        policy = (await db.execute(
+            _select(_Policy).where(
+                _Policy.type == "web_activity_control",
+                _Policy.status == "active",
+                _Policy.deleted_at.is_(None),
+            ).order_by(_Policy.priority.desc())
+        )).scalars().first()
+
+        if not policy:
+            return WebActivityEvaluationResponse(
+                app_category=category, action="allow", reason="no active web_activity_control policy",
+            )
+
+        matrix = wa.normalize_matrix((policy.config or {}).get("matrix") or {})
+        cell_action = wa.lookup_action(matrix, category, request.activity)
+
+        # Resolve content to classify — same extraction path as
+        # evaluate_policy_realtime for file bytes, plain content otherwise.
+        content_to_classify = request.content or ""
+        if request.file_content_b64:
+            import base64 as _b64
+            from app.services.document_extract import extract_text as _extract_text
+            try:
+                raw = _b64.b64decode(request.file_content_b64, validate=False)
+                extracted = _extract_text(request.file_name or "", raw)
+                content_to_classify = extracted.text
+            except Exception:
+                content_to_classify = content_to_classify or ""
+
+        if cell_action == "allow" or not content_to_classify:
+            return WebActivityEvaluationResponse(
+                app_category=category, action="allow",
+                reason=f"cell ({category}.{request.activity}) = {cell_action}" + ("" if content_to_classify else ", no content to inspect"),
+            )
+
+        classification_engine = ClassificationEngine(db)
+        classification_result = await classification_engine.classify_content(
+            content_to_classify,
+            context={"event_type": "web_activity", "file_name": request.file_name or ""},
+        )
+        level = classification_result.classification
+        is_sensitive_block = level in ("Confidential", "Restricted")
+        is_sensitive_alert = level in ("Internal", "Confidential", "Restricted")
+        has_matches = bool(classification_result.matched_rules)
+
+        final_action = "allow"
+        redacted_content = None
+        labels_redacted: List[str] = []
+
+        if cell_action == "block" and is_sensitive_block:
+            final_action = "block"
+        elif cell_action == "alert" and is_sensitive_alert:
+            final_action = "alert"
+        elif cell_action == "redact" and has_matches:
+            redacted_content, labels_redacted = await _redact_content(
+                db, content_to_classify, classification_result.matched_rules
+            )
+            final_action = "redact" if labels_redacted else "allow"
+
+        reason = f"cell ({category}.{request.activity}) = {cell_action}; classified {level} ({classification_result.confidence_score:.0%})"
+
+        logger.info(
+            "Web activity evaluated",
+            agent_id=agent_id, host=request.host, category=category, activity=request.activity,
+            cell_action=cell_action, final_action=final_action, level=level,
+        )
+
+        return WebActivityEvaluationResponse(
+            app_category=category, action=final_action, reason=reason,
+            classification_level=level, confidence=classification_result.confidence_score,
+            matched_rules=classification_result.matched_rules,
+            redacted_content=redacted_content, labels_redacted=labels_redacted,
+        )
+    except Exception as e:
+        logger.error("Web activity evaluation failed", agent_id=agent_id, host=request.host, error=str(e))
+        # Fail-open, same posture as evaluate_policy_realtime — a DLP
+        # server error must never brick the user's browser.
+        return WebActivityEvaluationResponse(
+            app_category=None, action="allow", reason=f"evaluation error: {e}",
+        )

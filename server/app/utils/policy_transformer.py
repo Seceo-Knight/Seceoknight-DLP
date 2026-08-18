@@ -45,6 +45,8 @@ def transform_frontend_config_to_backend(
         return _transform_application_control_config(config)
     elif policy_type == "network_share_transfer_control":
         return _transform_network_share_transfer_config(config)
+    elif policy_type == "web_activity_control":
+        return _transform_web_activity_config(config)
     else:
         # Unknown type, return empty defaults
         return (
@@ -737,6 +739,38 @@ def _transform_network_share_transfer_config(config: Dict[str, Any]) -> Tuple[Di
         actions = {"alert": {}}
 
     return conditions, actions
+
+
+def _transform_web_activity_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform Web Activity Control config to backend format.
+
+    New capability (GenAI / web-activity control). Unlike every other policy
+    type in this file, the "config" here IS the whole policy -- a matrix of
+    (app_category, activity) -> action (see app/core/web_activity.py for the
+    vocabulary). A filled matrix has up to len(MEANINGFUL_CELLS) independent
+    verdicts; the generic DatabasePolicyEvaluator conditions/actions shape
+    only ever expresses ONE actions dict per policy row, so trying to force
+    the matrix through that generic engine would need one Policy row per
+    cell, or would silently collapse to "whichever cell happens to match
+    first" -- exactly the kind of bug task #151 found in a different policy
+    type. Ported approach from CyberSentinel's own commit f435920: this
+    transformer intentionally emits an always-"log" placeholder, and the
+    REAL evaluation reads policy.config's matrix directly -- see
+    evaluate_web_activity() in app/api/v1/agents.py. policy.config is saved
+    verbatim by the policies API regardless of what this function returns
+    (see create_policy/policies.py), so nothing is lost.
+
+    Frontend format:
+    {
+        "matrix": { "webmail.upload": "block", "genai.ai_response": "redact", ... },
+        "redact_method": "placeholder"   // only method implemented so far
+    }
+    """
+    return (
+        {"match": "all", "rules": [{"field": "event_subtype", "operator": "equals", "value": "web_activity"}]},
+        {"log": {}},
+    )
 
 
 def _transform_file_identity_denylist_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:

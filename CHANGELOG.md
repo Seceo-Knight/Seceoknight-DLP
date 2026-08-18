@@ -8,6 +8,29 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🆕 Web Activity Control / GenAI DLP — server-side foundation (part 1 of 3, August 18, 2026)
+
+### Summary
+
+First increment of the GenAI/web-activity control feature flagged in the previous gap-scan entry (the one deliberately deferred pending explicit user choice) — user chose "full build now." Design ported in spirit from CyberSentinel-DLP commits f435920/d3ed5e4/f02edfe, but built natively for SeceoKnight's own architecture rather than copied file-for-file, since their reference is Python-server + JS-extension while ours pairs a Python server with a C++ Windows agent and a separate browser extension.
+
+This part is the server-side foundation only — the browser extension (GenAI/activity detection, real-time enforcement) and the dashboard policy-builder UI are separate, not-yet-built increments (parts 2 and 3). Nothing user-facing changes yet: no policy type exists in the dashboard to configure this, so the new endpoints are unreachable until the extension and UI land. Safe to deploy standalone -- purely additive (new tables/endpoints), touches nothing existing.
+
+### What was built
+
+- **`server/alembic/versions/039_app_catalog.py`** + **`server/app/models/app_catalog.py`** -- new `app_catalog` table classifying destination hostnames into `webmail | file_sharing | collaboration | genai`. Seeded with SeceoKnight's existing CLOUD_HOSTS baseline (re-categorized) plus the major GenAI vendors (ChatGPT, Copilot, Gemini, Claude, Poe, Perplexity, Character.AI, Hugging Face) -- previously entirely absent from the product; a repo-wide search for any GenAI vendor before this returned nothing.
+- **`server/app/api/v1/app_catalog.py`** -- CRUD for the catalog (admin-only writes, analyst reads), same RBAC pattern as printers.py/usb_devices.py.
+- **`server/app/core/web_activity.py`** -- the shared vocabulary (app categories x six activity types: upload/download/attach/send/post/ai_response x four actions: allow/alert/block/redact), defined once so the policy engine, the evaluate endpoint, and (in part 2) the extension can't drift from each other -- same lesson CyberSentinel's own commit called out.
+- **`server/app/core/masking.py`** -- the new "redact" action's engine. classification_engine.py's rule matching uses `pattern.findall()` (positions not tracked, by design -- teaching the hot path every clipboard/USB/print/email event goes through to carry offsets would cost latency everywhere to serve a decision only this new path reaches). This module is a separate, additive pass: re-runs ONLY the rules that already matched, using `finditer()`/substring search to recover spans, then substitutes `[LABEL_N]` placeholders. Verified with a functional test (not just syntax-checked) reproducing CyberSentinel's own worked example exactly: `"Rahul Menon, Aadhaar 4321 8765 1234, card 4111 1111 1111 1111"` → `"Rahul Menon, Aadhaar [AADHAAR_1], card [CREDIT_CARD_1]"`. Disclosed limitation: dictionary-type rules aren't redacted (their match offsets aren't available without loading the dictionary file this module doesn't otherwise depend on) -- they still count toward classification, just don't get their own span replaced.
+- **`server/app/utils/policy_transformer.py`** -- new `web_activity_control` case. Unlike every other policy type here, the matrix (up to 13 meaningful cells) doesn't fit the generic one-actions-dict-per-policy shape the DatabasePolicyEvaluator uses -- trying to force it through would need one Policy row per cell or silently collapse to one arbitrary cell winning (the exact bug class task #151 found in a different policy type). So the transformer emits an inert placeholder and the real matrix is read directly from `policy.config` by the new evaluator below, same approach CyberSentinel itself used for this same reason.
+- **`server/app/api/v1/agents.py`** -- new `POST /agents/{agent_id}/web-activity/evaluate`. Classifies the destination host via app_catalog (unrecognized host -> immediate allow, not a watched destination), looks up the active `web_activity_control` policy's matrix cell for (category, activity), classifies the content when present, then gates the configured action on what was actually found: `block`/`alert` only fire when content is genuinely sensitive (Confidential/Restricted for block, Internal+ for alert), `redact` only fires when there's something to redact -- same content-aware philosophy as every other channel in this product, never a blunt "block all traffic in this channel regardless of content" rule. A separate endpoint from the existing `evaluate_policy_realtime`, not a branch inside it, since the evaluation shape is fundamentally different (config-matrix read vs. generic conditions/rules matching).
+
+### Verified
+
+`python3 -m ast` parse-check on all nine new/modified server files. Real import test against the live model registry (`from app.models import AppCatalogEntry, Policy, Rule` — confirms no SQLAlchemy mapper conflicts, not just valid syntax). Functional tests of `web_activity.classify_host()` (exact + subdomain matching), `normalize_matrix()`/`lookup_action()` (drops invalid cells/actions correctly), and `masking.redact_content()` (both the Aadhaar/credit-card worked example above and a case-insensitive multi-occurrence keyword-rule redaction) against fake DB/Rule objects standing in for a real Postgres session. `tsc --noEmit` on the dashboard shows zero new errors (no dashboard files touched in this part). Not deployed yet -- will deploy alongside part 2/3 once there's a way to actually configure and trigger this from the dashboard.
+
+---
+
 ## 🔍 Gap-scan CyberSentinel-DLP (4-day batch) + port printer explicit-deny (August 18, 2026)
 
 ### Summary
