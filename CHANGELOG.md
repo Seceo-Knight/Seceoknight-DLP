@@ -8,6 +8,42 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Watchdog task's `wscript.exe`/`.vbs` launcher silently blocked by Windows 11 Application Control (August 18, 2026 evening)
+
+### What happened
+
+Gap-scan of CyberSentinel-DLP turned up two recent commits. One (unpacked-extension shadowing) was already ported. The other: their main agent launch task used to run `wscript.exe launch_agent.vbs` to hide the console window, and on a real Windows 11 endpoint under Application Control / Smart App Control that failed at every logon with `"An Application Control policy has blocked this file"` (0x800711C7) -- script hosts are blocked by default under those policies. Their fix was to point the task straight at the exe instead, since `--bg` already gives it a hidden window with no wrapper needed.
+
+SeceoKnight's main launch task was already fixed the same way (it runs `seceoknight_agent.exe --bg` directly). But the health-check watchdog task -- a *different*, newer piece of this codebase, added to catch a genuinely HUNG (not exited) agent process via log-staleness -- had converged, after four separate rounds of console-flash debugging (Interactive->S4U logon, then wrapping powershell.exe in VBScript with SW_HIDE, then moving the whole staleness check into VBScript/COM so no interpreter ever spawned on the healthy path, then LogonType ServiceAccount as SYSTEM once S4U turned out to fail for Azure AD-joined accounts), on exactly the same `wscript.exe watchdog_launcher.vbs` pattern -- because the watchdog needs real decision logic (read a log's mtime, decide hung-or-not, taskkill + retrigger), not just "launch an exe", so the simple CyberSentinel fix didn't directly apply. Under the same Application Control policy, the watchdog task would silently never run at all -- no console flash to notice, no error anywhere, just crash-recovery quietly disabled on any endpoint with that policy on.
+
+### Fix
+
+Moved the decision logic natively into the agent binary itself instead of eliminating it: `agents/endpoint/windows/agent.cpp` gained `HandleWatchdogCheck()`, wired into `main()`'s existing one-shot-hook chain as `seceoknight_agent.exe --watchdog-check` (same pattern already used for `--apply-wireless-guard`/`--apply-browser-extension-guard`/`--cli-guard`). It's a direct port of `watchdog_launcher.vbs`'s logic -- not running -> no-op, within a 2-minute startup grace -> no-op, log stale >= 3 minutes -> force-kill + `schtasks /Run` -- using `CreateToolhelp32Snapshot`/`GetProcessTimes` for process discovery instead of the VBS's `Schedule.Service` COM calls, and killing by exact PID instead of `taskkill /IM` (precise to the one hung instance). Reuses the already-proven `RunHiddenCommand()` helper for the two console utility calls (`taskkill.exe`, `schtasks.exe`) rather than adding new CreateProcess boilerplate. Deliberately does NOT use the default `Logger()` (which opens `seceoknight_agent.log`, the very file this function checks the mtime of -- writing to it every 5-minute tick would have made the log look permanently fresh and defeated the whole check) -- uses its own `watchdog.log`, same as the .vbs it replaces.
+
+This works with zero console risk for the same reason CyberSentinel's fix works: the agent binary is already GUI-subsystem (`-mwindows`, see `AttachForegroundConsole()`), so it never gets a console allocated regardless of how it's launched -- no `SW_HIDE`/`CREATE_NO_WINDOW` juggling needed at all, and no script host left for a policy to catch.
+
+`install-agent.ps1`'s Step 9b no longer generates `watchdog.ps1` or `watchdog_launcher.vbs` at all, cleans up either file left by an older install, and registers the watchdog task's action against the exe directly. `manage-agent.ps1` gained `Test-WatchdogTaskCurrent`/`Repair-WatchdogTask` (mirroring CyberSentinel's own `Test-AgentTaskCurrent` pattern) so `Update-Agent` converges an already-installed machine onto the new task action too, not just new installs -- otherwise every endpoint installed before this fix would keep silently running the broken watchdog forever.
+
+Not compiled/run on a real Windows machine (no Windows/C++ toolchain in the environment that wrote it, same caveat `RunHiddenCommand()` itself carries) -- build via the existing GitHub Actions workflow and verify on a real endpoint before relying on it.
+
+---
+
+## 🐛 web-activity.js silently skipped genai posts built via `fetch(new Request(...))` (August 18, 2026 evening)
+
+### What happened
+
+First real end-to-end test against ChatGPT: sent a message, got a normal reply back, but the server logged nothing at all -- not a `web_activity` decision, not even the older Cloud Upload Guard's `cloud_upload` event. A console error on `backend-api/sentinel/ping` (`ERR_BLOCKED_BY_CLIENT`) looked like the culprit at first, but it turned out unrelated: it fired regardless of whether web-activity.js's own logic ran, so chasing it further would have been chasing a red herring.
+
+Root cause: `web-activity.js`'s `fetch` wrapper only ever read the request body from the second argument -- `var body = init && init.body`. That's correct for `fetch(url, { body })`, but ChatGPT's bundled/instrumented client calls fetch the other spec-legal way, `fetch(new Request(url, { body }))`, where the body lives inside the `Request` object itself and `init` is `undefined`. `body` resolved to `undefined`, `requestBodyToText()` returned `null`, and the code took its "too short / not text" fallback straight to `allow` -- no server round trip, no error, nothing to see in the console. A silent miss on exactly the traffic this feature exists to inspect, and a plausible failure mode for any modern bundled web app, not just ChatGPT.
+
+### Fix
+
+`agents/browser-extension/src/web-activity.js`: added `resolveBodyText(input, init)`, which tries the existing synchronous `init.body` path first and, if that comes back empty and `input` is itself a `Request` instance, falls back to `input.clone().text()` (async, since `Request` bodies are streams same as `Response` bodies). The main `fetch` wrapper now awaits this before deciding allow/post-for-decision, so both calling conventions are covered. Redaction handles the `Request`-as-`input` case too -- passing a `body` on `init` when `input` is a `Request` overrides the Request's own body per the Fetch spec, so `origFetch.call(window, input, finalInit)` still redacts correctly regardless of which convention the page used.
+
+Bumped extension `manifest.json` to 1.0.1. Requires re-running `scripts/pack-extension.py` on the server to publish the new build; force-installed endpoints pick it up on their next `update.xml` poll (or immediately via `chrome://extensions` -> Update, or a browser restart).
+
+---
+
 ## 🐛 Detect an unpacked copy shadowing the force-installed extension (August 18, 2026 evening)
 
 ### What happened

@@ -479,6 +479,64 @@
 
   # ================= Update (binary-only swap) =================
 
+  # Rewrites the watchdog task if it's still calling the old
+  # wscript.exe/watchdog_launcher.vbs launcher instead of the exe directly
+  # (agent.cpp's HandleWatchdogCheck(), --watchdog-check).
+  #
+  # Update-Agent only ever replaced the BINARY historically -- a machine
+  # installed before this fix would keep the stale wscript.exe task action
+  # forever, since nothing else ever looked at it. That task action is the
+  # exact one Windows 11 Application Control/Smart App Control blocks by
+  # default ("An Application Control policy has blocked this file"),
+  # silently disabling hang-recovery with no visible symptom. Same
+  # reconcile-on-Update pattern already used for the browser extension
+  # guard and the unpacked-extension check -- an Update should converge a
+  # machine on the CURRENT correct install, not just swap the exe.
+  function Test-WatchdogTaskCurrent {
+    $task = Get-ScheduledTask -TaskName $WATCHDOG_TASK -ErrorAction SilentlyContinue
+    if (-not $task) { return $false }
+    foreach ($a in @($task.Actions)) {
+      $exe = "$($a.Execute)"
+      $arg = "$($a.Arguments)"
+      if ($exe -match '(?i)wscript|cscript|powershell|cmd\.exe') { return $false }
+      if ($arg -match '(?i)\.vbs') { return $false }
+      if ($exe -notmatch [regex]::Escape($EXE_NAME)) { return $false }
+    }
+    return $true
+  }
+
+  function Repair-WatchdogTask($s) {
+    if (Test-WatchdogTaskCurrent) { return }
+    Warn 'Watchdog task launches via a legacy script host - rewriting it to call the agent directly...'
+
+    foreach ($legacy in @((Join-Path $INSTALL_DIR 'watchdog_launcher.vbs'), (Join-Path $INSTALL_DIR 'watchdog.ps1'))) {
+      if (Test-Path $legacy) {
+        Remove-Item $legacy -Force -ErrorAction SilentlyContinue
+        Info "Removed legacy watchdog launcher: $legacy"
+      }
+    }
+
+    try {
+      $existing = Get-ScheduledTask -TaskName $WATCHDOG_TASK -ErrorAction SilentlyContinue
+      if ($existing) { Unregister-ScheduledTask -TaskName $WATCHDOG_TASK -Confirm:$false }
+
+      $action = New-ScheduledTaskAction -Execute $s.ExePath -Argument '--watchdog-check' -WorkingDirectory $INSTALL_DIR
+      $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+        -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+      $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+      $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -StartWhenAvailable -DontStopOnIdleEnd -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -MultipleInstances IgnoreNew
+
+      Register-ScheduledTask -TaskName $WATCHDOG_TASK -Action $action -Trigger $trigger `
+        -Principal $principal -Settings $settings `
+        -Description 'Detects a hung (alive-but-unresponsive) SeceoKnight DLP Agent process via log staleness and force-restarts it.' `
+        -Force -ErrorAction Stop | Out-Null
+      Ok 'Watchdog task rewritten to call the agent directly.'
+    } catch {
+      Err "Could not rewrite watchdog task: $($_.Exception.Message)"
+    }
+  }
+
   function Update-Agent($s) {
     $tmpPath = Join-Path $env:TEMP "$EXE_NAME.new"
     try {
@@ -531,6 +589,10 @@
       Err "Could not restart the scheduled task: $($_.Exception.Message)"
       Warn "Start it manually: Start-ScheduledTask -TaskName '$TASK_NAME'"
     }
+
+    # A fresh $s.ExePath now points at the just-replaced binary, which is
+    # what the new watchdog task action (if it needs rewriting) must call.
+    Repair-WatchdogTask $s
   }
 
   # ================= Uninstall =================

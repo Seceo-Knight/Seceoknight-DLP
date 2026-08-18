@@ -61,6 +61,8 @@
 #include <cfgmgr32.h>
 #include <winioctl.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
+#include <cstring>
 
 #pragma comment(lib, "shell32.lib")
 #include <wincrypt.h>
@@ -12082,6 +12084,160 @@ int HandleApplyWirelessGuard(int /*argc*/, char* /*argv*/[]) {
     return 0;
 }
 
+// Elevated watchdog hook (ported from CyberSentinel-DLP gap-scan, Aug 18
+// 2026): the repeating SYSTEM/Highest "SeceoKnight DLP Watchdog" scheduled
+// task install-agent.ps1 registers now invokes THIS EXE with this flag,
+// replacing the old `wscript.exe watchdog_launcher.vbs` action.
+//
+// Why the .vbs had to go entirely, not just get patched again: it was
+// already on its fourth console-flash fix (see install-agent.ps1's Step 9b
+// history) and STILL silently failed end to end on real Windows 11
+// endpoints running Application Control / Smart App Control, which block
+// script hosts (wscript.exe/cscript.exe) by default -- "An Application
+// Control policy has blocked this file" (0x800711C7), the exact same
+// symptom CyberSentinel-DLP hit and fixed on ITS main launch task. There
+// was no console flash to observe in that failure mode -- the task simply
+// never ran, which meant the hang-detector this task exists to provide had
+// been silently disabled on every endpoint under that policy, with no
+// symptom short of noticing a hung agent stayed hung. A script host was
+// never actually necessary here; the same "run the exe directly" fix
+// applies once the exe itself has somewhere to put the check.
+//
+// This exe is already the one binary Application Control has to allow on
+// this endpoint, and it's GUI-subsystem already (see
+// AttachForegroundConsole further up), so invoking it in place of the
+// script host produces the same "zero console, ever" property the .vbs was
+// built four times over to get, with no script interpreter left for a
+// policy to block. RunHiddenCommand() below still shells out to
+// taskkill.exe/schtasks.exe on the rare unhealthy path -- both are
+// Microsoft-signed System32 utilities, not script hosts, and were never
+// what any of these policies target.
+//
+// Logic is a direct port of watchdog_launcher.vbs's: not running -> no-op;
+// within a startup grace period -> no-op; otherwise stale main-agent log
+// (no write in kStaleThresholdMinutes) -> force-kill + re-trigger the main
+// task. The one deliberate behavior change is using the found process's
+// own creation time for the grace check instead of the scheduled task's
+// LastRunTime (avoids a dependency on Task Scheduler bookkeeping being
+// accurate) and killing by exact PID instead of `taskkill /IM` (precise to
+// the one hung instance instead of every process sharing the image name).
+int HandleWatchdogCheck(int /*argc*/, char* /*argv*/[]) {
+    // Deliberately NOT the default Logger() -- that opens
+    // seceoknight_agent.log, which is the exact file this function reads
+    // the mtime of to decide whether the main agent has hung. Writing to
+    // it here would refresh its mtime on every 5-minute watchdog tick,
+    // making the log look perpetually "fresh" and permanently defeating
+    // the staleness check it exists to make. Uses its own separate file,
+    // same as the .vbs launcher this replaces did.
+    Logger logger("watchdog.log");
+
+    try {
+        const char* envLogDir = std::getenv("SECEOKNIGHT_LOG_DIR");
+        std::string logDir = envLogDir ? envLogDir : "C:\\ProgramData\\SeceoKnight\\logs";
+        std::string mainLogPath = logDir + "\\seceoknight_agent.log";
+
+        const std::string kTaskName = "SeceoKnight DLP Agent";
+        const std::string kExeName  = "seceoknight_agent.exe";
+        const double kStaleThresholdMinutes = 3.0;
+        const double kGraceMinutesAfterStart = 2.0;
+
+        DWORD selfPid = GetCurrentProcessId();
+
+        // Find the (single) OTHER seceoknight_agent.exe process -- the
+        // main, long-running instance. This invocation is also named
+        // seceoknight_agent.exe (--watchdog-check), so selfPid is excluded.
+        DWORD mainPid = 0;
+        FILETIME mainCreationTime = {};
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (snap != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32 pe = {};
+            pe.dwSize = sizeof(pe);
+            if (Process32First(snap, &pe)) {
+                do {
+                    if (pe.th32ProcessID != selfPid &&
+                        _stricmp(pe.szExeFile, kExeName.c_str()) == 0) {
+                        mainPid = pe.th32ProcessID;
+                        HANDLE hp = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, mainPid);
+                        if (hp) {
+                            FILETIME ftExit = {}, ftKernel = {}, ftUser = {};
+                            GetProcessTimes(hp, &mainCreationTime, &ftExit, &ftKernel, &ftUser);
+                            CloseHandle(hp);
+                        }
+                        break;
+                    }
+                } while (Process32Next(snap, &pe));
+            }
+            CloseHandle(snap);
+        }
+
+        if (mainPid == 0) {
+            // Not running at all -- the main task's own logon/startup/
+            // 10-minute-repeat triggers own recovery here, not this check.
+            return 0;
+        }
+
+        FILETIME nowFt = {};
+        GetSystemTimeAsFileTime(&nowFt);
+        ULARGE_INTEGER now = {};
+        now.LowPart = nowFt.dwLowDateTime;
+        now.HighPart = nowFt.dwHighDateTime;
+
+        bool withinGrace = false;
+        if (mainCreationTime.dwLowDateTime || mainCreationTime.dwHighDateTime) {
+            ULARGE_INTEGER start = {};
+            start.LowPart = mainCreationTime.dwLowDateTime;
+            start.HighPart = mainCreationTime.dwHighDateTime;
+            double minutesSinceStart = static_cast<double>(now.QuadPart - start.QuadPart) / 10000000.0 / 60.0;
+            withinGrace = minutesSinceStart < kGraceMinutesAfterStart;
+        }
+
+        // FILETIME arithmetic throughout (not std::filesystem's clock,
+        // which isn't reliably comparable against wall-clock time pre-
+        // C++20) -- same idiom CompareFileTime() usage elsewhere in this
+        // file already relies on.
+        bool isStale = false;
+        WIN32_FILE_ATTRIBUTE_DATA fad = {};
+        if (!GetFileAttributesExA(mainLogPath.c_str(), GetFileExInfoStandard, &fad)) {
+            // Hasn't written its first log line yet -- only suspicious
+            // once it's had long enough to do so.
+            isStale = !withinGrace;
+        } else {
+            ULARGE_INTEGER lw = {};
+            lw.LowPart = fad.ftLastWriteTime.dwLowDateTime;
+            lw.HighPart = fad.ftLastWriteTime.dwHighDateTime;
+            double minutesStale = static_cast<double>(now.QuadPart - lw.QuadPart) / 10000000.0 / 60.0;
+            isStale = minutesStale >= kStaleThresholdMinutes && !withinGrace;
+        }
+
+        if (!isStale) {
+            return 0;
+        }
+
+        logger.Warning("agent appeared hung (pid " + std::to_string(mainPid) +
+                        ", log stale >= " + std::to_string(static_cast<int>(kStaleThresholdMinutes)) +
+                        " min); force-restarting");
+
+        // Kill by PID, not `/IM` -- precise to the one hung instance,
+        // doesn't risk taking out this watchdog-check invocation or a
+        // legitimate second instance mid-handover. Restart goes through
+        // Task Scheduler (schtasks /Run) rather than launching the exe
+        // directly, so the main task's own bookkeeping (RestartCount,
+        // LastRunTime, "already running" state) stays consistent.
+        RunHiddenCommand("taskkill.exe /F /PID " + std::to_string(mainPid));
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        RunHiddenCommand("schtasks.exe /Run /TN \"" + kTaskName + "\"");
+
+        logger.Info("force-restart issued for pid " + std::to_string(mainPid));
+    } catch (const std::exception& e) {
+        try { logger.Error(std::string("watchdog-check: exception: ") + e.what()); } catch (...) {}
+        return 1;
+    } catch (...) {
+        try { logger.Error("watchdog-check: unknown exception"); } catch (...) {}
+        return 1;
+    }
+    return 0;
+}
+
 // Put "<id>;<update_url>" in the browser's force-install list, reusing our
 // own slot if we already own one.
 //
@@ -12263,6 +12419,18 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         if (std::string(argv[i]) == "--apply-browser-extension-guard") {
             return HandleApplyBrowserExtensionGuard(argc, argv);
+        }
+    }
+
+    // Watchdog hook (gap-scan of CyberSentinel-DLP, Aug 18 2026): the
+    // repeating SYSTEM/Highest "SeceoKnight DLP Watchdog" scheduled task
+    // install-agent.ps1 registers invokes us with this flag in place of the
+    // old wscript.exe watchdog_launcher.vbs action -- see HandleWatchdogCheck
+    // for why the script host had to go entirely, not just get patched
+    // again. Not a normal agent run.
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--watchdog-check") {
+            return HandleWatchdogCheck(argc, argv);
         }
     }
 

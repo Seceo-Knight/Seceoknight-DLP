@@ -96,6 +96,41 @@
     return null; // File/Blob/FormData/ArrayBuffer bodies are inject.js's concern, not this script's
   }
 
+  // Resolves request body text for BOTH calling conventions apps use:
+  //   fetch(url, { body })                 -- body lives on init, synchronous read
+  //   fetch(new Request(url, { body }))     -- body lives inside the Request
+  //                                            object itself (a stream), and
+  //                                            is only reachable async via
+  //                                            .clone().text(). Many bundled/
+  //                                            instrumented apps (ChatGPT
+  //                                            included) use this single-
+  //                                            argument form, and previously
+  //                                            this script had no path to
+  //                                            it at all: init was
+  //                                            undefined, body resolved to
+  //                                            undefined, and the request
+  //                                            silently fell through to
+  //                                            "allow" with no server round
+  //                                            trip and no error — a
+  //                                            complete, silent miss on the
+  //                                            exact traffic this feature
+  //                                            exists to inspect.
+  // Always resolves (never rejects) — a body we can't read is treated as
+  // "no text", same as the synchronous path.
+  function resolveBodyText(input, init) {
+    var syncText = requestBodyToText(init && init.body);
+    if (syncText !== null) return Promise.resolve(syncText);
+    if (typeof Request !== "undefined" && input instanceof Request && (!init || init.body == null)) {
+      try {
+        return input.clone().text().then(
+          function (t) { return t ? t.slice(0, MAX_TEXT_CHARS) : null; },
+          function () { return null; }
+        );
+      } catch (e) { return Promise.resolve(null); }
+    }
+    return Promise.resolve(null);
+  }
+
   function announce(dec, kind) {
     window.postMessage({
       __skdlp: 1, dir: "toContent", kind: "webActivityNotice",
@@ -156,52 +191,57 @@
       var destHost;
       try { destHost = new URL(url, location.href).hostname.toLowerCase(); } catch (e) { destHost = ""; }
 
-      var body = init && init.body;
-      var text = requestBodyToText(body);
-
-      var reqDecisionPromise;
-      if (!text || text.length < MIN_SEND_TEXT_LENGTH) {
-        // Too short to be a real composed message/prompt (or not a
-        // text-ish body at all, e.g. a File — inject.js's concern) — skip
-        // straight to allow without spending a round trip on it. GenAI
-        // prompts under 40 chars ("hi", "continue", ...) are also skipped
-        // by this same threshold; a deliberate trade-off against spamming
-        // the classifier on every keystroke-adjacent request some sites
-        // make, not a claim that short prompts can never carry sensitive
-        // data.
-        reqDecisionPromise = Promise.resolve({ action: "allow" });
-      } else {
-        // Server resolves the actual (category, activity) cell from the
-        // host alone — "post" is only a meaningful cell for genai hosts,
-        // "send" only for webmail/collaboration (see MEANINGFUL_CELLS in
-        // web_activity.py); sending "post" here for a non-genai host just
-        // means the server's lookup misses and returns allow, so this
-        // client never needs to know the category itself.
-        reqDecisionPromise = requestDecision({ host: destHost, url: String(url), activity: "post", content: text });
-      }
-
-      return reqDecisionPromise.then(function (dec) {
-        var finalInit = init;
-        if (dec.action === "block") {
-          announce(dec, "blocked");
-          return new Response("", { status: 403, statusText: "Blocked by SeceoKnight DLP" });
+      return resolveBodyText(input, init).then(function (text) {
+        var reqDecisionPromise;
+        if (!text || text.length < MIN_SEND_TEXT_LENGTH) {
+          // Too short to be a real composed message/prompt (or not a
+          // text-ish body at all, e.g. a File — inject.js's concern) — skip
+          // straight to allow without spending a round trip on it. GenAI
+          // prompts under 40 chars ("hi", "continue", ...) are also skipped
+          // by this same threshold; a deliberate trade-off against spamming
+          // the classifier on every keystroke-adjacent request some sites
+          // make, not a claim that short prompts can never carry sensitive
+          // data.
+          reqDecisionPromise = Promise.resolve({ action: "allow" });
+        } else {
+          // Server resolves the actual (category, activity) cell from the
+          // host alone — "post" is only a meaningful cell for genai hosts,
+          // "send" only for webmail/collaboration (see MEANINGFUL_CELLS in
+          // web_activity.py); sending "post" here for a non-genai host just
+          // means the server's lookup misses and returns allow, so this
+          // client never needs to know the category itself.
+          reqDecisionPromise = requestDecision({ host: destHost, url: String(url), activity: "post", content: text });
         }
-        if (dec.action === "redact" && dec.redactedContent != null) {
-          announce(dec, "redacted");
-          finalInit = Object.assign({}, init, { body: dec.redactedContent });
-        } else if (dec.action === "alert") {
-          announce(dec, "alerted");
-        }
-        return origFetch.call(window, input, finalInit).then(function (resp) {
-          return maybeRedactResponse(resp, destHost);
-        });
-      }, function () {
-        // Decision round trip itself failed — fail open, but the response
-        // still passes through maybeRedactResponse so ai_response
-        // inspection isn't silently skipped just because the REQUEST
-        // side's decision errored.
-        return origFetch.call(window, input, init).then(function (resp) {
-          return maybeRedactResponse(resp, destHost);
+
+        return reqDecisionPromise.then(function (dec) {
+          var finalInit = init;
+          if (dec.action === "block") {
+            announce(dec, "blocked");
+            return new Response("", { status: 403, statusText: "Blocked by SeceoKnight DLP" });
+          }
+          if (dec.action === "redact" && dec.redactedContent != null) {
+            announce(dec, "redacted");
+            // Works for both calling conventions: when input is a plain
+            // URL string, finalInit.body is all that matters. When input
+            // is a Request object, passing an init with body set here
+            // still overrides the Request's own (already-cloned-from)
+            // body per the Fetch spec, so redaction reaches the wire
+            // either way.
+            finalInit = Object.assign({}, init, { body: dec.redactedContent });
+          } else if (dec.action === "alert") {
+            announce(dec, "alerted");
+          }
+          return origFetch.call(window, input, finalInit).then(function (resp) {
+            return maybeRedactResponse(resp, destHost);
+          });
+        }, function () {
+          // Decision round trip itself failed — fail open, but the response
+          // still passes through maybeRedactResponse so ai_response
+          // inspection isn't silently skipped just because the REQUEST
+          // side's decision errored.
+          return origFetch.call(window, input, init).then(function (resp) {
+            return maybeRedactResponse(resp, destHost);
+          });
         });
       });
     };
