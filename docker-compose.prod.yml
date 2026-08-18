@@ -256,6 +256,13 @@ services:
       - ./quarantine:/app/quarantine
       - reports_data:/app/reports
       - ml_models:/app/ml/models
+      # Browser-extension force-install distribution (server/app/api/v1/extension.py).
+      # scripts/pack-extension.py writes here; the image only has whatever
+      # existed at build time otherwise, so without this mount a freshly
+      # packed extension would be invisible to the running container until
+      # the next image rebuild. Plain host bind mount, same pattern as
+      # ./quarantine above.
+      - ./server/extension_dist:/app/extension_dist
     # No host port binding — manager is reachable only via Nginx on :443.
     # Agents connect to https://<your-domain>/api/v1 — not :55000 directly.
     expose:
