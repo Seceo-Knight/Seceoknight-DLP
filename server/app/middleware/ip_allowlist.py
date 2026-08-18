@@ -74,6 +74,11 @@ def _is_exempt(method: str, path: str) -> bool:
     # allowlist.
     if path.startswith("/api/v1/taxii2"):
         return True
+    # Browser-extension force-install feed -- polled by Chrome/Edge itself
+    # (the browser process, no credentials) on every endpoint, same "must
+    # keep reaching this from any network" reasoning as the agent endpoints.
+    if path.startswith("/api/v1/extension/"):
+        return True
     # Agent event ingestion (POST only; GET is human reporting).
     if method == "POST" and path.rstrip("/") == "/api/v1/events":
         return True

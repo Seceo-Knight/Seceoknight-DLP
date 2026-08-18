@@ -38,6 +38,7 @@ from app.api.v1 import (
     data_matching,
     risk_scoring,
     app_catalog,
+    extension,
 )
 
 api_router = APIRouter()
@@ -88,3 +89,7 @@ api_router.include_router(data_matching.router, prefix="/data-matching", tags=["
 # Behavioral risk scoring -- SeceoKnight-original, not in CyberSentinel-DLP.
 # See risk_scoring_service.py's module docstring for the rationale.
 api_router.include_router(risk_scoring.router, prefix="/risk-scoring", tags=["Risk Scoring"])
+# Browser-extension force-install distribution feed (update.xml/info/*.crx).
+# Deliberately unauthenticated -- see extension.py's module docstring. Also
+# exempted from the IP allowlist in app/middleware/ip_allowlist.py.
+api_router.include_router(extension.router, prefix="/extension", tags=["Extension"])

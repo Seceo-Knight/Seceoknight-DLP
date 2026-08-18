@@ -2707,6 +2707,20 @@ static ClassificationResult Classify(const std::string& content,
      // changed, not on every sync tick.
      std::string lastWirelessSig;
 
+     // ── Browser extension force-install (gap-scan of CyberSentinel-DLP,
+     // August 18, 2026) ───────────────────────────────────────────────────
+     // Synced from GET /extension/info every policy-sync cycle. Same
+     // unelevated-process problem as wireless control above (confirmed by
+     // that task's own live test: RegCreateKeyExA under HKLM\SOFTWARE\
+     // Policies\... fails ACCESS_DENIED from this process) -- so this
+     // method only FETCHES the extension id and writes it to a state cache;
+     // the actual ExtensionInstallForcelist/managed-config registry writes
+     // happen in the elevated HandleApplyBrowserExtensionGuard() one-shot,
+     // invoked by a repeating SYSTEM/Highest scheduled task ("SeceoKnight
+     // DLP Browser Extension Guard", registered by install-agent.ps1),
+     // exactly mirroring the Wireless Guard split.
+     std::string lastExtensionPolicySig;
+
      // ── Printer device control + print content inspection (task #114) ──────
      // Synced from GET /agents/{id}/printer-policy. Ported from CyberSentinel-
      // DLP. Closes the "no agent-side enforcement yet" gap flagged in
@@ -4799,6 +4813,11 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          FetchPrinterPolicy();
          // File Identity Denylist (task #152) -- same reasoning, own endpoint.
          FetchFileIdentityDenylist();
+         // Browser extension force-install (gap-scan of CyberSentinel-DLP,
+         // Aug 18 2026) -- same reasoning, own endpoint. Only caches the
+         // desired state here; HandleApplyBrowserExtensionGuard() (the
+         // elevated one-shot) does the actual registry write.
+         FetchBrowserExtensionPolicy();
      }
 
      // Pulls GET /agents/{id}/network-share-policy and caches it locally.
@@ -5368,6 +5387,83 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              logger.Debug(std::string("FetchWirelessPolicy failed: ") + e.what());
          } catch (...) {
              logger.Debug("FetchWirelessPolicy failed");
+         }
+     }
+
+     // Same directory-resolution rule as WirelessStateCachePath() above --
+     // must be somewhere a STANDARD USER can write.
+     std::string BrowserExtensionStateCachePath() const {
+         const char* envLogDir = std::getenv("SECEOKNIGHT_LOG_DIR");
+         std::string dir = envLogDir ? envLogDir : "C:\\ProgramData\\SeceoKnight\\logs";
+         try { fs::create_directories(dir); } catch (...) {}
+         return dir + "\\browser_extension_state.cache";
+     }
+
+     // Pulls GET /extension/info and caches (extension_id, update feed URL,
+     // agent id) for the elevated Browser Extension Guard one-shot to pick
+     // up. Gap-scan of CyberSentinel-DLP (August 18, 2026): SeceoKnight's
+     // browser extension was previously only documented as a manual
+     // "Load unpacked" dev-mode install -- something an end user can switch
+     // off in two clicks at chrome://extensions, and its id is derived from
+     // the folder path so it differs on every endpoint. Force-installing via
+     // enterprise policy (ExtensionInstallForcelist) fixes both, but that
+     // needs a STABLE id from a packed, signed CRX -- see
+     // scripts/pack-extension.py and server/app/api/v1/extension.py.
+     //
+     // Four-line cache (id / update URL / agent id / server URL), not
+     // JSON -- same "no parser dependency for a handful of fields"
+     // reasoning as SaveWirelessStateToCache(). Both halves (which extension, which
+     // server) come from THIS agent's live config, so changing the server
+     // in agent_config.json and restarting moves the force-install with it
+     // on the next sync -- no separate installer step to remember.
+     void FetchBrowserExtensionPolicy() {
+         try {
+             std::pair<int, std::string> resp = GetHttpClient()->Get("/extension/info");
+             auto& [status, response] = resp;
+             if (status == 404) {
+                 // Nothing published on this server -- not an error, a
+                 // deployment that doesn't use the browser extension is a
+                 // perfectly normal deployment. Leave any existing cache
+                 // alone rather than deleting it: if this is a transient
+                 // misconfiguration, force-install should keep the last
+                 // known-good extension rather than silently dropping it.
+                 return;
+             }
+             if (status != 200) return;   // keep last-known on error/outage
+
+             std::string extId = config.ExtractJsonValue(response, "extension_id");
+             if (extId.size() != 32) {
+                 logger.Debug("FetchBrowserExtensionPolicy: extension_id missing or malformed "
+                              "in /extension/info response");
+                 return;
+             }
+
+             std::string updateUrl = config.serverUrl;
+             while (!updateUrl.empty() && updateUrl.back() == '/') updateUrl.pop_back();
+             updateUrl += "/extension/update.xml";
+
+             std::string sig = extId + "|" + config.serverUrl + "|" + config.agentId;
+             bool changed = (sig != lastExtensionPolicySig);
+
+             std::ofstream f(BrowserExtensionStateCachePath(), std::ios::trunc | std::ios::binary);
+             if (!f.is_open()) {
+                 logger.Warning("Could not write browser extension state cache: " +
+                                BrowserExtensionStateCachePath());
+                 return;
+             }
+             f << extId << "\n" << updateUrl << "\n" << config.agentId << "\n" << config.serverUrl << "\n";
+             f.close();
+
+             if (changed) {
+                 logger.Info("Browser extension policy changed -- cached for the elevated "
+                             "Browser Extension Guard task to apply (id=" + extId +
+                             " server=" + config.serverUrl + ")");
+                 lastExtensionPolicySig = sig;
+             }
+         } catch (const std::exception& e) {
+             logger.Debug(std::string("FetchBrowserExtensionPolicy failed: ") + e.what());
+         } catch (...) {
+             logger.Debug("FetchBrowserExtensionPolicy failed");
          }
      }
 
@@ -11986,6 +12082,168 @@ int HandleApplyWirelessGuard(int /*argc*/, char* /*argv*/[]) {
     return 0;
 }
 
+// Put "<id>;<update_url>" in the browser's force-install list, reusing our
+// own slot if we already own one.
+//
+// Chrome reads every value under the key regardless of its name, but the
+// documented convention is small integers and other tooling assumes it. So:
+// find the entry that already starts with our extension id and overwrite
+// it, otherwise take the lowest free integer. Blindly appending would leave
+// a stale entry behind on every server change, and the browser would then
+// try to install both.
+static void SetExtensionForcelistEntry(Logger& logger, const std::string& policyRoot,
+                                       const std::string& extId, const std::string& updateUrl) {
+    std::string sub = policyRoot + "\\ExtensionInstallForcelist";
+    HKEY k;
+    LSTATUS rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
+                                 REG_OPTION_NON_VOLATILE, KEY_READ | KEY_SET_VALUE,
+                                 nullptr, &k, nullptr);
+    if (rc != ERROR_SUCCESS) {
+        logger.Error("apply-browser-extension-guard: RegCreateKeyExA failed for " + sub +
+                    " rc=" + std::to_string(rc) + " (this task should be running as "
+                    "SYSTEM/Highest -- check the scheduled task's principal if this persists)");
+        return;
+    }
+
+    std::string slot;
+    std::set<std::string> used;
+    char nameBuf[256];
+    BYTE dataBuf[1024];
+    for (DWORD i = 0; ; i++) {
+        DWORD nameLen = sizeof(nameBuf);
+        DWORD dataLen = sizeof(dataBuf);
+        DWORD type = 0;
+        if (RegEnumValueA(k, i, nameBuf, &nameLen, nullptr, &type,
+                          dataBuf, &dataLen) != ERROR_SUCCESS) {
+            break;
+        }
+        std::string vname(nameBuf, nameLen);
+        used.insert(vname);
+        if (type == REG_SZ && dataLen > 0) {
+            std::string vdata(reinterpret_cast<char*>(dataBuf));
+            if (vdata.rfind(extId + ";", 0) == 0) slot = vname;
+        }
+    }
+    if (slot.empty()) {
+        for (int n = 1; n < 500; n++) {
+            std::string cand = std::to_string(n);
+            if (used.find(cand) == used.end()) { slot = cand; break; }
+        }
+    }
+    if (slot.empty()) slot = "1";
+
+    std::string entry = extId + ";" + updateUrl;
+    LSTATUS rc2 = RegSetValueExA(k, slot.c_str(), 0, REG_SZ,
+                                 reinterpret_cast<const BYTE*>(entry.c_str()),
+                                 (DWORD)entry.size() + 1);
+    RegCloseKey(k);
+    if (rc2 != ERROR_SUCCESS) {
+        logger.Error("apply-browser-extension-guard: RegSetValueExA failed for " + sub +
+                    " rc=" + std::to_string(rc2));
+    } else {
+        logger.Info("apply-browser-extension-guard: force-install entry set under " +
+                    policyRoot + " (slot " + slot + ")");
+    }
+}
+
+// Set a REG_SZ policy string under HKLM\<root>\3rdparty\extensions\<id>\policy,
+// which the extension reads through chrome.storage.managed. agentId is what
+// keeps a device running both the endpoint agent and the extension as ONE
+// row on the dashboard instead of two.
+static void SetExtensionManagedString(Logger& logger, const std::string& sub,
+                                      const std::string& name, const std::string& value) {
+    if (value.empty()) return;
+    HKEY k;
+    LSTATUS rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
+                                 REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr);
+    if (rc != ERROR_SUCCESS) {
+        logger.Error("apply-browser-extension-guard: RegCreateKeyExA failed for " + sub +
+                    " rc=" + std::to_string(rc));
+        return;
+    }
+    LSTATUS rc2 = RegSetValueExA(k, name.c_str(), 0, REG_SZ,
+                                 reinterpret_cast<const BYTE*>(value.c_str()),
+                                 (DWORD)value.size() + 1);
+    RegCloseKey(k);
+    if (rc2 != ERROR_SUCCESS) {
+        logger.Error("apply-browser-extension-guard: RegSetValueExA failed for " + sub +
+                    "\\" + name + " rc=" + std::to_string(rc2));
+    }
+}
+
+// Elevated periodic mode: applies the ExtensionInstallForcelist entry +
+// managed config (serverUrl, agentId) from the state cache the main
+// (unelevated) process writes in FetchBrowserExtensionPolicy(). Exists for
+// the exact same reason as HandleApplyWirelessGuard() above -- the main
+// task cannot write these HKLM keys itself -- and runs on the same
+// repeating-task shape (registered as "SeceoKnight DLP Browser Extension
+// Guard", SYSTEM/Highest, every 2 minutes) since which extension/server is
+// force-installed is policy-driven and can change at any time.
+//
+// Reads a simple 4-line cache (extension id / update URL / agent id /
+// server URL) rather than JSON -- same "no parser dependency for a handful
+// of fields" reasoning as apply-wireless-guard. If the cache file doesn't
+// exist yet (agent hasn't completed its first sync since install, or this
+// server has never published an extension), does nothing and exits cleanly.
+int HandleApplyBrowserExtensionGuard(int /*argc*/, char* /*argv*/[]) {
+    Logger logger;
+    try {
+        const char* envLogDir = std::getenv("SECEOKNIGHT_LOG_DIR");
+        std::string dir = envLogDir ? envLogDir : "C:\\ProgramData\\SeceoKnight\\logs";
+        std::string cachePath = dir + "\\browser_extension_state.cache";
+
+        std::error_code ec;
+        if (!fs::exists(cachePath, ec) || ec) {
+            logger.Info("apply-browser-extension-guard: no state cache yet (agent hasn't "
+                        "synced with the server since install, or no extension is "
+                        "published) -- nothing to apply this run");
+            return 0;
+        }
+
+        std::ifstream f(cachePath, std::ios::binary);
+        if (!f.is_open()) {
+            logger.Warning("apply-browser-extension-guard: could not open state cache " + cachePath);
+            return 1;
+        }
+        std::string extId, updateUrl, agentId, serverUrl;
+        std::getline(f, extId);
+        std::getline(f, updateUrl);
+        std::getline(f, agentId);
+        std::getline(f, serverUrl);
+
+        if (extId.size() != 32 || updateUrl.empty()) {
+            logger.Warning("apply-browser-extension-guard: malformed state cache "
+                           "(id=" + extId + ")");
+            return 1;
+        }
+
+        const std::string roots[] = {
+            "SOFTWARE\\Policies\\Google\\Chrome",
+            "SOFTWARE\\Policies\\Microsoft\\Edge"
+        };
+        for (const auto& root : roots) {
+            SetExtensionForcelistEntry(logger, root, extId, updateUrl);
+
+            std::string mp = root + "\\3rdparty\\extensions\\" + extId + "\\policy";
+            if (!serverUrl.empty()) {
+                SetExtensionManagedString(logger, mp, "serverUrl", serverUrl);
+            }
+            if (!agentId.empty()) {
+                SetExtensionManagedString(logger, mp, "agentId", agentId);
+            }
+        }
+
+        logger.Debug("apply-browser-extension-guard: complete -- id=" + extId);
+    } catch (const std::exception& e) {
+        try { logger.Error(std::string("apply-browser-extension-guard: exception: ") + e.what()); } catch (...) {}
+        return 1;
+    } catch (...) {
+        try { logger.Error("apply-browser-extension-guard: unknown exception"); } catch (...) {}
+        return 1;
+    }
+    return 0;
+}
+
 int main(int argc, char* argv[]) {
     // Elevated Wireless Guard hook (task #147): the repeating SYSTEM/Highest
     // scheduled task install-agent.ps1 registers invokes us with this flag
@@ -11994,6 +12252,17 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         if (std::string(argv[i]) == "--apply-wireless-guard") {
             return HandleApplyWirelessGuard(argc, argv);
+        }
+    }
+
+    // Elevated Browser Extension Guard hook (gap-scan of CyberSentinel-DLP,
+    // Aug 18 2026): the repeating SYSTEM/Highest scheduled task
+    // install-agent.ps1 registers invokes us with this flag purely to
+    // reconcile the ExtensionInstallForcelist + managed-config registry
+    // state from the cache file, then exits -- this is not a normal agent run.
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--apply-browser-extension-guard") {
+            return HandleApplyBrowserExtensionGuard(argc, argv);
         }
     }
 

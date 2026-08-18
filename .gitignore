@@ -240,3 +240,17 @@ dump.rdb
 # Claude Code local settings
 .claude/
 .cursor/
+
+# Packed browser extension. A PUBLISHED ARTIFACT, not build scratch --
+# endpoints force-install it straight from whichever server they talk to
+# (server/app/api/v1/extension.py), so it has to travel with the repo.
+# Rebuild it with scripts/pack-extension.py after bumping the extension's
+# manifest version.
+#
+# The SIGNING KEY is never here and must never be: it lives at
+# /etc/seceoknightdlp/extension-signing.pem (mode 600) on whichever machine
+# packs it, and is the extension's identity -- anyone holding it can publish
+# an update every endpoint installs automatically. The blanket *.pem rule
+# above covers it if it's ever copied into the repo by mistake.
+!server/extension_dist/
+!server/extension_dist/**

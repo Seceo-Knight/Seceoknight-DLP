@@ -983,6 +983,60 @@ try {
         Write-ColorOutput "Could not create Wireless Guard task (non-fatal): $($_.Exception.Message)" -Type "Warning"
     }
 
+    # -- Browser Extension Guard: repeating elevated task ---------------------
+    # Gap-scan of CyberSentinel-DLP (August 18, 2026): the DLP browser
+    # extension was previously only a manual "Load unpacked" dev-mode install,
+    # something an end user could switch off in two clicks -- an unacceptable
+    # property for a DLP control. Same unelevated-process problem as Wireless
+    # Guard above, and force-install is likewise POLICY-DRIVEN (the published
+    # extension id or target server can change any time), so this repeats
+    # every 2 minutes, reading the state the main agent task caches to
+    # C:\ProgramData\SeceoKnight\logs\browser_extension_state.cache and
+    # applying it via `seceoknight_agent.exe --apply-browser-extension-guard`.
+    #
+    # A no-op (does nothing, exits cleanly) on a server that hasn't published
+    # an extension yet (run scripts/pack-extension.py on the DLP server to do
+    # that) -- registering this task is safe even before you've packed one.
+    $extGuardTaskName = "SeceoKnight DLP Browser Extension Guard"
+    try {
+        $extGuardAction = New-ScheduledTaskAction `
+            -Execute $exePath `
+            -Argument "--apply-browser-extension-guard" `
+            -WorkingDirectory $INSTALL_DIR
+
+        $extGuardTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes 2) `
+            -RepetitionDuration (New-TimeSpan -Days 3650)
+
+        $extGuardPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+        $extGuardSettings = New-ScheduledTaskSettingsSet `
+            -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries `
+            -ExecutionTimeLimit (New-TimeSpan -Minutes 1)
+
+        $existingExtGuard = Get-ScheduledTask -TaskName $extGuardTaskName -ErrorAction SilentlyContinue
+        if ($existingExtGuard) { Unregister-ScheduledTask -TaskName $extGuardTaskName -Confirm:$false }
+
+        Register-ScheduledTask `
+            -TaskName $extGuardTaskName `
+            -Action $extGuardAction `
+            -Trigger $extGuardTrigger `
+            -Principal $extGuardPrincipal `
+            -Settings $extGuardSettings `
+            -Description "SeceoKnight DLP - Force-install the DLP browser extension (ExtensionInstallForcelist) and reconcile its managed config every 2 minutes (requires SYSTEM elevation)" `
+            -Force | Out-Null
+
+        Write-ColorOutput "Browser Extension Guard task created: $extGuardTaskName" -Type "Success"
+
+        # Best-effort immediate run -- no-ops on a fresh install (no cached
+        # state yet until the main task's first successful sync), but
+        # harmless, and picks up an existing cache instantly on upgrade.
+        try { Start-ScheduledTask -TaskName $extGuardTaskName } catch {}
+    } catch {
+        Write-ColorOutput "Could not create Browser Extension Guard task (non-fatal): $($_.Exception.Message)" -Type "Warning"
+    }
+
 } catch {
     Write-ColorOutput "Error creating scheduled task: $($_.Exception.Message)" -Type "Error"
     Write-ColorOutput "You can manually start it: Start-ScheduledTask -TaskName '$TASK_NAME'" -Type "Info"

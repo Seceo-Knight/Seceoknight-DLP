@@ -58,6 +58,25 @@
   $USB_TASK      = 'SeceoKnight DLP USB Block'
   $CLIGUARD_TASK = 'SeceoKnight DLP CLI Guard'   # task #142/#145
   $WIRELESSGUARD_TASK = 'SeceoKnight DLP Wireless Guard'   # task #147
+  $EXTGUARD_TASK = 'SeceoKnight DLP Browser Extension Guard'   # gap-scan Aug 18 2026
+  $EXT_STATE_CACHE = "$DATA_DIR\logs\browser_extension_state.cache"
+
+  # ── Browsers ──────────────────────────────────────────────────────────
+  # One table, one place, ported from the same idea in CyberSentinel-DLP's
+  # manage-windows-agent.ps1. THE VALUE NAMES ARE NOT INTERCHANGEABLE:
+  # Chrome reads IncognitoModeAvailability, Edge reads
+  # InPrivateModeAvailability. Writing Chrome's name into Edge's key does
+  # nothing whatsoever, and reads back looking exactly like success.
+  $BROWSERS = @(
+    [PSCustomObject]@{
+      Name = 'Chrome'; Root = 'HKLM:\SOFTWARE\Policies\Google\Chrome'
+      PrivateValue = 'IncognitoModeAvailability'; PrivateLabel = 'Incognito'
+    },
+    [PSCustomObject]@{
+      Name = 'Edge'; Root = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+      PrivateValue = 'InPrivateModeAvailability'; PrivateLabel = 'InPrivate'
+    }
+  )
 
   function Info($m) { Write-Host "[*] $m" -ForegroundColor Cyan }
   function Ok($m)   { Write-Host "[+] $m" -ForegroundColor Green }
@@ -210,6 +229,152 @@
     Write-Host '  +----------------------------------------------------------------+' -ForegroundColor DarkCyan
   }
 
+  # ================= Browser controls (extension force-install + Incognito) =================
+  #
+  # Gap-scan of CyberSentinel-DLP (August 18, 2026) found two related holes:
+  # the DLP browser extension was only ever a manual "Load unpacked" dev-mode
+  # install (user-removable in two clicks), and there was no way to close the
+  # separate InPrivate/Incognito gap -- Chrome and Edge require the user to
+  # tick "Allow in InPrivate" per extension, by design, so even a
+  # force-installed extension simply does not run in a private window. The
+  # only control that actually closes THAT hole is disabling private
+  # browsing outright, which is a browser-wide change, not a DLP-only one --
+  # so it's offered here, asked rather than assumed, exactly like
+  # CyberSentinel's own equivalent menu item.
+
+  # Read back what's actually true, per browser -- never collapsed to a
+  # single yes/no. Reporting "disabled" because ONE browser is covered is
+  # how the other one could stay wide open while the screen said otherwise.
+  function Get-PrivateBrowsingState {
+    foreach ($b in $BROWSERS) {
+      $priv = $null
+      if (Test-Path $b.Root) {
+        $priv = (Get-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue).$($b.PrivateValue)
+      }
+      [PSCustomObject]@{ Name = $b.Name; Label = $b.PrivateLabel; Disabled = ($priv -eq 1); Raw = $priv }
+    }
+  }
+
+  # Set private browsing and VERIFY it, per browser. Returns what is
+  # actually true afterwards, not what was intended -- "I called
+  # Set-ItemProperty" is not evidence.
+  function Set-PrivateBrowsing {
+    param([bool]$Disable)
+    $results = @()
+    foreach ($b in $BROWSERS) {
+      $err = $null
+      try {
+        if (-not (Test-Path $b.Root)) { New-Item -Path $b.Root -Force | Out-Null }
+        if ($Disable) {
+          # 1 = disabled, 0 = available (the default), 2 = forced.
+          Set-ItemProperty -Path $b.Root -Name $b.PrivateValue -Value 1 -Type DWord -ErrorAction Stop
+        } else {
+          Remove-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue
+        }
+      } catch { $err = $_.Exception.Message }
+
+      $now = $null
+      if (Test-Path $b.Root) {
+        $now = (Get-ItemProperty -Path $b.Root -Name $b.PrivateValue -ErrorAction SilentlyContinue).$($b.PrivateValue)
+      }
+      $want = if ($Disable) { 1 } else { $null }
+      $results += [PSCustomObject]@{ Name = $b.Name; Label = $b.PrivateLabel; Applied = ($now -eq $want); Value = $now; Error = $err }
+    }
+    $results
+  }
+
+  # Reads the extension id the main agent task last cached (see agent.cpp's
+  # FetchBrowserExtensionPolicy -- 4 lines: id / update URL / agent id /
+  # server URL) and reports whether ExtensionInstallForcelist actually
+  # carries an entry for it, per browser. This is what's ACTUALLY true on
+  # this machine, not what any script assumed it wrote.
+  function Get-ExtensionForceInstallStatus {
+    $extId = $null
+    if (Test-Path $EXT_STATE_CACHE) {
+      $lines = Get-Content -Path $EXT_STATE_CACHE -ErrorAction SilentlyContinue
+      if ($lines -and $lines.Count -ge 1) { $extId = $lines[0].Trim() }
+    }
+    $forced = @()
+    if ($extId) {
+      foreach ($b in $BROWSERS) {
+        $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
+        if (Test-Path $fl) {
+          $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
+          foreach ($p in $props.PSObject.Properties) {
+            if ($p.Name -like 'PS*') { continue }
+            if ($p.Value -like "$extId;*") { $forced += $b.Name }
+          }
+        }
+      }
+    }
+    [PSCustomObject]@{ ExtensionId = $extId; Forced = $forced }
+  }
+
+  function Show-BrowserControls {
+    Write-Host ''
+    Info 'Browser controls'
+    Write-Host ''
+
+    $extGuardTask = Get-ScheduledTask -TaskName $EXTGUARD_TASK -ErrorAction SilentlyContinue
+    $extStatus = Get-ExtensionForceInstallStatus
+    Write-Host '   Extension force-install:'
+    if (-not $extGuardTask) {
+      Warn '     Browser Extension Guard task is not installed - run [1] Install/[2] Update first.'
+    } elseif (-not $extStatus.ExtensionId) {
+      Warn '     No extension published yet on the configured server, or the agent has not synced.'
+      Warn '     Run scripts/pack-extension.py on the DLP server, then wait up to 2 minutes.'
+    } else {
+      Write-Host "     Extension id: $($extStatus.ExtensionId)"
+      foreach ($b in $BROWSERS) {
+        if ($extStatus.Forced -contains $b.Name) {
+          Ok "     $($b.Name): force-installed"
+        } else {
+          Warn "     $($b.Name): NOT force-installed yet (installed browser, or guard task hasn't run)"
+        }
+      }
+    }
+
+    Write-Host ''
+    Write-Host '   Private browsing (Incognito / InPrivate):'
+    foreach ($s in (Get-PrivateBrowsingState)) {
+      if ($s.Disabled) { Ok "     $($s.Name) ($($s.Label)): disabled" }
+      else { Warn "     $($s.Name) ($($s.Label)): AVAILABLE - anything done in a private window is uninspected" }
+    }
+
+    Write-Host ''
+    Write-Host '   [1] Disable private browsing ' -ForegroundColor Yellow -NoNewline; Write-Host '- closes the "open an Incognito window" DLP bypass'
+    Write-Host '   [2] Re-allow private browsing' -ForegroundColor Gray   -NoNewline; Write-Host '- restores the browser default'
+    Write-Host '   [3] Back                     ' -ForegroundColor Gray   -NoNewline; Write-Host '- return to the main menu'
+    Write-Host ''
+    $bc = Read-Host '   Choose an option (1-3)'
+    switch ($bc.Trim()) {
+      '1' {
+        Write-Host ''
+        Warn 'This disables Incognito/InPrivate browsing machine-wide for Chrome and Edge.'
+        Warn 'It is a browser-wide change, not a DLP-only one, and is fully reversible ([2]).'
+        $confirm = Read-Host "   Type 'y' to confirm (anything else cancels)"
+        if ($confirm -eq 'y' -or $confirm -eq 'Y') {
+          foreach ($r in (Set-PrivateBrowsing -Disable $true)) {
+            if ($r.Applied) { Ok "   $($r.Name) ($($r.Label)): disabled" }
+            else { Err "   $($r.Name) ($($r.Label)): FAILED to apply$(if ($r.Error) { " - $($r.Error)" })" }
+          }
+        } else {
+          Warn 'Cancelled - no changes made.'
+        }
+      }
+      '2' {
+        Write-Host ''
+        foreach ($r in (Set-PrivateBrowsing -Disable $false)) {
+          if ($r.Applied) { Ok "   $($r.Name) ($($r.Label)): restored to default" }
+          else { Err "   $($r.Name) ($($r.Label)): FAILED to restore$(if ($r.Error) { " - $($r.Error)" })" }
+        }
+      }
+      default {}
+    }
+    Write-Host ''
+    Read-Host '   Press Enter to return to the menu' | Out-Null
+  }
+
   # ================= Update (binary-only swap) =================
 
   function Update-Agent($s) {
@@ -323,8 +488,35 @@
       }
     }
 
-    # 3) Remove all three scheduled tasks this project registers.
-    foreach ($n in @($TASK_NAME, $WATCHDOG_TASK, $USB_TASK, $CLIGUARD_TASK, $WIRELESSGUARD_TASK)) {
+    # 2c) Drop the extension force-install entry so an uninstalled agent
+    #     doesn't leave a browser permanently force-installing an extension
+    #     pointed at a manager this machine no longer reports to. Read the
+    #     extension id from the cache BEFORE it's deleted in step 4 below.
+    $extIdAtUninstall = $null
+    if (Test-Path $EXT_STATE_CACHE) {
+      $lines = Get-Content -Path $EXT_STATE_CACHE -ErrorAction SilentlyContinue
+      if ($lines -and $lines.Count -ge 1) { $extIdAtUninstall = $lines[0].Trim() }
+    }
+    if ($extIdAtUninstall) {
+      foreach ($b in $BROWSERS) {
+        $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
+        if (Test-Path $fl) {
+          $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
+          foreach ($p in $props.PSObject.Properties) {
+            if ($p.Name -like 'PS*') { continue }
+            if ($p.Value -like "$extIdAtUninstall;*") {
+              Remove-ItemProperty -Path $fl -Name $p.Name -ErrorAction SilentlyContinue
+              Info "Cleared $($b.Name) force-install entry for extension $extIdAtUninstall"
+            }
+          }
+        }
+        $mp = Join-Path $b.Root "3rdparty\extensions\$extIdAtUninstall"
+        if (Test-Path $mp) { Remove-Item -Path $mp -Recurse -Force -ErrorAction SilentlyContinue }
+      }
+    }
+
+    # 3) Remove all scheduled tasks this project registers.
+    foreach ($n in @($TASK_NAME, $WATCHDOG_TASK, $USB_TASK, $CLIGUARD_TASK, $WIRELESSGUARD_TASK, $EXTGUARD_TASK)) {
       if (Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) {
         Info "Removing scheduled task: $n"
         Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
@@ -367,12 +559,13 @@
     Show-Status $s $remoteHash
 
     Write-Host ''
-    Write-Host '   [1] Install    ' -ForegroundColor Green -NoNewline; Write-Host '- set up the agent on this device (fresh install)'
-    Write-Host '   [2] Update     ' -ForegroundColor Cyan  -NoNewline; Write-Host '- replace the agent binary with the latest build'
-    Write-Host '   [3] Uninstall  ' -ForegroundColor Red   -NoNewline; Write-Host '- stop and completely remove the agent + files'
-    Write-Host '   [4] Exit       ' -ForegroundColor Gray  -NoNewline; Write-Host '- do nothing and quit'
+    Write-Host '   [1] Install    ' -ForegroundColor Green  -NoNewline; Write-Host '- set up the agent on this device (fresh install)'
+    Write-Host '   [2] Update     ' -ForegroundColor Cyan   -NoNewline; Write-Host '- replace the agent binary with the latest build'
+    Write-Host '   [3] Uninstall  ' -ForegroundColor Red    -NoNewline; Write-Host '- stop and completely remove the agent + files'
+    Write-Host '   [4] Browser    ' -ForegroundColor Magenta -NoNewline; Write-Host '- extension force-install status, disable Incognito/InPrivate'
+    Write-Host '   [5] Exit       ' -ForegroundColor Gray   -NoNewline; Write-Host '- do nothing and quit'
     Write-Host ''
-    $choice = Read-Host '   Choose an option (1-4)'
+    $choice = Read-Host '   Choose an option (1-5)'
 
     switch ($choice.Trim()) {
       '1' {
@@ -429,6 +622,10 @@
       }
 
       '4' {
+        Show-BrowserControls
+      }
+
+      '5' {
         Write-Host ''
         Info 'Exiting - no changes made.'
         return
@@ -436,7 +633,7 @@
 
       default {
         Write-Host ''
-        Warn 'Invalid choice - please enter 1, 2, 3, or 4.'
+        Warn 'Invalid choice - please enter 1, 2, 3, 4, or 5.'
         Start-Sleep -Milliseconds 900
       }
     }
