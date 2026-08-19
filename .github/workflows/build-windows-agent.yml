@@ -9,6 +9,7 @@ on:
          - 'agents/endpoint/windows/print_monitor.cpp'
          - 'agents/endpoint/windows/screen_capture_monitor.cpp'
          - 'agents/endpoint/windows/**.h'
+         - 'agents/browser-extension/native-host/skdlp_host.py'
          - '.github/workflows/build-windows-agent.yml'
      workflow_dispatch:
 
@@ -133,6 +134,76 @@ jobs:
           # though the "losing" run's output was redundant, not wrong.
           # Retry with fetch + rebase so a late run integrates cleanly
           # instead of failing outright.
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt) — fetching and rebasing before retry..."
+            git fetch origin main
+            git rebase origin/main || { echo "Rebase failed — manual intervention needed"; exit 1; }
+          done
+
+          echo "Push still failing after retries"
+          exit 1
+
+  build-native-host:
+    # Builds skdlp_host.exe (the browser extension's native-messaging host)
+    # via PyInstaller and publishes it into the repo the same way `build`
+    # above publishes seceoknight_agent.exe -- install-agent.ps1 downloads
+    # both from raw.githubusercontent.com with a SHA-256 sidecar check.
+    # This replaces the old by-hand "pip install pyinstaller; pyinstaller
+    # --onefile skdlp_host.py" step every endpoint previously needed Python
+    # for (README's old Step 5.4) with a single build done once, here.
+    # `needs: build` just serializes the two jobs' commits against the same
+    # branch so neither has to rebase-retry against the other (each already
+    # has its own fetch+rebase retry loop below regardless, for pushes that
+    # land between this workflow run and some other run).
+    needs: build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build dependencies
+        working-directory: agents/browser-extension/native-host
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller requests
+
+      - name: Build skdlp_host.exe
+        working-directory: agents/browser-extension/native-host
+        run: |
+          pyinstaller --onefile --name skdlp_host skdlp_host.py
+          Copy-Item -Force dist\skdlp_host.exe skdlp_host.exe
+          Get-Item skdlp_host.exe | Format-List Name, Length
+
+      - name: Generate SHA256 checksum
+        working-directory: agents/browser-extension/native-host
+        shell: bash
+        run: |
+          sha256sum skdlp_host.exe > skdlp_host.exe.sha256
+          cat skdlp_host.exe.sha256
+
+      - name: Commit updated binary
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add agents/browser-extension/native-host/skdlp_host.exe
+          git add agents/browser-extension/native-host/skdlp_host.exe.sha256
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "build: update browser-extension native host binary [skip ci]"
+
           for attempt in 1 2 3 4 5; do
             if git push; then
               exit 0

@@ -12327,6 +12327,109 @@ static void SetExtensionManagedString(Logger& logger, const std::string& sub,
     }
 }
 
+// Writes the native-messaging host manifest (com.seceoknightdlp.dlp.json)
+// and registers it for Chrome + Edge (HKLM, machine-wide), pointing at the
+// skdlp_host.exe that install-agent.ps1 now downloads alongside the main
+// agent binary (see Step 5 of install-agent.ps1). This is the C++ port of
+// the manual agents/browser-extension/native-host/install.ps1 flow -- that
+// script (and its README Step 5.4) documented a per-machine, by-hand run
+// requiring Python + PyInstaller on every endpoint; this makes the same
+// registration happen automatically, from the same elevated, repeating
+// Browser Extension Guard task as the forcelist entry below. A republished
+// extension (new id) or a changed server URL propagates here within one
+// tick of that task too, same as the forcelist entry -- no separate script
+// to remember to re-run.
+static void WriteNativeMessagingHostRegistration(Logger& logger, const std::string& extId) {
+    const std::string dir = "C:\\ProgramData\\SeceoKnight";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+
+    const std::string hostExePath = "C:\\Program Files\\SeceoKnight\\skdlp_host.exe";
+    const std::string manifestPath = dir + "\\com.seceoknightdlp.dlp.json";
+
+    std::error_code existsEc;
+    if (!fs::exists(hostExePath, existsEc) || existsEc) {
+        // install-agent.ps1 downloads this alongside seceoknight_agent.exe;
+        // if it's missing (an install/update that predates this feature and
+        // hasn't run manage-agent.ps1's Update yet), skip rather than
+        // registering a manifest that points at nothing -- the next
+        // successful Update-Agent run fixes this and this function will
+        // pick it up on its next 2-minute tick.
+        logger.Debug("apply-browser-extension-guard: skdlp_host.exe not present at " +
+                     hostExePath + " yet -- skipping native-host registration this run");
+        return;
+    }
+
+    JsonBuilder jb;
+    jb.AddString("name", "com.seceoknightdlp.dlp");
+    jb.AddString("description", "SeceoKnight DLP native messaging host");
+    jb.AddString("path", hostExePath);
+    jb.AddString("type", "stdio");
+    std::vector<std::string> origins = { "chrome-extension://" + extId + "/" };
+    jb.AddArray("allowed_origins", origins);
+    std::string manifestJson = jb.Build();
+
+    std::ofstream mf(manifestPath, std::ios::trunc | std::ios::binary);
+    if (!mf.is_open()) {
+        logger.Warning("apply-browser-extension-guard: could not write " + manifestPath);
+        return;
+    }
+    mf << manifestJson;
+    mf.close();
+
+    const std::string roots[] = {
+        "SOFTWARE\\Google\\Chrome\\NativeMessagingHosts\\com.seceoknightdlp.dlp",
+        "SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts\\com.seceoknightdlp.dlp"
+    };
+    for (const auto& sub : roots) {
+        HKEY k;
+        LSTATUS rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, sub.c_str(), 0, nullptr,
+                                     REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &k, nullptr);
+        if (rc != ERROR_SUCCESS) {
+            logger.Error("apply-browser-extension-guard: RegCreateKeyExA failed for " +
+                        sub + " rc=" + std::to_string(rc));
+            continue;
+        }
+        LSTATUS rc2 = RegSetValueExA(k, nullptr, 0, REG_SZ,
+                                     reinterpret_cast<const BYTE*>(manifestPath.c_str()),
+                                     (DWORD)manifestPath.size() + 1);
+        RegCloseKey(k);
+        if (rc2 != ERROR_SUCCESS) {
+            logger.Error("apply-browser-extension-guard: RegSetValueExA failed for " +
+                        sub + " rc=" + std::to_string(rc2));
+        }
+    }
+    logger.Debug("apply-browser-extension-guard: native-host manifest + registry set (id=" + extId + ")");
+}
+
+// Writes the native host's own server/agent config (dlp-host.json), read by
+// skdlp_host.py's load_config() on every launch. agent_id here is only ever
+// a fallback -- skdlp_host.py prefers a LIVE read of this same machine's
+// C:\ProgramData\SeceoKnight\agent_key.json (see _load_live_agent_identity()
+// there), which is what keeps cloud-upload/web-activity events tagged with
+// the agent's CURRENT identity across reinstalls without ever needing this
+// file rewritten by hand. Written here too only so a brand-new machine has
+// something valid before agent_key.json exists at all.
+static void WriteDlpHostConfig(Logger& logger, const std::string& agentId, const std::string& serverUrl) {
+    if (serverUrl.empty()) return;
+    const std::string dir = "C:\\ProgramData\\SeceoKnight";
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    const std::string cfgPath = dir + "\\dlp-host.json";
+
+    JsonBuilder jb;
+    jb.AddString("server_url", serverUrl);
+    if (!agentId.empty()) jb.AddString("agent_id", agentId);
+    std::string json = jb.Build();
+
+    std::ofstream f(cfgPath, std::ios::trunc | std::ios::binary);
+    if (!f.is_open()) {
+        logger.Warning("apply-browser-extension-guard: could not write " + cfgPath);
+        return;
+    }
+    f << json;
+}
+
 // Elevated periodic mode: applies the ExtensionInstallForcelist entry +
 // managed config (serverUrl, agentId) from the state cache the main
 // (unelevated) process writes in FetchBrowserExtensionPolicy(). Exists for
@@ -12335,6 +12438,13 @@ static void SetExtensionManagedString(Logger& logger, const std::string& sub,
 // repeating-task shape (registered as "SeceoKnight DLP Browser Extension
 // Guard", SYSTEM/Highest, every 2 minutes) since which extension/server is
 // force-installed is policy-driven and can change at any time.
+//
+// Also registers the native-messaging host (WriteNativeMessagingHostRegistration)
+// and its config (WriteDlpHostConfig) on the same tick -- see those
+// functions' comments. Together with the forcelist entry below, this is
+// the entire browser-extension + native-host setup: nothing about the
+// extension needs a separate manual step anymore once install-agent.ps1
+// has downloaded skdlp_host.exe (Step 5 there).
 //
 // Reads a simple 4-line cache (extension id / update URL / agent id /
 // server URL) rather than JSON -- same "no parser dependency for a handful
@@ -12388,6 +12498,9 @@ int HandleApplyBrowserExtensionGuard(int /*argc*/, char* /*argv*/[]) {
                 SetExtensionManagedString(logger, mp, "agentId", agentId);
             }
         }
+
+        WriteNativeMessagingHostRegistration(logger, extId);
+        WriteDlpHostConfig(logger, agentId, serverUrl);
 
         logger.Debug("apply-browser-extension-guard: complete -- id=" + extId);
     } catch (const std::exception& e) {

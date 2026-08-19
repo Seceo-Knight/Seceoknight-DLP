@@ -12,7 +12,13 @@
 #      only if missing).
 #   4. Downloads seceoknight_agent.exe from the repo, verifies its
 #      SHA-256 against the sidecar manifest in the repo, and refuses to
-#      install if the hash doesn't match.
+#      install if the hash doesn't match. Also downloads skdlp_host.exe
+#      (the browser extension's native-messaging host, pre-built in CI --
+#      see Step 5b) the same way -- no Python/PyInstaller needed on this
+#      PC. The extension itself, and skdlp_host's registration as a
+#      Chrome/Edge native-messaging host, are then applied automatically
+#      by the agent's own "Browser Extension Guard" scheduled task
+#      (Step 9) every 2 minutes -- nothing else to run for this.
 #   5. Optional Authenticode signature check (warn-only until an EV
 #      signing cert is provisioned).
 #   6. Writes agent_config.json. No VBScript launcher for either the main
@@ -460,6 +466,52 @@ try {
     }
 } catch {
     Write-ColorOutput "Authenticode check skipped: $($_.Exception.Message)" -Type "Warning"
+}
+Write-Host ""
+
+# Step 5b: Download the browser-extension native-messaging host (skdlp_host.exe)
+# This used to be a separate manual build (pip install pyinstaller + `pyinstaller
+# --onefile skdlp_host.py`, per the README's old Step 5.4) that every endpoint
+# needed Python for. It's now built once in CI (see
+# .github/workflows/build-windows-agent.yml) and published in the repo next to
+# seceoknight_agent.exe, so it downloads the same way -- no Python needed on
+# this PC at all. The elevated "Browser Extension Guard" scheduled task
+# (registered in Step 9 below) auto-registers it as the Chrome/Edge native
+# messaging host once it sees this file on disk, using whatever extension is
+# currently published on the server -- see WriteNativeMessagingHostRegistration()
+# in agent.cpp. Non-fatal if this fails (e.g. an older repo state without a
+# published skdlp_host.exe yet): the endpoint agent itself still installs fine,
+# just without cloud-upload/web-activity browser protection until a later
+# Update-Agent run picks it up.
+Write-ColorOutput "Step 5b: Downloading browser-extension native host..." -Type "Info"
+
+$hostExeName    = "skdlp_host.exe"
+$hostExePath    = Join-Path $INSTALL_DIR $hostExeName
+$hostDownloadUrl = "$RAW_BASE/agents/browser-extension/native-host/$hostExeName"
+$hostSumUrl      = "$RAW_BASE/agents/browser-extension/native-host/$hostExeName.sha256"
+
+try {
+    Invoke-WebRequest -Uri $hostDownloadUrl -OutFile $hostExePath -UseBasicParsing -ErrorAction Stop
+    $hostExpectedHash = $null
+    try {
+        $hostExpectedHash = (Invoke-WebRequest -Uri $hostSumUrl -UseBasicParsing -ErrorAction Stop).Content.Trim().Split()[0].ToUpper()
+    } catch {
+        Write-ColorOutput "  No SHA-256 sidecar for $hostExeName yet -- skipping integrity check." -Type "Warning"
+    }
+    if ($hostExpectedHash) {
+        $hostActualHash = (Get-FileHash -Algorithm SHA256 -Path $hostExePath).Hash.ToUpper()
+        if ($hostActualHash -ne $hostExpectedHash) {
+            Write-ColorOutput "CRITICAL: $hostExeName SHA-256 mismatch -- removing, browser protection will be disabled." -Type "Error"
+            Remove-Item $hostExePath -Force -ErrorAction SilentlyContinue
+        } else {
+            $hostFileSize = [math]::Round((Get-Item $hostExePath).Length / 1MB, 1)
+            Write-ColorOutput "  Native host downloaded and verified ($hostFileSize MB)" -Type "Success"
+        }
+    } elseif (Test-Path $hostExePath) {
+        Write-ColorOutput "  Native host downloaded (unverified)" -Type "Success"
+    }
+} catch {
+    Write-ColorOutput "  Could not download $hostExeName -- browser-extension protection will be disabled until a later Update-Agent run: $($_.Exception.Message)" -Type "Warning"
 }
 Write-Host ""
 

@@ -7,7 +7,7 @@ SeceoKnight DLP is an enterprise Data Loss Prevention platform. It monitors your
 - Monitors file system activity on Linux
 - Classifies sensitive content automatically using 20+ detection rules, including inside binary documents (PDF/DOCX/XLSX/PPTX) — not just plain text
 - Enforces policies: block, quarantine, encrypt, or alert
-- Blocks sensitive **cloud uploads** (Drive, Gmail, Dropbox, OneDrive, Box, …) straight from the browser via the Cloud Upload Guard extension (see Step 4)
+- Blocks sensitive **cloud uploads** (Drive, Gmail, Dropbox, OneDrive, Box, …) and enforces Web Activity Control (GenAI, webmail, file-sharing sites) straight from the browser — installed automatically on every Windows endpoint, no separate setup (see Step 5)
 - Blocks sensitive **outbound email** at the mail-flow level via the SMTP relay — works with both Google Workspace and Microsoft 365 (see Step 5)
 - Provides a web dashboard to view events, manage policies, and monitor agents, including a full admin **Audit Trail** of who changed what
 - Generates 7 report types: Executive Summary, Policy Violations, Incident Trends, Top Violators, Policy Effectiveness, Compliance Overview, and Incident Detail Report
@@ -90,6 +90,8 @@ The script will ask you three questions:
 3. **Confirm** — Type `Y` and press Enter
 
 The agent installs as a background scheduled task and starts monitoring immediately. You will see it appear in the dashboard under **Agents**.
+
+This also sets up the browser extension (Cloud Upload Guard + Web Activity Control) on this PC automatically — no separate step needed. See Step 5 if you want to verify it or it's not showing up.
 
 **To stop the agent:**
 ```powershell
@@ -332,209 +334,116 @@ Full reference (env vars, limitations, diagram): [`smtp-relay/README.md`](smtp-r
 
 ---
 
-## Step 5 — Install the Browser Extension (Cloud Upload Guard) — Optional
+## Step 5 — Browser Extension (Cloud Upload Guard + Web Activity Control)
+
+**This is now fully automatic — there is nothing to do here on a normal
+install.** Step 1 (server) publishes the extension, and Step 2 (each Windows
+PC) sets up everything the extension needs, including the piece it talks to
+behind the scenes. Skip straight to Step 6 unless you want to verify it
+(5.2) or something isn't showing up (5.3).
 
 Blocks uploads of Confidential/Restricted files to cloud apps (Gmail, Google
-Drive, Outlook, Dropbox, OneDrive, Box, …) straight from Chrome/Edge on a
-managed Windows endpoint — the moment someone tries to attach a sensitive
-file and send it, the browser itself pauses the upload, checks it, and either
-lets it through or blocks it with a red on-screen warning.
+Drive, Outlook, Dropbox, OneDrive, Box, …) and applies the dashboard's Web
+Activity Control policy (see the **Policies** page) to GenAI/webmail/file-
+sharing sites, straight from Chrome/Edge on a managed Windows endpoint — the
+moment someone tries to attach a sensitive file, or use a watched site, the
+browser itself pauses it, checks it, and either lets it through or blocks it
+with a red on-screen warning.
 
-This has two parts working together on the same PC:
-1. **The browser extension itself** (loaded into Chrome/Edge) — watches for
-   file uploads to cloud websites.
-2. **The native host** (a small program called `skdlp_host`) — the extension
-   talks to it, and it talks to your DLP server to get an allow/block
-   decision and record the event in your dashboard.
+### 5.1 — What happens automatically
 
-> **Do this on every Windows PC** where you want cloud-upload protection —
-> it's a per-PC setup, same as the endpoint agent in Step 2.
+- **Server (Step 1):** `install.sh` packages and publishes the extension
+  (a signed, stable-id build) — nothing you need to run separately.
+- **Each Windows PC (Step 2):** `install-agent.ps1` downloads two things
+  alongside the main agent binary — a pre-built `skdlp_host.exe` (the
+  native-messaging host the extension talks to; no Python needed on the
+  endpoint), and it doesn't need a separate registration step, because:
+- Within about 2 minutes of the agent starting, its **"SeceoKnight DLP
+  Browser Extension Guard"** scheduled task (runs as SYSTEM, every 2
+  minutes) reconciles everything: the Chrome/Edge `ExtensionInstallForcelist`
+  policy, the native-messaging host's manifest + registry registration, and
+  its config file — reusing this same PC's agent identity automatically,
+  the same way the main agent authenticates. Nothing to copy/paste by hand,
+  no extension ID to track down.
+- Close and reopen Chrome/Edge once (or just wait for its normal policy
+  refresh) and the extension appears force-installed, connected, and
+  enforcing whatever policy is set on the dashboard.
 
-> **This is a separate install from Step 2, even if you've already
-> installed the agent on this PC.** The endpoint agent (Step 2) and the
-> browser extension are two different programs that happen to work
-> together — installing or reinstalling one does **not** set up the other.
-> The agent only monitors things like file access, USB drives, and the
-> clipboard; it has no idea a browser extension exists, and reinstalling it
-> never touches Chrome/Edge or writes any of the files the extension needs.
-> So even right after reinstalling the agent, you still need to go through
-> Step 5 below to actually connect the browser extension — the only thing
-> that changes is that Step 5.4's `install.ps1` can now find and reuse the
-> agent's identity automatically, instead of you having to register a
-> separate one by hand.
+### 5.2 — Verify it's working
 
-### 5.1 — Identity: do you already have the endpoint agent on this PC?
-
-The native host needs to prove to the server who it is, the same way the
-endpoint agent does. **If you already installed the endpoint agent (Step 2)
-on this same PC**, you're in luck — as of the latest version, the agent
-saves its own identity to a file, and the extension setup below will find
-and reuse it automatically. You don't need to do anything extra here, just
-make sure the agent has been installed and has run at least once (check that
-it shows up in the dashboard's **Agents** page).
-
-**If this PC does NOT have the endpoint agent installed** (e.g. you only
-want browser-upload protection on it, not full endpoint monitoring), you'll
-need to register a separate identity for the extension instead. Run this
-from any machine that can reach the server:
-```bash
-curl -X POST http://YOUR_SERVER_IP/api/v1/agents/ \
-  -H "Content-Type: application/json" \
-  -d '{"name": "browser-ext-<this PCs hostname>", "os": "windows", "ip_address": "<this PCs IP>"}'
-```
-(Plain `http://` on port 80 is correct here, not `https://` — nginx keeps port
-80's `/api/` path open specifically for agent traffic, same as the endpoint
-agent in Step 2 uses, so there's no self-signed certificate to worry about.)
-
-Copy the `agent_id` and `api_key` from the response — you'll pass them as
-`-AgentId`/`-AgentKey` in Step 5.4 below instead of letting it auto-discover.
-
-### 5.2 — Get the extension onto the PC
-
-Copy `agents/browser-extension/` from this repo to the endpoint (e.g. to
-`C:\SeceoKnight\browser-extension\`). Any way of copying it works — a shared
-network drive, a zip file over email/USB, or `git clone` if the PC has git.
-
-### 5.3 — Load the extension into Chrome or Edge
-
-1. Open `chrome://extensions` (type that directly into the address bar) —
-   or `edge://extensions` if using Edge.
-2. Turn on **Developer mode** (a toggle switch, usually top-right).
-3. Click **Load unpacked**, and select the `browser-extension` folder you
-   copied in Step 5.2 (the one containing `manifest.json`).
-4. The extension appears as **"SeceoKnight DLP — Cloud Upload Guard."**
-   Under its name is a long ID (letters, e.g. `bjglolaooepjebiklcalmklppkokgjhm`)
-   — copy it, you'll need it in the next step.
-
-> For a large fleet, instead of manually loading it on each PC, your IT team
-> can publish it and push it automatically via the `ExtensionInstallForcelist`
-> Group Policy — ask your IT admin if this applies to your organization.
-
-### 5.4 — Build and register the native host
-
-This step needs **Python** on this PC (most Windows PCs don't have it by
-default — this is different from PowerShell, which is already built in). If
-`python --version` in PowerShell shows an error instead of a version number,
-install it first from [python.org/downloads](https://www.python.org/downloads/) —
-when running the installer, make sure to tick **"Add python.exe to PATH"**
-on the first screen, otherwise the commands below won't be found.
-
-Open PowerShell **as Administrator** (right-click PowerShell → "Run as
-administrator"), then run:
 ```powershell
-cd C:\SeceoKnight\browser-extension\native-host
-pip install pyinstaller requests
-pyinstaller --onefile skdlp_host.py
-mkdir "C:\Program Files\SeceoKnight" -Force
-copy dist\skdlp_host.exe "C:\Program Files\SeceoKnight\skdlp_host.exe"
-
-.\install.ps1 `
-  -ExtensionId  <EXTENSION_ID_FROM_STEP_5.3> `
-  -ServerUrl    http://YOUR_SERVER_IP/api/v1 `
-  -HostCommand  "C:\Program Files\SeceoKnight\skdlp_host.exe"
+irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/manage-agent.ps1 | iex
 ```
-> Use `http://`, not `https://`, for `-ServerUrl` — same as the endpoint
-> agent from Step 2 uses. Port 80 is deliberately left open for plain-HTTP
-> agent traffic, so there's no self-signed certificate involved at all.
+Choose **[4] Browser** from the menu. It reports, per browser:
+- whether the extension force-install policy is set
+- whether the native-messaging host binary, manifest, and registry
+  registration are all present
+- whether an old manually-loaded ("Load unpacked") copy is shadowing the
+  managed one — remove it via `chrome://extensions` if flagged
 
-That's it — no `-AgentId`/`-AgentKey` needed if the endpoint agent is
-already on this PC (Step 5.1); the script finds and reuses its identity
-automatically, and you'll see a line like `Reusing endpoint agent identity
-from: ...` confirming it worked.
+Then, in the browser: `chrome://extensions` → the extension → click
+**"service worker"** → look for `native host reachable (pong)` in the
+Console. That confirms the whole chain (browser → extension → native host →
+your DLP server) end to end.
 
-If this PC does **not** have the endpoint agent installed, add the two
-values you copied in Step 5.1 instead:
-```powershell
-.\install.ps1 `
-  -ExtensionId  <EXTENSION_ID_FROM_STEP_5.3> `
-  -ServerUrl    http://YOUR_SERVER_IP/api/v1 `
-  -AgentId      <agent_id from step 5.1> `
-  -AgentKey     <api_key from step 5.1> `
-  -HostCommand  "C:\Program Files\SeceoKnight\skdlp_host.exe"
-```
+### 5.3 — If it's not showing up
 
-### 5.5 — Verify it's working
+- **Nothing published on the server at all** — `install.sh`'s extension
+  packaging step is best-effort (needs `git` + Python's `cryptography`
+  package on the server) and prints a warning if it was skipped. Run it by
+  hand:
+  ```bash
+  git clone https://github.com/Seceo-Knight/Seceoknight-DLP.git && cd Seceoknight-DLP
+  python3 scripts/pack-extension.py --out /opt/seceoknight/server/extension_dist --server http://<this-server>
+  ```
+- **Published on the server, but not on this PC yet** — the agent syncs
+  policy periodically; wait a couple of minutes, or restart the "SeceoKnight
+  DLP Agent" scheduled task. Confirm with `manage-agent.ps1` → **[4]
+  Browser** (5.2 above).
+- **`skdlp_host.exe` missing** — an install from before this feature
+  existed. Run `manage-agent.ps1` → **[2] Update** once; it downloads it.
+- Full step-by-step troubleshooting:
+  [`agents/browser-extension/INSTALL_WINDOWS.md`](agents/browser-extension/INSTALL_WINDOWS.md).
 
-1. **Fully close** Chrome/Edge (every window) and reopen it — this is
-   necessary for it to pick up the new native host registration.
-2. Go to `chrome://extensions`, find the extension, and click **"service
-   worker"** (a small blue link under its name) — this opens a Console
-   window.
-3. Look for the line `native host reachable (pong)`. If you see that, the
-   whole chain (browser → extension → native host → your DLP server) is
-   connected and working.
-   - If instead you see `COULD NOT CONNECT to native host`, double-check the
-     Extension ID you used in Step 5.4 matches exactly what's shown on
-     `chrome://extensions`, then re-run `install.ps1` and fully restart the
-     browser again.
+### 5.4 — Manual path (only if you have a reason not to use Step 2)
 
-### 5.6 — Test it
-
-1. Sign in to Gmail, Outlook web, Google Drive, or any other cloud app in
-   the browser.
-2. Try uploading/attaching a plain text file with no sensitive content —
-   it should go through normally. You'll see a `cloud_upload_allowed` entry
-   in the dashboard's **Events** page.
-3. Try uploading a file containing fake test data (e.g. a text file with a
-   line like `Card: 4111 1111 1111 1111  SSN: 456-78-1234`) — you should see
-   a **red warning banner** appear on the page, and `cloud_upload_attempt` +
-   `cloud_upload_prevented` events in the dashboard.
-
-Full step-by-step (with troubleshooting):
+For a PC that should get browser-upload protection **without** the full
+endpoint agent, the extension can still be set up entirely by hand —
+building `skdlp_host.exe` with PyInstaller, `Load unpacked`, and running
+`native-host/install.ps1` yourself. This still works exactly as before; it's
+just no longer the recommended path for a PC that also runs the endpoint
+agent. Full walkthrough:
 [`agents/browser-extension/INSTALL_WINDOWS.md`](agents/browser-extension/INSTALL_WINDOWS.md).
 
-### 5.7 — How it actually works, and where to manage it
+### 5.5 — How policy decisions get made
 
-In plain terms: when someone tries to upload a file to a cloud website, the
-extension pauses that upload, sends the file to your DLP server to be
-checked, and gets back one of three answers — **allow** (nothing sensitive
-found, upload continues normally), **alert** (something notable but not
-severe — the upload still goes through, but it's logged for a DLP admin to
-review), or **block** (sensitive content found — the upload is stopped, and
-the person sees a red banner explaining why).
+When someone tries to upload a file or use a watched site, the extension
+sends it to your DLP server to be checked and gets back one of a few
+answers — **allow** (nothing sensitive found), **alert**/**redact**
+(something notable, logged or masked but not blocked), or **block**
+(sensitive content found — stopped, with a red banner explaining why).
+What counts as "sensitive" and what happens is controlled the same way as
+every other DLP feature: the dashboard's **Policies** page (look for
+"Event Type" = **Cloud Upload** or **Web Activity**).
 
-**Two different places control different parts of this:**
+### 5.6 — Adding an extra website for the extension to monitor
 
-- **What counts as "sensitive" and what happens (allow/alert/block)** — this
-  is controlled the same way as every other DLP feature: the dashboard's
-  **Policies** page. If a genuinely sensitive upload isn't being blocked, or
-  a legitimate upload keeps getting blocked, this is where to check/adjust
-  the rules — the same policy that governs USB transfers, clipboard, etc.
-  also governs cloud uploads (look for policies with an "Event Type" of
-  **Cloud Upload**).
-- **Which websites get watched at all** — Gmail, Outlook, Google Drive,
-  Dropbox, OneDrive, Box, Slack, and several others are built in and always
-  watched, out of the box, with no configuration needed. If you need to
-  watch an *additional* destination not in that built-in list (e.g. a
-  partner's file-sharing site), see the next section.
+Gmail, Outlook, Google Drive, Dropbox, OneDrive, Box, Slack, and several
+others are watched out of the box, no configuration needed. To watch an
+*additional* destination (e.g. a partner's file-sharing site), no
+reinstalling or redeploying anything to any PC is required:
 
-### 5.8 — Adding an extra website for the extension to monitor
+1. Log into the dashboard as the **Super Admin** account (a domain-scoped
+   admin won't see this section, since it affects every domain fleet-wide).
+2. Go to **Settings** → **"Cloud Upload Guard — Extra Destinations."**
+3. In the **"Domain to monitor"** box, type the plain domain (no
+   `https://`, e.g. `sharefile.com`), optionally with a label.
+4. Click **Add**.
 
-If your organization uses a cloud upload destination that isn't in the
-built-in list (Gmail, Outlook, Drive, Dropbox, OneDrive, Box, Slack, and a
-few others are covered automatically), you can add it from the dashboard —
-no reinstalling or redeploying anything to any PC required.
-
-1. Log into the dashboard as the **Super Admin** account (the global admin
-   account created during Step 1 — a domain-scoped admin such as Threat,
-   Data Protection, or Access Control admin won't see this section, since
-   it affects every domain fleet-wide).
-2. Go to **Settings**.
-3. Scroll to the section titled **"Cloud Upload Guard — Extra
-   Destinations."**
-4. In the **"Domain to monitor"** box, type the website's domain — just the
-   plain domain, no `https://` (e.g. `sharefile.com`), and optionally add a
-   short label for your own reference (e.g. "Partner file portal").
-5. Click **Add**.
-
-That's it — every PC running the browser extension will pick up this new
-domain automatically within about 15 minutes, or immediately the next time
-someone restarts their browser. To stop monitoring a domain you added, go
-back to the same Settings section and click the trash-can icon next to it.
-
-> This list only ever *adds* extra destinations on top of the built-in ones
-> — it cannot be used to turn off protection for Gmail, Drive, or any of the
-> other built-in destinations.
+Every PC running the browser extension picks up the new domain
+automatically within about 15 minutes, or immediately on the next browser
+restart. This list only ever *adds* to the built-in ones — it can't be used
+to turn off protection for Gmail, Drive, or any other built-in destination.
 
 ---
 

@@ -44,6 +44,14 @@
   $INSTALL_URL   = "$RAW_BASE/install-agent.ps1"
   $SUM_URL       = "$RAW_BASE/agents/endpoint/windows/seceoknight_agent.exe.sha256"
   $DOWNLOAD_URL  = "$RAW_BASE/agents/endpoint/windows/seceoknight_agent.exe"
+  # Browser-extension native-messaging host -- built in CI alongside the main
+  # binary (see .github/workflows/build-windows-agent.yml's build-native-host
+  # job) and downloaded the same way. Kept current here so a machine that was
+  # set up before this existed (or missed a build) picks it up on the next
+  # Update, without a separate manual PyInstaller step.
+  $HOST_SUM_URL      = "$RAW_BASE/agents/browser-extension/native-host/skdlp_host.exe.sha256"
+  $HOST_DOWNLOAD_URL = "$RAW_BASE/agents/browser-extension/native-host/skdlp_host.exe"
+  $HOST_EXE_NAME     = 'skdlp_host.exe'
 
   $INSTALL_DIR   = 'C:\Program Files\SeceoKnight'
   $DATA_DIR      = 'C:\ProgramData\SeceoKnight'
@@ -437,6 +445,32 @@
     }
 
     Write-Host ''
+    Write-Host '   Native messaging host (skdlp_host.exe -- what makes the extension actually'
+    Write-Host '   evaluate uploads / web activity instead of doing nothing):'
+    $hostExePath = Join-Path $INSTALL_DIR $HOST_EXE_NAME
+    if (-not (Test-Path $hostExePath)) {
+      Warn "     $hostExePath is missing -- run [2] Update to download it."
+    } else {
+      Ok "     Binary present: $hostExePath"
+      $manifestPath = Join-Path $DATA_DIR 'com.seceoknightdlp.dlp.json'
+      if (Test-Path $manifestPath) {
+        Ok "     Manifest present: $manifestPath"
+      } else {
+        Warn '     Manifest not written yet -- wait up to 2 minutes (Browser Extension Guard task), or confirm the extension is published on the server.'
+      }
+      foreach ($root in @(@{ Name='Chrome'; Key='SOFTWARE\Google\Chrome\NativeMessagingHosts' }, @{ Name='Edge'; Key='SOFTWARE\Microsoft\Edge\NativeMessagingHosts' })) {
+        $nmhKey = "HKLM:\$($root.Key)\com.seceoknightdlp.dlp"
+        if (Test-Path $nmhKey) {
+          Ok "     $($root.Name): native-messaging host registered"
+        } else {
+          Warn "     $($root.Name): NOT registered yet"
+        }
+      }
+      Write-Host '     (confirm end-to-end: chrome://extensions -> the extension -> "service worker"' -ForegroundColor DarkGray
+      Write-Host '      console -> look for "native host reachable (pong)")' -ForegroundColor DarkGray
+    }
+
+    Write-Host ''
     Write-Host '   Private browsing (Incognito / InPrivate):'
     foreach ($s in (Get-PrivateBrowsingState)) {
       if ($s.Disabled) { Ok "     $($s.Name) ($($s.Label)): disabled" }
@@ -593,6 +627,48 @@
     # A fresh $s.ExePath now points at the just-replaced binary, which is
     # what the new watchdog task action (if it needs rewriting) must call.
     Repair-WatchdogTask $s
+
+    Update-NativeHost
+  }
+
+  # Refreshes skdlp_host.exe (browser-extension native-messaging host)
+  # alongside the main agent binary. Best-effort/non-fatal on every failure
+  # path -- an Update run must never fail just because the browser-extension
+  # piece (optional, only relevant if the extension is actually published on
+  # the server) couldn't refresh.
+  function Update-NativeHost {
+    $hostPath = Join-Path $INSTALL_DIR $HOST_EXE_NAME
+    $tmpHostPath = Join-Path $env:TEMP "$HOST_EXE_NAME.new"
+    try {
+      Invoke-WebRequest -Uri $HOST_DOWNLOAD_URL -OutFile $tmpHostPath -UseBasicParsing -ErrorAction Stop
+    } catch {
+      Warn "Native-host download failed (non-fatal): $($_.Exception.Message)"
+      return
+    }
+
+    $expectedHash = $null
+    try {
+      $expectedHash = (Invoke-WebRequest -Uri $HOST_SUM_URL -UseBasicParsing -ErrorAction Stop).Content.Trim().Split()[0].ToUpper()
+    } catch {
+      Warn "No SHA-256 sidecar reachable for $HOST_EXE_NAME - skipping integrity check."
+    }
+    if ($expectedHash) {
+      $actualHash = (Get-FileHash -Algorithm SHA256 -Path $tmpHostPath).Hash.ToUpper()
+      if ($actualHash -ne $expectedHash) {
+        Err "$HOST_EXE_NAME SHA-256 mismatch - refusing to install a tampered/corrupt binary."
+        Remove-Item $tmpHostPath -Force -ErrorAction SilentlyContinue
+        return
+      }
+    }
+
+    try {
+      Move-Item -Path $tmpHostPath -Destination $hostPath -Force -ErrorAction Stop
+      Ok "Native host updated: $hostPath"
+      Ok "It will be (re-)registered as the Chrome/Edge native-messaging host automatically within 2 minutes (Browser Extension Guard task)."
+    } catch {
+      Warn "Could not replace $HOST_EXE_NAME (non-fatal, file locked?): $($_.Exception.Message)"
+      Remove-Item $tmpHostPath -Force -ErrorAction SilentlyContinue
+    }
   }
 
   # ================= Uninstall =================
@@ -676,6 +752,19 @@
         }
         $mp = Join-Path $b.Root "3rdparty\extensions\$extIdAtUninstall"
         if (Test-Path $mp) { Remove-Item -Path $mp -Recurse -Force -ErrorAction SilentlyContinue }
+      }
+    }
+
+    # 2d) Remove the native-messaging host registration (com.seceoknightdlp.dlp)
+    #     -- the manifest file itself and skdlp_host.exe live under $INSTALL_DIR/
+    #     $DATA_DIR and are deleted wholesale in step 4 below; only the HKLM
+    #     registry pointers need clearing separately so they don't dangle at a
+    #     path that no longer exists.
+    foreach ($root in @('SOFTWARE\Google\Chrome\NativeMessagingHosts', 'SOFTWARE\Microsoft\Edge\NativeMessagingHosts')) {
+      $nmhKey = "HKLM:\$root\com.seceoknightdlp.dlp"
+      if (Test-Path $nmhKey) {
+        Remove-Item -Path $nmhKey -Force -ErrorAction SilentlyContinue
+        Info "Cleared native-messaging host registration: $nmhKey"
       }
     }
 

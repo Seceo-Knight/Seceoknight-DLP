@@ -8,6 +8,58 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ✨ Browser extension + native host: zero-touch install (August 19, 2026)
+
+Directly closes the gap flagged at the end of the previous entry below
+("Known remaining gap: `skdlp_host` has no self-update mechanism") — and
+goes further, since the actual ask was "no manual step at all, ever again,"
+not just an update mechanism.
+
+**Before:** `install-agent.ps1` only installed the endpoint agent. The
+browser extension force-install policy (`ExtensionInstallForcelist`) was
+already automatic from an earlier pass, but the native-messaging host
+(`skdlp_host`, the program the extension actually talks to for allow/block
+decisions) still needed a fully separate, by-hand process per machine:
+install Python, `pip install pyinstaller`, `pyinstaller --onefile
+skdlp_host.py`, then run `native-host/install.ps1` with the extension ID
+copy-pasted in by hand. Without that manual step, the extension showed up
+force-installed but did nothing — every decision silently fell through the
+fail-open path, exactly the multi-hour debugging chain documented below.
+
+**After:**
+- CI (`.github/workflows/build-windows-agent.yml`, new `build-native-host`
+  job) builds `skdlp_host.exe` via PyInstaller on every push touching
+  `skdlp_host.py`, publishing it into the repo next to
+  `seceoknight_agent.exe` with the same SHA-256 sidecar pattern.
+- `install-agent.ps1` downloads it (Step 5b) the same way it downloads the
+  main agent binary — no Python needed on the endpoint at all.
+- `agent.cpp`'s existing elevated, repeating "Browser Extension Guard" task
+  (`--apply-browser-extension-guard`, SYSTEM, every 2 minutes) now also
+  writes the native-messaging host manifest (`com.seceoknightdlp.dlp.json`),
+  registers it in the registry for both Chrome and Edge, and writes the
+  host's own config (`dlp-host.json`) — reusing the extension ID, server
+  URL, and agent identity it already tracks for the forcelist entry. See
+  `WriteNativeMessagingHostRegistration()` / `WriteDlpHostConfig()`.
+- `manage-agent.ps1`'s `Update-Agent` now refreshes `skdlp_host.exe` too
+  (`Update-NativeHost`), so existing installs catch up via a normal Update,
+  and its `[4] Browser` menu reports native-host binary/manifest/registry
+  status alongside the existing extension force-install status — the exact
+  diagnostics that took manual registry/log digging to work out by hand in
+  the entry below now surface in one menu.
+- `Uninstall-Agent` clears the two native-messaging-host registry keys on
+  removal (the manifest/binary themselves already went with
+  `$INSTALL_DIR`/`$DATA_DIR`).
+
+**Net result:** `install.sh` on the server + `install-agent.ps1` on each
+Windows PC is now genuinely the entire setup — extension force-install,
+native host, and its registration all happen with zero extra commands,
+zero Extension-ID copy-pasting, and zero Python dependency on the endpoint.
+The old fully-manual path (`agents/browser-extension/INSTALL_WINDOWS.md`)
+still works unchanged, for the one case that still needs it: a PC that
+should get browser protection *without* the full endpoint agent.
+
+---
+
 ## 🐛 Web Activity Control event flood on real ChatGPT traffic + stale native host binary (August 19, 2026)
 
 ### What happened, end to end
