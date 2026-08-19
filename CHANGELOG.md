@@ -8,6 +8,35 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Web Activity Control event flood on real ChatGPT traffic + stale native host binary (August 19, 2026)
+
+### What happened, end to end
+
+First live test against ChatGPT surfaced a chain of four independent, stacked problems, each hiding the next one until the previous was fixed:
+
+1. `web-activity.js` never read a request body when the page called `fetch(new Request(url, opts))` instead of `fetch(url, opts)` — ChatGPT's bundle uses the former. Fixed same day (see the "silently skipped genai posts" entry below): added `resolveBodyText()` to handle both calling conventions.
+2. Once that was fixed, the browser extension itself was stuck on 1.0.0 on the real test endpoint no matter how the server-published version was bumped (1.0.1, then 1.0.2) or how many caches were cleared. Root cause: profile-local corruption specific to that one Chrome profile — confirmed by testing a brand-new profile, which installed the current version correctly on the first try. Not a code bug; documented here for the next person who hits the same wall so they know to try a fresh profile before assuming the packaging pipeline is broken.
+3. Even with a correctly updated extension, ZERO `web_activity` events reached the server. Root cause: the extension doesn't call the DLP server directly — it goes through a separate native-messaging host program (`skdlp_host`), and that program's `allowed_origins` on this endpoint was pinned to a stale extension ID (`bjglolaooepjebiklcalmklppkokgjhm`) left over from before the extension had a pinned signing key, not the current force-installed ID (`aiidhbnohkdododhkgjfbejfbipedejh`). Chrome silently refuses native-messaging connections for an ID that isn't listed — no error surfaced anywhere a user would see it.
+4. Fixing the `allowed_origins` mismatch still produced nothing. Root cause: the deployed `skdlp_host.exe` itself was a standalone, manually-built binary with **no update mechanism of its own** — unlike the main agent (self-updates via `manage-agent.ps1`) and the extension (self-updates via `update.xml`), this component has never had one. It was built before Web Activity Control's `get_app_catalog` native-messaging call existed, so it silently didn't recognize that message type at all — confirmed by `dlp-host.log` showing successful `ping`/`get_hosts` traffic (older message types) but zero trace, ever, of `get_app_catalog`. Fixed for this endpoint by pointing the host manifest at a `.bat` wrapper running the current `skdlp_host.py` directly (no PyInstaller rebuild needed, since Python was already on the machine) instead of the stale `.exe`.
+
+Every one of these needed a different diagnostic (extension caches, `chrome://policy`, `chrome://serviceworker-internals`, `dlp-host.log`, a direct `Invoke-RestMethod` call replicating what the native host does) because each layer looked healthy in isolation once the layer above it stopped hiding the truth.
+
+### Then: event flooding once it actually worked
+
+With the full chain finally connected, a single real "send message" in ChatGPT logged 4-6 near-duplicate `medium`-severity Web Activity events within the same second on the dashboard instead of one. Root cause: `background.js`'s `webActivity` message handler deliberately had no coalescing (`waWaiters` — "a genai prompt/response isn't a chunked upload, so there's no equivalent need for cross-request coalescing/piggybacking here"), on the assumption that one user action = one qualifying request. False in practice: ChatGPT's SPA fires several background POST requests (conversation metadata, moderation pre-checks, etc.) within the same second as the real message, each independently over `web-activity.js`'s 40-character gate.
+
+### Fix
+
+`agents/browser-extension/src/background.js`: added `waRecentDecisions`/`waRequestKeys`/`waCoalesceKeyFor()`, mirroring the existing `recentDecisions`/`requestKeys`/`coalesceKeyFor()` pattern already used for chunked cloud-upload requests — same `WA_COALESCE_WINDOW_MS` (4000ms) as that path's own window. Keyed on `host:activity` rather than content, since these background requests often carry different bodies for the same logical user action, so a content-based key wouldn't coalesce them. Deliberately **excludes `redact`** from the cache: a redact decision's `redactedContent` is specific to the exact request body that produced it, and reusing it for a different, later request within the coalesce window would substitute the wrong redacted text into that request — silent data corruption, not just a missed detection. `allow`/`alert`/`block` don't have that problem, since the action itself doesn't depend on which exact background request triggered it.
+
+Bumped extension to 1.0.3.
+
+### Known remaining gap, not fixed this pass
+
+`skdlp_host` (the native-messaging host) has no self-update mechanism at all, unlike the main agent and the extension. Every other endpoint almost certainly has the same stale binary this one did, and will need the same manual fix (or a proper PyInstaller rebuild + redistribution) until this gets a real update path — worth folding into the main agent binary the way `--watchdog-check` was, so it can never go stale silently like this again.
+
+---
+
 ## 🐛 Watchdog task's `wscript.exe`/`.vbs` launcher silently blocked by Windows 11 Application Control (August 18, 2026 evening)
 
 ### What happened

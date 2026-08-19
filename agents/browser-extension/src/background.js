@@ -30,12 +30,32 @@ let port = null;
 const waiters = new Map(); // requestId -> respond (fans out to every piggybacked caller, see inFlightByKey)
 const requestKeys = new Map(); // requestId -> coalesce key, ONLY set for requests we're willing to cache
 
-// GenAI / Web Activity Control (web-activity.js) requests. Deliberately a
-// separate, simpler map from waiters/requestKeys/inFlightByKey above — a
-// genai prompt/response isn't a chunked upload, so there's no equivalent
-// need for cross-request coalescing/piggybacking here; each request just
-// gets its own waiter.
+// GenAI / Web Activity Control (web-activity.js) requests. Originally a
+// separate, simpler map from waiters/requestKeys/inFlightByKey above on the
+// theory that a genai prompt/response isn't a chunked upload, so there was
+// no equivalent need for cross-request coalescing/piggybacking here — each
+// request just got its own waiter.
+//
+// That theory turned out to be wrong in the field (real endpoint, Aug 19
+// 2026): ChatGPT's own SPA fires several background POST requests within
+// the same second as a single real "send message" click — conversation
+// metadata, moderation pre-checks, and similar internal calls, each of
+// which independently satisfies web-activity.js's isWatchedHost() + 40-char
+// gate. Without coalescing, one real user action was logging 4-6 near-
+// duplicate medium-severity events instead of one, flooding the dashboard.
+// waRecentDecisions below fixes this the same way recentDecisions above
+// fixes it for chunked uploads — keyed on host+activity rather than
+// content, since these background requests often carry DIFFERENT bodies
+// for the same logical user action, so a content-based key wouldn't
+// coalesce them.
 const waWaiters = new Map(); // requestId -> respond
+const waRequestKeys = new Map(); // requestId -> coalesce key, ONLY set for requests we're willing to cache
+const waRecentDecisions = new Map(); // "host:activity" -> { decision, expiresAt }
+const WA_COALESCE_WINDOW_MS = 4000; // matches COALESCE_WINDOW_MS's own reasoning below
+
+function waCoalesceKeyFor(meta) {
+  return ((meta && meta.host) || "") + ":" + ((meta && meta.activity) || "");
+}
 
 // In-flight requests, keyed the same way as recentDecisions. A completed
 // decision only gets cached AFTER the native host responds — so two
@@ -119,6 +139,7 @@ function failOpenAll(reason) {
   inFlightByKey.clear();
   for (const [, respond] of waWaiters) { try { respond({ action: "allow", reason }); } catch (e) {} }
   waWaiters.clear();
+  waRequestKeys.clear();
 }
 
 function connect() {
@@ -148,6 +169,19 @@ function connect() {
           level: msg.level, reason: msg.reason, redactedContent: msg.redactedContent,
         };
         log("web-activity decision", msg.requestId, "->", decision.action, decision.appCategory || "");
+        const waKey = waRequestKeys.get(msg.requestId);
+        waRequestKeys.delete(msg.requestId);
+        // Cache for coalescing (see waRecentDecisions' own comment) — EXCEPT
+        // "redact", whose redactedContent is specific to THIS request's own
+        // body. Reusing it for a different, later request within the
+        // coalesce window would substitute the wrong redacted text into
+        // that request instead of its own — silent data corruption, not
+        // just a missed detection. allow/alert/block don't have that
+        // problem: the action itself doesn't depend on which exact
+        // background request triggered it.
+        if (waKey && decision.action !== "redact") {
+          waRecentDecisions.set(waKey, { decision, expiresAt: Date.now() + WA_COALESCE_WINDOW_MS });
+        }
         respond(decision);
         return;
       }
@@ -228,8 +262,19 @@ try {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message && message.kind === "webActivity") {
-    // GenAI / Web Activity Control path — simpler than "classify" below,
-    // no coalescing (see waWaiters' own comment for why).
+    // GenAI / Web Activity Control path — see waRecentDecisions' own
+    // comment above for why this now coalesces the same way "classify"
+    // below does, instead of hitting the native host (and logging a new
+    // event) for every qualifying background request a genai SPA fires
+    // within the same burst of real user activity.
+    const waKey = waCoalesceKeyFor(message.meta);
+    const waCached = waRecentDecisions.get(waKey);
+    if (waCached && waCached.expiresAt > Date.now()) {
+      log("reusing cached web-activity decision for", waKey, "->", waCached.decision.action);
+      sendResponse(waCached.decision);
+      return false;
+    }
+
     if (!port) connect();
     if (!port) {
       warn("webActivity: no native host available → allow (fail-open)");
@@ -237,10 +282,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
     }
     waWaiters.set(message.requestId, sendResponse);
+    waRequestKeys.set(message.requestId, waKey);
     try {
       port.postMessage(Object.assign({ type: "web_activity", requestId: message.requestId }, message.meta));
     } catch (e) {
       waWaiters.delete(message.requestId);
+      waRequestKeys.delete(message.requestId);
       warn("webActivity postMessage to host failed:", e && e.message);
       sendResponse({ action: "allow", reason: "send-failed" });
       return false;
@@ -249,6 +296,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (waWaiters.has(message.requestId)) {
         const respond = waWaiters.get(message.requestId);
         waWaiters.delete(message.requestId);
+        waRequestKeys.delete(message.requestId);
         warn("webActivity agent timeout for", message.requestId);
         respond({ action: "allow", reason: "agent-timeout" });
       }
