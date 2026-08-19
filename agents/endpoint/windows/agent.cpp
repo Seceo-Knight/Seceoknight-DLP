@@ -5444,7 +5444,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              while (!updateUrl.empty() && updateUrl.back() == '/') updateUrl.pop_back();
              updateUrl += "/extension/update.xml";
 
-             std::string sig = extId + "|" + config.serverUrl + "|" + config.agentId;
+             // The currently-published version -- see WriteExtensionMinimumVersion()
+             // below for why this is cached and applied alongside the forcelist
+             // entry (gap-scan of CyberSentinel-DLP, August 19, 2026: force-install
+             // alone never makes an already-installed extension update itself).
+             // Blank is fine -- it just means an older server build's /extension/info
+             // response, and the guard skips the minimum-version write for that run.
+             std::string version = config.ExtractJsonValue(response, "version");
+
+             std::string sig = extId + "|" + config.serverUrl + "|" + config.agentId + "|" + version;
              bool changed = (sig != lastExtensionPolicySig);
 
              std::ofstream f(BrowserExtensionStateCachePath(), std::ios::trunc | std::ios::binary);
@@ -5453,7 +5461,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                                 BrowserExtensionStateCachePath());
                  return;
              }
-             f << extId << "\n" << updateUrl << "\n" << config.agentId << "\n" << config.serverUrl << "\n";
+             f << extId << "\n" << updateUrl << "\n" << config.agentId << "\n" << config.serverUrl << "\n" << version << "\n";
              f.close();
 
              if (changed) {
@@ -12430,6 +12438,86 @@ static void WriteDlpHostConfig(Logger& logger, const std::string& agentId, const
     f << json;
 }
 
+// Forces an out-of-date, already-force-installed extension to actually
+// update, instead of sitting on whatever version happened to be current the
+// day it first installed. Gap-scan of CyberSentinel-DLP (August 19, 2026):
+// they found ExtensionInstallForcelist (SetExtensionForcelistEntry above)
+// only guarantees the extension is PRESENT -- Chrome/Edge check the update
+// feed on their own multi-hour timer regardless, so a real endpoint sat on
+// an old version for days with a newer one published and reachable, every
+// server-side check (update.xml, the CRX itself, the id) correct the whole
+// time. Restarting the browser doesn't help either; that isn't what
+// schedules the check.
+//
+// ExtensionSettings' minimum_version_required is the fix: telling the
+// browser the installed copy is TOO OLD is a statement it has to act on
+// (disables + reinstalls from update_url), not a hint it can defer like the
+// forcelist. See agents/browser-extension/src/background.js's own
+// requestUpdateCheck()/onUpdateAvailable additions for the complementary
+// half -- that closes the gap for a browser that's already running and
+// never restarts or hits this policy refresh; this closes it for one that's
+// stuck badly enough that even that doesn't help.
+//
+// NOTE: this key is a single JSON blob per browser root, keyed by extension
+// id, and there's no JSON parser in this codebase to safely read-modify-
+// merge an existing value that might belong to something else (a real IT
+// Group Policy managing a different extension's settings under the same
+// key). This product's entry fully replaces whatever was there. On every
+// fleet this has been deployed to, nothing else writes this key -- the log
+// line below is the signal to notice if that's ever not true somewhere.
+static void WriteExtensionMinimumVersion(Logger& logger, const std::string& policyRoot,
+                                         const std::string& extId, const std::string& updateUrl,
+                                         const std::string& version) {
+    if (version.empty()) return;   // older server, no version in /extension/info yet -- skip, not an error
+
+    HKEY k;
+    LSTATUS rc = RegCreateKeyExA(HKEY_LOCAL_MACHINE, policyRoot.c_str(), 0, nullptr,
+                                 REG_OPTION_NON_VOLATILE, KEY_READ | KEY_SET_VALUE,
+                                 nullptr, &k, nullptr);
+    if (rc != ERROR_SUCCESS) {
+        logger.Error("apply-browser-extension-guard: RegCreateKeyExA failed for " + policyRoot +
+                    " (ExtensionSettings) rc=" + std::to_string(rc));
+        return;
+    }
+
+    char existingBuf[8192] = {};
+    DWORD existingLen = sizeof(existingBuf) - 1;
+    DWORD existingType = 0;
+    if (RegQueryValueExA(k, "ExtensionSettings", nullptr, &existingType,
+                          reinterpret_cast<BYTE*>(existingBuf), &existingLen) == ERROR_SUCCESS &&
+        existingType == REG_SZ) {
+        std::string existing(existingBuf, existingLen > 0 ? existingLen - 1 : 0);
+        if (!existing.empty() && existing.find("\"" + extId + "\"") == std::string::npos) {
+            logger.Warning("apply-browser-extension-guard: an existing ExtensionSettings policy "
+                           "under " + policyRoot + " is being replaced -- this product owns that "
+                           "key exclusively today (no JSON merge support here); if something else "
+                           "on this fleet also manages ExtensionSettings, that policy is now gone.");
+        }
+    }
+
+    // extId is always exactly 32 lowercase [a-z] characters (verified by the
+    // caller) and version/updateUrl never contain a JSON-special character
+    // in practice (dotted digits; a plain http(s) URL) -- hand-built rather
+    // than through JsonBuilder, which has no nested-object support anyway.
+    std::string json = "{\"" + extId + "\":{"
+        "\"installation_mode\":\"force_installed\","
+        "\"update_url\":\"" + updateUrl + "\","
+        "\"minimum_version_required\":\"" + version + "\""
+        "}}";
+
+    LSTATUS rc2 = RegSetValueExA(k, "ExtensionSettings", 0, REG_SZ,
+                                 reinterpret_cast<const BYTE*>(json.c_str()),
+                                 (DWORD)json.size() + 1);
+    RegCloseKey(k);
+    if (rc2 != ERROR_SUCCESS) {
+        logger.Error("apply-browser-extension-guard: RegSetValueExA failed for ExtensionSettings "
+                    "under " + policyRoot + " rc=" + std::to_string(rc2));
+    } else {
+        logger.Debug("apply-browser-extension-guard: minimum_version_required=" + version +
+                    " set under " + policyRoot);
+    }
+}
+
 // Elevated periodic mode: applies the ExtensionInstallForcelist entry +
 // managed config (serverUrl, agentId) from the state cache the main
 // (unelevated) process writes in FetchBrowserExtensionPolicy(). Exists for
@@ -12471,11 +12559,14 @@ int HandleApplyBrowserExtensionGuard(int /*argc*/, char* /*argv*/[]) {
             logger.Warning("apply-browser-extension-guard: could not open state cache " + cachePath);
             return 1;
         }
-        std::string extId, updateUrl, agentId, serverUrl;
+        std::string extId, updateUrl, agentId, serverUrl, version;
         std::getline(f, extId);
         std::getline(f, updateUrl);
         std::getline(f, agentId);
         std::getline(f, serverUrl);
+        std::getline(f, version);   // added Aug 19, 2026 -- absent on an older cache file
+                                    // written before this existed; that's fine, see
+                                    // WriteExtensionMinimumVersion()'s empty-version guard.
 
         if (extId.size() != 32 || updateUrl.empty()) {
             logger.Warning("apply-browser-extension-guard: malformed state cache "
@@ -12497,6 +12588,8 @@ int HandleApplyBrowserExtensionGuard(int /*argc*/, char* /*argv*/[]) {
             if (!agentId.empty()) {
                 SetExtensionManagedString(logger, mp, "agentId", agentId);
             }
+
+            WriteExtensionMinimumVersion(logger, root, extId, updateUrl, version);
         }
 
         WriteNativeMessagingHostRegistration(logger, extId);

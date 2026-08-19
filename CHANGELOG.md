@@ -8,6 +8,55 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ✨ Extension can now actually update itself (gap-scan of CyberSentinel-DLP, August 19, 2026)
+
+CyberSentinel-DLP spent several commits today discovering and fixing a real
+bug in their own extension force-install: `ExtensionInstallForcelist` only
+guarantees the extension is *present*, never that it's *current*. Chrome and
+Edge check the update feed on their own multi-hour timer regardless of
+restarts, so an already-installed older copy can sit stale indefinitely even
+with a newer version published and perfectly reachable — they had an
+endpoint stuck on v2.5.0 for days with v2.7.0 published, every server-side
+check (update.xml, the CRX, the signing-key-derived id) correct the whole
+time. This is a mechanism we use identically (`SetExtensionForcelistEntry`
+in `agent.cpp`), so it was very likely already true for us — it just hadn't
+bitten yet because every endpoint tested so far got the extension fresh,
+never as an update to an already-running older copy.
+
+Ported both halves of their fix:
+
+- **`agents/browser-extension/src/background.js`** (bumped to 1.0.4): the
+  extension now calls `chrome.runtime.requestUpdateCheck()` itself — hourly,
+  on browser start, and on install — and reloads immediately via
+  `chrome.runtime.onUpdateAvailable` the moment a newer version has actually
+  been downloaded (Chrome won't swap it in under a running extension
+  otherwise; it waits for idle, which can be a long wait for a
+  repeatedly-woken service worker).
+- **`agent.cpp`** (`WriteExtensionMinimumVersion()`, wired into the existing
+  elevated Browser Extension Guard task): writes `ExtensionSettings`'
+  `minimum_version_required` alongside the forcelist entry, sourced from
+  `/extension/info`'s `version` field (now also cached in
+  `browser_extension_state.cache`). Telling the browser the installed copy
+  is too old is a statement it has to act on — disables and reinstalls from
+  `update_url` — unlike the forcelist, which it can silently defer forever.
+
+Together: a browser that's running gets nudged proactively (self-update);
+one that's badly stuck gets forced (minimum version). Also fixed the same
+`Update-Agent` process-check race CyberSentinel caught in their own
+installer today — `Get-Process` checked exactly once, 3 seconds after
+`Start-ScheduledTask`, which only guarantees the task was *queued*, not that
+the process exists yet. `manage-agent.ps1`'s Update now retries 6×2s like
+Install already effectively does.
+
+Known limitation, documented in `WriteExtensionMinimumVersion()`'s own
+comment: `ExtensionSettings` is a single JSON blob per browser root and this
+codebase has no JSON parser to safely merge into an existing one — our entry
+replaces whatever was there. Not a concern on any fleet this has been
+deployed to (nothing else writes this key), but the function logs a warning
+if it ever detects otherwise.
+
+---
+
 ## 🐛 Web Activity Control "Violations" count stuck at 0 (August 19, 2026)
 
 Matching web_activity events were showing up correctly in the Events log

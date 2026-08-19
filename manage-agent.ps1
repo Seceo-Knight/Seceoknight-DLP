@@ -615,8 +615,19 @@
 
     try {
       Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction Stop
-      Start-Sleep -Seconds 3
-      $p = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue
+      # Start-ScheduledTask returns as soon as the task is QUEUED, not once
+      # the process actually exists -- a single check shortly after it was
+      # a false-alarm "not detected" on a routine update that was starting
+      # normally and heartbeating seconds later (gap-scan of
+      # CyberSentinel-DLP hitting and fixing this exact race today, August
+      # 19, 2026: their Update path made the identical single-check-after-
+      # 3-seconds mistake). Retry like Install already effectively does,
+      # instead of crying wolf on a routine update.
+      $p = $null
+      for ($i = 0; $i -lt 6 -and -not $p; $i++) {
+        Start-Sleep -Seconds 2
+        $p = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue
+      }
       if ($p) { Ok "Agent restarted (PID $($p.Id))." }
       else    { Warn 'Task started but process not detected yet - check logs.' }
     } catch {

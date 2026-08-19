@@ -260,6 +260,66 @@ try {
   warn("chrome.alarms unavailable, extra-hosts/app-catalog lists will only refresh on browser/extension restart:", e && e.message);
 }
 
+// Extension self-update (gap-scan of CyberSentinel-DLP, August 19, 2026):
+// ExtensionInstallForcelist only guarantees the extension is PRESENT, not
+// current. Chrome/Edge check the update feed (update.xml) on their own
+// multi-hour timer, independent of restarts -- CyberSentinel's own installer
+// spent several rounds on exactly this before finding it: an endpoint sat on
+// a stale force-installed version for DAYS with a newer one published and
+// reachable, because nothing was ever telling the browser to look sooner.
+// requestUpdateCheck() is the browser's own supported "check my update URL
+// now"; onUpdateAvailable fires once a newer version has actually been
+// downloaded but Chrome is waiting for the extension to go idle before
+// swapping it in underneath itself -- reload() immediately instead, since a
+// DLP control silently staying on a known-stale build is worse than one
+// reload interruption.
+//
+// This alone still leaves a browser that's never restarted and never hits
+// the hourly alarm on an old version for up to an hour; see agent.cpp's
+// WriteExtensionMinimumVersion() (ExtensionSettings' minimum_version_required)
+// for the complementary server-driven half of this fix, which forces the
+// browser to act rather than waiting for it to decide to check.
+//
+// Declared here, before first use, deliberately -- CyberSentinel's own fix
+// for this hit a temporal-dead-zone bug from declaring the alarm name after
+// the function that referenced it.
+const UPDATE_CHECK_ALARM = "skdlp-update-check";
+
+function checkForUpdate() {
+  try {
+    chrome.runtime.requestUpdateCheck((status) => {
+      // "throttled" is Chrome's own rate limit on how often this can be
+      // called, not a failure -- logging it here (instead of silence) is
+      // what would have saved CyberSentinel days of chasing the server for
+      // an explanation, per their own commit message.
+      log("requestUpdateCheck:", status);
+    });
+  } catch (e) {
+    warn("requestUpdateCheck failed:", e && e.message);
+  }
+}
+
+try {
+  chrome.runtime.onUpdateAvailable.addListener((details) => {
+    log("update available (" + (details && details.version) + ") -- reloading now to apply it");
+    chrome.runtime.reload();
+  });
+} catch (e) {
+  warn("onUpdateAvailable unavailable:", e && e.message);
+}
+
+checkForUpdate();
+chrome.runtime.onStartup.addListener(checkForUpdate);
+chrome.runtime.onInstalled.addListener(checkForUpdate);
+try {
+  chrome.alarms.create(UPDATE_CHECK_ALARM, { periodInMinutes: 60 });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === UPDATE_CHECK_ALARM) checkForUpdate();
+  });
+} catch (e) {
+  warn("chrome.alarms unavailable, update checks will only run on browser/extension restart:", e && e.message);
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message && message.kind === "webActivity") {
     // GenAI / Web Activity Control path — see waRecentDecisions' own
