@@ -661,12 +661,42 @@
       }
     }
 
+    # skdlp_host.exe is launched fresh by the browser for each native-messaging
+    # connection (chrome.runtime.connectNative), so an existing copy can be
+    # locked by a still-open Chrome/Edge window even though nothing here
+    # started it directly -- Move-Item -Force does NOT override an OS file
+    # lock (unlike the main agent binary above, replacing this one doesn't
+    # go through a scheduled task we control, so there's no task to stop
+    # first). Kill any live skdlp_host processes before attempting the
+    # replace; harmless if none are running.
+    Get-Process -Name ($HOST_EXE_NAME -replace '\.exe$', '') -ErrorAction SilentlyContinue |
+      Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 300
+
     try {
       Move-Item -Path $tmpHostPath -Destination $hostPath -Force -ErrorAction Stop
       Ok "Native host updated: $hostPath"
       Ok "It will be (re-)registered as the Chrome/Edge native-messaging host automatically within 2 minutes (Browser Extension Guard task)."
+      return
     } catch {
-      Warn "Could not replace $HOST_EXE_NAME (non-fatal, file locked?): $($_.Exception.Message)"
+      Warn "First replace attempt failed ($($_.Exception.Message)) - retrying once after closing any remaining handle..."
+    }
+
+    # One retry: explicitly delete the old file first (a plain Remove-Item
+    # sometimes succeeds where Move-Item -Force's implicit overwrite doesn't,
+    # e.g. a stale read-only flag from how the file was originally placed),
+    # then a longer pause in case a browser process was still exiting.
+    Start-Sleep -Seconds 2
+    try {
+      if (Test-Path $hostPath) {
+        Set-ItemProperty -Path $hostPath -Name IsReadOnly -Value $false -ErrorAction SilentlyContinue
+        Remove-Item -Path $hostPath -Force -ErrorAction Stop
+      }
+      Move-Item -Path $tmpHostPath -Destination $hostPath -Force -ErrorAction Stop
+      Ok "Native host updated: $hostPath"
+      Ok "It will be (re-)registered as the Chrome/Edge native-messaging host automatically within 2 minutes (Browser Extension Guard task)."
+    } catch {
+      Warn "Could not replace $HOST_EXE_NAME (non-fatal, still locked - close all Chrome/Edge windows and re-run Update): $($_.Exception.Message)"
       Remove-Item $tmpHostPath -Force -ErrorAction SilentlyContinue
     }
   }
