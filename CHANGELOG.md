@@ -8,6 +8,48 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Web Activity Control "Violations" count stuck at 0 (August 19, 2026)
+
+Matching web_activity events were showing up correctly in the Events log
+(alerted/blocked, right severity, right destination) but the specific
+Web Activity Control policy's "Violations" count on the **Policies** page
+never moved off 0.
+
+Root cause: that count (`server/app/api/v1/policies.py` `GET /policies`) is
+computed live by aggregating `matched_policies` on stored Mongo events —
+it's not a column that gets incremented directly. `matched_policies` is
+normally stamped by the generic background policy evaluator
+(`DatabasePolicyEvaluator`), but that evaluator only understands policies
+whose config is `conditions.rules` — Web Activity Control policies store a
+matrix instead (`policy.config["matrix"]`), so the evaluator's `if not
+conditions.get("rules"): continue` silently skipped every one of them,
+every time. Meanwhile `evaluate_web_activity()` (`agents.py`) already
+*does* resolve the correct policy per-request (it needs the matrix to
+decide allow/alert/block/redact in the first place) — that result just
+never made it onto the event the native host posts afterward.
+
+Fix: `WebActivityEvaluationResponse` now returns `policy_id`/`policy_name`
+alongside the decision; `skdlp_host.py` echoes them back on its `/events/`
+POST (`EventCreate` gained matching fields); `create_event()` writes
+`matched_policies` directly from that trusted value at insert time, in the
+same shape the background evaluator itself produces, so `GET /policies`'
+aggregation counts it identically either way. The background processor's
+existing `if processed.get("matched_policies"):` guard means it never
+overwrites this with an empty result for event types it can't match — so
+this required no change there at all.
+
+Requires both halves to update: a server rebuild (`docker compose -f
+docker-compose.prod.yml pull && up -d` after CI publishes new images) for
+the `policy_id`/`policy_name` fields and the `create_event()` change, *and*
+a refreshed `skdlp_host.exe` on each endpoint (`manage-agent.ps1` → `[2]
+Update`, or it'll pick it up automatically going forward — see the
+zero-touch install entry above) since it's the one echoing `policy_id`
+back on the event it posts. Old `skdlp_host.exe` + new server (or vice
+versa) just means violations keep showing 0 until both sides are current
+— it fails safe, not open.
+
+---
+
 ## ✨ Browser extension + native host: zero-touch install (August 19, 2026)
 
 Directly closes the gap flagged at the end of the previous entry below

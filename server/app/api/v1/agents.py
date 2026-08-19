@@ -2146,6 +2146,18 @@ class WebActivityEvaluationResponse(BaseModel):
     # forwards THIS text instead of the original when present.
     redacted_content: Optional[str] = Field(None)
     labels_redacted: List[str] = Field(default_factory=list)
+    # The web_activity_control policy that produced this decision (when one
+    # was actually loaded/consulted -- null for "unclassified host" / "no
+    # active policy" responses). The native host echoes this straight back
+    # on its /events/ POST for the resulting event so that event carries a
+    # trusted policy_id -- see create_event()'s handling of EventCreate.policy_id
+    # in events.py. Without this, the dashboard's Policies page "Violations"
+    # count (which aggregates matched_policies on stored events) stayed at 0
+    # for Web Activity Control even while matching events showed up fine in
+    # the Events log, because web_activity events never carried a policy_id
+    # for anything to aggregate on (found August 19, 2026).
+    policy_id: Optional[str] = Field(None)
+    policy_name: Optional[str] = Field(None)
 
 
 @router.post("/{agent_id}/web-activity/evaluate", response_model=WebActivityEvaluationResponse)
@@ -2221,6 +2233,7 @@ async def evaluate_web_activity(
             return WebActivityEvaluationResponse(
                 app_category=category, action="allow",
                 reason=f"cell ({category}.{request.activity}) = {cell_action}" + ("" if content_to_classify else ", no content to inspect"),
+                policy_id=str(policy.id), policy_name=policy.name,
             )
 
         classification_engine = ClassificationEngine(db)
@@ -2260,6 +2273,7 @@ async def evaluate_web_activity(
             classification_level=level, confidence=classification_result.confidence_score,
             matched_rules=classification_result.matched_rules,
             redacted_content=redacted_content, labels_redacted=labels_redacted,
+            policy_id=str(policy.id), policy_name=policy.name,
         )
     except Exception as e:
         logger.error("Web activity evaluation failed", agent_id=agent_id, host=request.host, error=str(e))

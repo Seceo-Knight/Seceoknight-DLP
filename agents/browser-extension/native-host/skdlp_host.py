@@ -297,13 +297,23 @@ def fetch_app_catalog():
 
 def evaluate_web_activity(meta):
     """Web Activity Control decision. Returns (action, category, level,
-    reason, redacted_content, labels_redacted). action in
-    {allow, alert, block, redact}. See app/core/web_activity.py /
+    reason, redacted_content, labels_redacted, policy_id, policy_name).
+    action in {allow, alert, block, redact}. See app/core/web_activity.py /
     app/api/v1/agents.py's evaluate_web_activity() server-side for the
     actual matrix logic -- this is a thin client, same design as evaluate()
-    below for the older cloud-upload-only path."""
+    below for the older cloud-upload-only path.
+
+    policy_id/policy_name: the server already resolved which
+    web_activity_control policy produced this decision (it's the same
+    object it loaded to look up the matrix cell) -- echoed straight through
+    to emit_web_activity_event() below, which puts it on the /events/ POST.
+    Without this, the dashboard's Policies page "Violations" count stayed
+    at 0 for Web Activity Control even while matching events showed up fine
+    in the Events log, because the generic server-side policy evaluator
+    that normally stamps that count can't match a matrix-shaped
+    web_activity_control policy at all (found August 19, 2026)."""
     if requests is None or not CFG["agent_key"]:
-        return "allow", None, None, "host-unconfigured", None, []
+        return "allow", None, None, "host-unconfigured", None, [], None, None
     try:
         payload = {
             "host": meta.get("host") or "",
@@ -328,15 +338,25 @@ def evaluate_web_activity(meta):
             body.get("reason"),
             body.get("redacted_content"),
             body.get("labels_redacted") or [],
+            body.get("policy_id"),
+            body.get("policy_name"),
         )
     except Exception as e:
         log("evaluate_web_activity failed: %s" % e)
-        return "allow", None, None, "evaluate-error", None, []
+        return "allow", None, None, "evaluate-error", None, [], None, None
 
 
-def emit_web_activity_event(meta, category, activity, action_taken, severity, level, blocked):
+def emit_web_activity_event(meta, category, activity, action_taken, severity, level, blocked,
+                             policy_id=None, policy_name=None):
     """Emit one Web Activity Control event. Mirrors emit_event() below --
-    field names match the server's EventCreate schema."""
+    field names match the server's EventCreate schema.
+
+    policy_id/policy_name: passed straight through from evaluate_web_activity()
+    -- the server already resolved which policy produced this decision, so
+    this event carries a trusted reference to it instead of leaving
+    create_event() to (fail to) re-derive one. See EventCreate.policy_id's
+    docstring in events.py for why this matters for the dashboard's
+    Policies page violation counts."""
     if requests is None or not CFG["agent_key"]:
         return
     try:
@@ -358,6 +378,8 @@ def emit_web_activity_event(meta, category, activity, action_taken, severity, le
                 "description": "Web activity (%s/%s) %s to %s" % (
                     category or "unclassified", activity or "?", action_taken, meta.get("host")
                 ),
+                "policy_id": policy_id,
+                "policy_name": policy_name,
             },
             timeout=5,
             verify=CFG.get("verify_tls", False),
@@ -368,17 +390,23 @@ def emit_web_activity_event(meta, category, activity, action_taken, severity, le
 
 def handle_web_activity(meta):
     activity = meta.get("activity") or ""
-    action, category, level, reason, redacted_content, labels_redacted = evaluate_web_activity(meta)
+    (action, category, level, reason, redacted_content, labels_redacted,
+     policy_id, policy_name) = evaluate_web_activity(meta)
 
     if action == "block":
-        emit_web_activity_event(meta, category, activity, "alerted", "high", level, blocked=False)
-        emit_web_activity_event(meta, category, activity, "blocked", "critical", level, blocked=True)
+        emit_web_activity_event(meta, category, activity, "alerted", "high", level, blocked=False,
+                                 policy_id=policy_id, policy_name=policy_name)
+        emit_web_activity_event(meta, category, activity, "blocked", "critical", level, blocked=True,
+                                 policy_id=policy_id, policy_name=policy_name)
     elif action == "redact":
-        emit_web_activity_event(meta, category, activity, "redacted", "medium", level, blocked=False)
+        emit_web_activity_event(meta, category, activity, "redacted", "medium", level, blocked=False,
+                                 policy_id=policy_id, policy_name=policy_name)
     elif action == "alert":
-        emit_web_activity_event(meta, category, activity, "alerted", "medium", level, blocked=False)
+        emit_web_activity_event(meta, category, activity, "alerted", "medium", level, blocked=False,
+                                 policy_id=policy_id, policy_name=policy_name)
     else:
-        emit_web_activity_event(meta, category, activity, "logged", "info", level, blocked=False)
+        emit_web_activity_event(meta, category, activity, "logged", "info", level, blocked=False,
+                                 policy_id=policy_id, policy_name=policy_name)
 
     return action, category, level, reason, redacted_content, labels_redacted
 

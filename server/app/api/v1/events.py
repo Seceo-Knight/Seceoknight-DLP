@@ -85,6 +85,20 @@ class EventCreate(BaseModel):
     # investigation found print events reporting a confident-looking "allow"
     # on jobs whose content had never actually been read.
     content_inspection_status: Optional[str] = Field(None, description="Print content inspection status: not_configured, inspected, or unavailable")
+    # Web Activity Control (skdlp_host.py's emit_web_activity_event()) already
+    # resolves and evaluates against a specific policy via the separate
+    # /agents/{id}/web-activity/evaluate call BEFORE this event is ever
+    # created -- policy_id/policy_name here are just that already-trusted
+    # result echoed back, not something re-derived from this event's fields.
+    # Needed because the generic DatabasePolicyEvaluator (event_processor.py)
+    # can't match web_activity_control policies at all (their config lives in
+    # a matrix, not the conditions.rules shape it expects), so without this,
+    # web_activity events never got matched_policies set and the dashboard's
+    # Policies page "Violations" count silently stayed 0 forever even while
+    # matching events showed up fine in the Events log (found August 19,
+    # 2026). See create_event()'s handling below.
+    policy_id: Optional[str] = Field(None, description="Policy that already produced this event's action/severity, if resolved by the caller ahead of time")
+    policy_name: Optional[str] = Field(None, description="Name of the above policy, for matched_policies display")
 
 
 class DLPEvent(BaseModel):
@@ -244,7 +258,7 @@ async def create_event(
         "classification_level": event.classification_level,
         "classification_score": getattr(event, "classification_score", 0.0) or 0.0,
         "classification_labels": getattr(event, "classification_labels", []) or [],
-        "policy_id": None,
+        "policy_id": event.policy_id,
         "action_taken": event.action or "logged",
         "file_path": event.file_path,
         "source_path": event.source_path or event.file_path,
@@ -284,6 +298,31 @@ async def create_event(
         event_doc["block_reason"] = event.block_reason
     if event.content_inspection_status:
         event_doc["content_inspection_status"] = event.content_inspection_status
+    if event.policy_id:
+        # Web Activity Control (and anything else that resolves its own
+        # policy ahead of time -- see EventCreate.policy_id's docstring)
+        # writes matched_policies directly here, at creation, instead of
+        # relying on _process_event_background's generic DatabasePolicyEvaluator
+        # -- that evaluator can't match web_activity_control policies at all
+        # (matrix-shaped config, not conditions.rules), so it would otherwise
+        # never populate matched_policies for these events, and the
+        # Policies page's "Violations" count (which aggregates exactly this
+        # field -- see GET /policies) would stay 0 forever. Shape matches
+        # what the background evaluator itself produces (event_processor.py's
+        # evaluate_policies(): a list of dicts keyed by policy_id) so the
+        # same aggregation pipeline reads either source identically.
+        # _process_event_background only ever OVERWRITES this key when it
+        # found a non-empty match list of its own (see the
+        # `if processed.get("matched_policies"):` guard there), so this
+        # creation-time value survives that pass untouched for event types
+        # the generic evaluator can't match.
+        event_doc["matched_policies"] = [{
+            "policy_id": event.policy_id,
+            "policy_name": event.policy_name,
+            "severity": event.severity,
+            "priority": None,
+            "matched_rules": event.classification_rules_matched or [],
+        }]
 
     # ── Step 2: Atomic upsert into MongoDB (fast, <5ms) ────────────────
     result = await events_collection.update_one(
