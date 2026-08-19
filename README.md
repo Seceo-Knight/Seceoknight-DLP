@@ -101,6 +101,21 @@ Stop-ScheduledTask -TaskName "SeceoKnight DLP Agent"
 Start-ScheduledTask -TaskName "SeceoKnight DLP Agent"
 ```
 
+### Managing an already-installed agent
+
+`install-agent.ps1` above is only for a **first-time install** on a machine that's never had the agent — don't re-run it on a machine that already has one. For everything after that (updating the binary, uninstalling, checking the browser extension's force-install status, or disabling Incognito/InPrivate), use the management console instead:
+
+```powershell
+irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/manage-agent.ps1 | iex
+```
+
+It opens an interactive menu:
+
+- **[1] Install** — same as above, only relevant if this machine somehow doesn't have the agent yet
+- **[2] Update** — downloads and verifies the latest published binary, replaces it, and restarts the agent
+- **[3] Uninstall** — stops the agent and removes it completely
+- **[4] Browser** — shows whether the browser extension is actually force-installed, flags a leftover "Load unpacked" copy shadowing the managed one, and lets you disable Incognito/InPrivate browsing
+
 ---
 
 ## Step 3 — Install the Linux Agent
