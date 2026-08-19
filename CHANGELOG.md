@@ -8,6 +8,50 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔴 REVERTED same day: minimum_version_required broke Microsoft Edge (August 19, 2026)
+
+The `ExtensionSettings`/`minimum_version_required` policy added in the entry
+directly below this one was deployed to a real endpoint and, within
+minutes, Microsoft Edge stopped opening at all — not a crash, it just never
+showed a window. Chrome on the same machine was separately in a bad state
+(profile corruption, likely unrelated/pre-existing) which made isolating
+this slower than it should have been, but the fix was unambiguous: removing
+the `HKLM\...\ExtensionSettings` registry value this feature wrote (`Remove-
+ItemProperty ... -Name ExtensionSettings` under both the Chrome and Edge
+policy roots) made Edge open again immediately, with no other change.
+
+Root cause not fully confirmed. Leading theory: having both
+`ExtensionInstallForcelist` *and* an `ExtensionSettings` entry with
+`installation_mode=force_installed` for the **same** extension id is a
+combination Chromium doesn't handle cleanly — possibly blocking browser
+startup on a forced reinstall that never completed (no network issue was
+apparent, but the timing fits: this is exactly the mechanism that's
+supposed to disable-and-reinstall an out-of-date extension).
+
+**Action taken:** `WriteExtensionMinimumVersion()`'s call site in
+`HandleApplyBrowserExtensionGuard()` is commented out (`agent.cpp`). The
+function itself is left in place, unused, with a comment explaining why —
+do not re-enable without testing against a real Chrome *and* Edge install
+first, and consider not combining it with `ExtensionInstallForcelist` for
+the same id (drop the forcelist entry when using `ExtensionSettings`
+instead, rather than both at once).
+
+**What's still in effect:** the extension's own self-update
+(`requestUpdateCheck()`/`onUpdateAvailable` in `background.js`, previous
+entry) is unaffected — that's extension-side JS calling standard,
+documented Chrome APIs with no registry/policy involvement, and has none of
+this failure mode. It's a weaker fix on its own (can't rescue a browser
+that's already stuck on an old build with no self-update code, and only
+polls hourly/on-restart rather than forcing immediately), but it's safe.
+
+**Lesson:** a DLP agent must never be able to break the browser it's
+protecting. This should have been tested against Edge specifically before
+being wired into the repeating guard task that runs unattended on every
+managed endpoint, not shipped on the strength of matching CyberSentinel's
+own (also same-day, also still-settling) approach.
+
+---
+
 ## ✨ Extension can now actually update itself (gap-scan of CyberSentinel-DLP, August 19, 2026)
 
 CyberSentinel-DLP spent several commits today discovering and fixing a real

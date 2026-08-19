@@ -12589,7 +12589,23 @@ int HandleApplyBrowserExtensionGuard(int /*argc*/, char* /*argv*/[]) {
                 SetExtensionManagedString(logger, mp, "agentId", agentId);
             }
 
-            WriteExtensionMinimumVersion(logger, root, extId, updateUrl, version);
+            // WriteExtensionMinimumVersion(logger, root, extId, updateUrl, version);
+            // ^ REVERTED same day it was added (August 19, 2026): confirmed on a
+            // real endpoint to make Microsoft Edge stop opening at all -- Edge
+            // sat there indefinitely (not a crash, just never showed a window)
+            // until the ExtensionSettings registry value this wrote was removed
+            // by hand. Root cause not fully confirmed, but the leading theory is
+            // that ExtensionInstallForcelist + an ExtensionSettings entry with
+            // installation_mode=force_installed for the SAME extension id is a
+            // combination Chromium doesn't handle cleanly -- possibly blocking
+            // startup on a forced reinstall that never completed. A DLP agent
+            // must never be able to do this to the browser it's protecting, so
+            // this is disabled rather than guessed-and-redeployed without a way
+            // to verify the fix is actually safe. The function is left in place,
+            // unused, for whoever revisits this -- do not re-enable without
+            // testing on a real Chrome AND Edge install first, ideally with
+            // ExtensionInstallForcelist removed for the same id so the two
+            // policies are never combined for one extension at once.
         }
 
         WriteNativeMessagingHostRegistration(logger, extId);
