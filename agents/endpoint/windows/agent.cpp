@@ -12588,6 +12588,21 @@ int HandleApplyBrowserExtensionGuard(int /*argc*/, char* /*argv*/[]) {
             if (!agentId.empty()) {
                 SetExtensionManagedString(logger, mp, "agentId", agentId);
             }
+            // Gap-scan of CyberSentinel-DLP's 2.9.1 (August 24, 2026): the
+            // published version, pushed the SAME safe way serverUrl/agentId
+            // already are (chrome.storage.managed, not the ExtensionSettings
+            // mechanism reverted above). background.js compares this against
+            // its own manifest version to skip an unnecessary throttled
+            // requestUpdateCheck() call when already current, and reacts to
+            // it changing via chrome.storage.onChanged instead of waiting for
+            // its hourly alarm -- the safe half of what
+            // WriteExtensionMinimumVersion() was trying to achieve via a much
+            // riskier path. This is advisory only (background.js decides what
+            // to do with it); unlike ExtensionSettings it cannot force Chrome
+            // itself to touch the extension, so it can't repeat that failure.
+            if (!version.empty()) {
+                SetExtensionManagedString(logger, mp, "wantVersion", version);
+            }
 
             // WriteExtensionMinimumVersion(logger, root, extId, updateUrl, version);
             // ^ REVERTED same day it was added (August 19, 2026): confirmed on a

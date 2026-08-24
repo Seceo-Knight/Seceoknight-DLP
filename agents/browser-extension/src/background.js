@@ -274,28 +274,82 @@ try {
 // DLP control silently staying on a known-stale build is worse than one
 // reload interruption.
 //
-// This alone still leaves a browser that's never restarted and never hits
-// the hourly alarm on an old version for up to an hour; see agent.cpp's
-// WriteExtensionMinimumVersion() (ExtensionSettings' minimum_version_required)
-// for the complementary server-driven half of this fix, which forces the
-// browser to act rather than waiting for it to decide to check.
-//
 // Declared here, before first use, deliberately -- CyberSentinel's own fix
 // for this hit a temporal-dead-zone bug from declaring the alarm name after
 // the function that referenced it.
 const UPDATE_CHECK_ALARM = "skdlp-update-check";
 
-function checkForUpdate() {
+// Dotted-integer version comparator ("1.0.4" vs "1.0.5") -- good enough for
+// this extension's manifest versions (always plain dotted integers, no
+// pre-release suffixes), not a general semver parser. Returns negative/0/
+// positive like a normal comparator.
+function compareVersions(a, b) {
+  const pa = String(a || "0").split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || "0").split(".").map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function checkForUpdate(reason) {
   try {
     chrome.runtime.requestUpdateCheck((status) => {
       // "throttled" is Chrome's own rate limit on how often this can be
       // called, not a failure -- logging it here (instead of silence) is
       // what would have saved CyberSentinel days of chasing the server for
       // an explanation, per their own commit message.
-      log("requestUpdateCheck:", status);
+      log("requestUpdateCheck (" + (reason || "?") + "):", status);
     });
   } catch (e) {
     warn("requestUpdateCheck failed:", e && e.message);
+  }
+}
+
+// Gap-scan of CyberSentinel-DLP 2.9.1 (August 24, 2026): two refinements on
+// top of the plain hourly/on-start check above, both riding on "wantVersion"
+// -- the currently-published version, written into chrome.storage.managed
+// by agent.cpp's Browser Extension Guard task the SAME safe way serverUrl/
+// agentId already are (NOT the ExtensionSettings mechanism that broke Edge
+// and was reverted the same day it shipped -- see agent.cpp's comment).
+//
+// 1. requestUpdateCheck() is throttled by Chrome itself (a limited number of
+//    calls per time window) -- calling it unconditionally from every alarm
+//    tick, browser start, AND install wastes that budget on checks that
+//    find nothing, the same mistake CyberSentinel's own first pass at this
+//    made. wantVersion is a cheap, unthrottled comparison: skip the real
+//    check entirely when the installed version already matches what the
+//    server has published.
+// 2. Reacting to wantVersion CHANGING via chrome.storage.onChanged means a
+//    freshly-published version reaches an already-running browser within
+//    about 2 minutes (the guard task's own tick) instead of up to an hour
+//    later on the alarm. This can only ever ASK Chrome to check for an
+//    update -- unlike ExtensionSettings' minimum_version_required, it has
+//    no way to force anything about how the browser itself starts, so it
+//    can't repeat that failure.
+function maybeCheckForUpdate(reason) {
+  try {
+    chrome.storage.managed.get(["wantVersion"], (managed) => {
+      if (chrome.runtime.lastError) {
+        // No managed policy at all (unmanaged/standalone install) -- fall
+        // back to always checking, same as before this refinement existed.
+        checkForUpdate(reason);
+        return;
+      }
+      const wantVersion = managed && managed.wantVersion;
+      const currentVersion = chrome.runtime.getManifest().version;
+      if (!wantVersion || compareVersions(wantVersion, currentVersion) > 0) {
+        checkForUpdate(reason);
+      } else {
+        log("skipping update check (" + reason + "): already at", currentVersion, "server wants", wantVersion || "(unset)");
+      }
+    });
+  } catch (e) {
+    // chrome.storage.managed itself unavailable for some reason -- fail
+    // open to the unconditional check rather than never checking at all.
+    checkForUpdate(reason);
   }
 }
 
@@ -308,13 +362,24 @@ try {
   warn("onUpdateAvailable unavailable:", e && e.message);
 }
 
-checkForUpdate();
-chrome.runtime.onStartup.addListener(checkForUpdate);
-chrome.runtime.onInstalled.addListener(checkForUpdate);
+try {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "managed" && changes.wantVersion) {
+      log("wantVersion changed ->", changes.wantVersion.newValue, "-- checking immediately");
+      maybeCheckForUpdate("wantVersion-changed");
+    }
+  });
+} catch (e) {
+  warn("chrome.storage.onChanged unavailable:", e && e.message);
+}
+
+maybeCheckForUpdate("startup");
+chrome.runtime.onStartup.addListener(() => maybeCheckForUpdate("onStartup"));
+chrome.runtime.onInstalled.addListener(() => maybeCheckForUpdate("onInstalled"));
 try {
   chrome.alarms.create(UPDATE_CHECK_ALARM, { periodInMinutes: 60 });
   chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === UPDATE_CHECK_ALARM) checkForUpdate();
+    if (alarm.name === UPDATE_CHECK_ALARM) maybeCheckForUpdate("alarm");
   });
 } catch (e) {
   warn("chrome.alarms unavailable, update checks will only run on browser/extension restart:", e && e.message);

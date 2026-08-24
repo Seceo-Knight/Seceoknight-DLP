@@ -8,6 +8,42 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ✨ `wantVersion` push-trigger + update-check throttle fix (gap-scan of CyberSentinel-DLP 2.9.1, August 24, 2026)
+
+Second-round gap-scan of CyberSentinel-DLP's repo turned up a refinement to
+the extension self-update mechanism added below on August 19. The old
+version called `chrome.runtime.requestUpdateCheck()` unconditionally on
+every browser start, extension install, and hourly alarm tick — wasteful,
+since that call is itself throttled by Chrome to a limited number of calls
+per time window, so most of those calls were spent finding nothing and
+potentially eating into the budget for when a check is actually needed.
+
+This ports the safe half of CyberSentinel's fix (the half that doesn't
+touch browser policy registry keys — see the Edge incident directly below,
+which is exactly why the *unsafe* half, `minimum_version_required`, is not
+being re-tried):
+
+- `agent.cpp`'s Browser Extension Guard task now writes `wantVersion` (the
+  currently-published extension version) into `chrome.storage.managed`
+  alongside `serverUrl`/`agentId` — the same proven-safe write path, not
+  `ExtensionSettings`.
+- `background.js` reads `wantVersion` before calling
+  `requestUpdateCheck()` and skips the call entirely when the installed
+  version already matches it — turning an unconditional throttled call
+  into a cheap, unthrottled comparison in the common case.
+- `background.js` also now listens for `wantVersion` changing via
+  `chrome.storage.onChanged` and checks immediately, so a freshly-published
+  version reaches an already-running browser within about 2 minutes (the
+  guard task's own tick) instead of waiting up to an hour for the alarm.
+
+This is advisory only — `background.js` decides what to do with the value,
+and nothing about it can force Chrome itself to act the way
+`ExtensionSettings`/`minimum_version_required` tried to. It cannot repeat
+that failure. Extension version bumped to 1.0.5 so the change actually
+ships through the existing force-install/update pipeline.
+
+---
+
 ## 🔴 REVERTED same day: minimum_version_required broke Microsoft Edge (August 19, 2026)
 
 The `ExtensionSettings`/`minimum_version_required` policy added in the entry
