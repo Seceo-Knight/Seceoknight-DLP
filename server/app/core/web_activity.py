@@ -59,24 +59,43 @@ DEFAULT_ACTION = "allow"
 # than silently defaulting to some action nobody configured.
 #
 # SCOPE (this build): only cells the browser extension actually emits are
-# listed as meaningful. "upload"/"attach"/"download" are real activities in
-# the ACTIVITIES vocabulary above and the server-side evaluator handles
-# them correctly if sent -- but the extension's file-upload interception
-# still runs through the OLDER, separate cloud_upload_hosts/CLOUD_HOSTS
-# path (native-host "classify" message, POST /policy/evaluate with
-# event_type=cloud_upload) rather than this new evaluate_web_activity()
-# path, to avoid double-submitting/double-logging the same upload through
-# two different classifiers. Unifying those two paths is future work, not
-# done in this pass -- documented here rather than silently claiming
-# "upload" cells work when nothing currently reaches them. "post" (GenAI
-# prompts) and "send" (webmail/collaboration composed messages) are NOT
-# file-bearing, so they have no such overlap and are fully wired end to
-# end, including "ai_response" -- the actual headline capability this
-# feature exists for.
+# listed as meaningful. "upload"/"attach" are real activities in the
+# ACTIVITIES vocabulary above and the server-side evaluator handles them
+# correctly if sent -- but the extension's file-upload interception still
+# runs through the OLDER, separate cloud_upload_hosts/CLOUD_HOSTS path
+# (native-host "classify" message, POST /policy/evaluate with
+# event_type=cloud_upload) rather than this evaluate_web_activity() path,
+# to avoid double-submitting/double-logging the same upload through two
+# different classifiers. Unifying those two paths is future work, not done
+# in this pass -- documented here rather than silently claiming "upload"
+# cells work when nothing currently reaches them. "post" (GenAI prompts)
+# and "send" (webmail/collaboration composed messages) are NOT file-bearing,
+# so they have no such overlap and are fully wired end to end, including
+# "ai_response" -- the actual headline capability this feature exists for.
+#
+# "download" (gap-scan of CyberSentinel-DLP, August 24, 2026 -- "watch
+# downloads FROM monitored apps"): unlike upload, there's no older path
+# already covering this, so it's wired directly into evaluate_web_activity()
+# rather than routed around it. The browser extension's chrome.downloads
+# hook (background.js) cancels a download from a catalogued host, re-fetches
+# the bytes itself to actually classify them, and re-issues the download
+# only once a decision comes back -- see that file's own comment for the
+# cancel/re-fetch/re-download mechanics and their fail-open guarantees.
+# Scoped to the three categories where "pulling a file out of a managed
+# SaaS app onto local disk" is the well-understood risk this exists to
+# catch: file_sharing (Drive/OneDrive/Dropbox/Box), webmail (an email
+# attachment), collaboration (a file shared in Slack/Teams). "genai.download"
+# (e.g. a Code Interpreter file output) is a real activity too but is left
+# out of this pass rather than shipped half-thought-through -- it depends on
+# whether GenAI file-output CDN domains are even present in app_catalog
+# today, which hasn't been verified.
 MEANINGFUL_CELLS: List[Tuple[str, str]] = [
     ("webmail", "send"),
+    ("webmail", "download"),
     ("collaboration", "send"),
+    ("collaboration", "download"),
     ("genai", "post"), ("genai", "ai_response"),
+    ("file_sharing", "download"),
 ]
 
 

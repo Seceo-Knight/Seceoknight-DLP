@@ -495,3 +495,255 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   return true; // async response
 });
+
+// ---------------------------------------------------------------------
+// Downloads hook -- "watch downloads FROM monitored apps" (gap-scan of
+// CyberSentinel-DLP, August 24, 2026).
+//
+// Unlike every other decision this file makes, chrome.downloads is a
+// background/service-worker-only API -- there's no content-script relay
+// step (no window.postMessage round trip to a page), which also means
+// there's no MAIN-world fetch() to intercept the way web-activity.js and
+// inject.js do for uploads/prompts. The only hook Chrome offers at all for
+// a download already under way is chrome.downloads.onCreated, and the only
+// way to stop one is chrome.downloads.cancel() -- there is no MV3
+// equivalent of a blocking onBeforeDownload event.
+//
+// So the shape here is necessarily different from every other path in this
+// file: cancel first, THEN decide, THEN either re-issue the download (a
+// brand new chrome.downloads.download() call) or leave it cancelled. Three
+// safety properties matter more here than anywhere else in the extension,
+// because getting this wrong doesn't just mis-classify traffic -- it can
+// eat a real file the user was trying to save, which is a much worse
+// failure than the Edge/ExtensionSettings incident this codebase already
+// learned its "never break what you're protecting" lesson from once:
+//
+//   1. Only http(s):// downloads from a CATALOGUED host are ever touched.
+//      blob:/data:/filesystem: downloads (e.g. a page's own "Export as
+//      CSV" button building a Blob in-page) are LEFT COMPLETELY ALONE --
+//      they can't be re-fetched from this service worker at all (blob:
+//      URLs are scoped to the page that created them), so cancelling one
+//      would just destroy it with no way to recover it. Silent pass-
+//      through, not a gap being hidden: there's genuinely nothing safe to
+//      do here.
+//   2. Every failure mode of the shadow-fetch below (network error,
+//      timeout, the source requiring a cookie/auth context this fetch
+//      doesn't have) re-issues the ORIGINAL download rather than leaving
+//      it cancelled. A DLP hiccup must never just make a legitimate
+//      download vanish with no explanation -- fail-open, same posture as
+//      every other decision path in this file.
+//   3. downloadsWeReissued tracks the exact URLs this code itself just
+//      re-triggered, so the onCreated firing a SECOND time for our own
+//      re-issued download doesn't loop back into cancelling itself.
+//
+// What this can't do: inspect a download whose bytes it can't fetch with
+// the same access the browser had (e.g. some file-sharing CDNs mint a
+// one-time signed URL tied to the exact request that triggered onCreated,
+// which a second fetch() from here may not satisfy) -- that's caught by
+// safety property 2 above and simply allowed through, logged as best-effort
+// rather than silently claiming coverage it doesn't have.
+const DOWNLOAD_CONTENT_CAP_BYTES = 10 * 1024 * 1024; // matches inject.js's MAX_CLASSIFY_BYTES
+const DOWNLOAD_FETCH_TIMEOUT_MS = 15000;
+const downloadsWeReissued = new Set(); // URLs re-triggered by reissueDownload() below, to ignore their own onCreated
+let dlSeq = 0; // own counter -- this file's other "seq" (web-activity.js's) lives in a different JS world entirely
+
+function isWatchedDownloadHost(host, catalogDomains) {
+  if (!host) return false;
+  host = host.toLowerCase();
+  return catalogDomains.some((d) => {
+    d = (d || "").toLowerCase();
+    return d && (host === d || host.endsWith("." + d));
+  });
+}
+
+// A direct native-host round trip for one download's decision -- distinct
+// from the onMessage "webActivity" handler above (that one relays a
+// content-script's request; a download has no content script involved at
+// all) and deliberately NOT added to waRequestKeys, so it can never be
+// served waRecentDecisions' cached answer for a DIFFERENT file that
+// happened to come from the same host+activity within the coalesce window.
+// Coalescing same-host background requests makes sense for a genai SPA's
+// burst of near-duplicate calls (see waRecentDecisions' own comment) -- it
+// would be a real bug here, silently reusing one file's block/allow
+// decision for a completely different file's bytes.
+function requestDownloadDecision(meta) {
+  return new Promise((resolve) => {
+    const requestId = "dl-" + Date.now() + "-" + (dlSeq++);
+    if (!port) connect();
+    if (!port) {
+      warn("downloads: no native host available -> allow (fail-open)");
+      resolve({ action: "allow", reason: "agent-unavailable" });
+      return;
+    }
+    waWaiters.set(requestId, resolve);
+    try {
+      port.postMessage(Object.assign({ type: "web_activity", requestId }, meta));
+    } catch (e) {
+      waWaiters.delete(requestId);
+      warn("downloads: postMessage to host failed:", e && e.message);
+      resolve({ action: "allow", reason: "send-failed" });
+      return;
+    }
+    setTimeout(() => {
+      if (waWaiters.has(requestId)) {
+        waWaiters.delete(requestId);
+        warn("downloads: agent timeout for", requestId);
+        resolve({ action: "allow", reason: "agent-timeout" });
+      }
+    }, WEB_ACTIVITY_TIMEOUT_MS);
+  });
+}
+
+// Reads at most capBytes from a ReadableStream without ever buffering the
+// whole response first -- response.arrayBuffer() would try to hold a
+// multi-GB download entirely in memory before we could even slice it,
+// which is exactly the kind of thing that can crash a service worker.
+// Cancels the underlying reader once the cap is hit instead of reading (and
+// discarding) the rest, so an oversized file's shadow-fetch is cheap too.
+async function readCappedBytes(stream, capBytes) {
+  if (!stream) return new Uint8Array(0);
+  const reader = stream.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.length;
+      if (total >= capBytes) {
+        try { await reader.cancel(); } catch (e) {}
+        break;
+      }
+    }
+  } finally {
+    try { reader.releaseLock(); } catch (e) {}
+  }
+  const out = new Uint8Array(Math.min(total, capBytes));
+  let offset = 0;
+  for (let i = 0; i < chunks.length && offset < out.length; i++) {
+    const c = chunks[i];
+    const n = Math.min(c.length, out.length - offset);
+    out.set(c.subarray(0, n), offset);
+    offset += n;
+  }
+  return out;
+}
+
+function bytesToBase64(bytes) {
+  let bin = "";
+  const chunk = 0x8000; // avoid a single giant String.fromCharCode.apply call
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+
+// Re-triggers the download for real, either because it was approved or
+// because inspection itself failed (fail-open — see safety property 2 in
+// this section's module comment). filename is deliberately just the
+// basename, not item.filename's full local path Chrome had already chosen
+// -- chrome.downloads.download()'s filename option is relative to the
+// default Downloads directory, and passing an absolute path back into it
+// is undefined behavior, not a shortcut.
+function reissueDownload(url, basename) {
+  downloadsWeReissued.add(url);
+  try {
+    chrome.downloads.download({ url, filename: basename || undefined, saveAs: false }, () => {
+      if (chrome.runtime.lastError) {
+        warn("downloads: re-issue failed for", url, "-", chrome.runtime.lastError.message);
+      }
+      // Small delay, not an immediate delete: onCreated for this exact
+      // re-issued download needs to see it in the set when it fires.
+      setTimeout(() => downloadsWeReissued.delete(url), 30000);
+    });
+  } catch (e) {
+    downloadsWeReissued.delete(url);
+    warn("downloads: chrome.downloads.download threw:", e && e.message);
+  }
+}
+
+async function shadowFetchAndDecide(item, host) {
+  const targetUrl = item.finalUrl || item.url;
+  const basename = ((item.filename || "").split(/[\\/]/).pop()) || "download";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_FETCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(targetUrl, { credentials: "include", signal: controller.signal });
+    if (!resp.ok) throw new Error("shadow-fetch HTTP " + resp.status);
+    const bytes = await readCappedBytes(resp.body, DOWNLOAD_CONTENT_CAP_BYTES);
+    const contentB64 = bytes.length ? bytesToBase64(bytes) : "";
+    const decision = await requestDownloadDecision({
+      host, url: targetUrl, activity: "download", fileName: basename,
+      fileSize: item.fileSize > 0 ? item.fileSize : bytes.length, contentB64,
+    });
+    log("download decision for", basename, "from", host, "->", decision.action);
+    if (decision.action === "block") {
+      // Left cancelled -- nothing more to do. The native host has already
+      // logged the block event (see handle_web_activity in skdlp_host.py),
+      // same as every other blocked path in this product.
+      return;
+    }
+    // allow/alert/redact all result in the file actually reaching disk --
+    // "redact" has no meaning for arbitrary downloaded bytes (there's no
+    // text stream to substitute into, unlike a fetch body/response; see
+    // WebActivityControlPolicyForm.tsx's per-row action restriction on the
+    // dashboard, which doesn't even offer "redact" for download cells), so
+    // treat it the same as "allow" here rather than silently dropping the
+    // file for an action that was never meant to apply to it.
+    reissueDownload(targetUrl, basename);
+  } catch (e) {
+    // Couldn't fetch/read the file ourselves for whatever reason (network
+    // error, our fetch abort timeout, a signed one-time URL that doesn't
+    // survive a second request) -- fail open per this section's safety
+    // property 2: the user still gets their file, just without a content
+    // inspection this particular time.
+    warn("downloads: shadow-fetch failed for", basename, "from", host, "-", e && e.message, "- allowing through");
+    reissueDownload(targetUrl, basename);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function handleDownloadCreated(item) {
+  if (!item || typeof item.url !== "string") return;
+  if (downloadsWeReissued.has(item.url)) {
+    // Our own re-issued download completing the round trip -- not a new
+    // download to evaluate.
+    downloadsWeReissued.delete(item.url);
+    return;
+  }
+  if (!/^https?:\/\//i.test(item.url)) {
+    // blob:/data:/filesystem:/etc. -- see safety property 1 above. Never
+    // touched, not even a cancel attempt.
+    return;
+  }
+
+  chrome.storage.local.get(["skdlpAppCatalog", "skdlpWebActivityEnforced"], (store) => {
+    const catalog = Array.isArray(store.skdlpAppCatalog) ? store.skdlpAppCatalog : [];
+    if (!store.skdlpWebActivityEnforced || !catalog.length) return; // feature not configured -- zero cost
+
+    let host = "";
+    try { host = new URL(item.referrer || item.url).hostname; } catch (e) {}
+    if (!isWatchedDownloadHost(host, catalog)) return; // not from a catalogued app -- normal download, untouched
+
+    chrome.downloads.cancel(item.id, () => {
+      if (chrome.runtime.lastError) {
+        // Couldn't cancel (already finished, already gone, etc.) -- too
+        // late to intercept this one; do nothing further rather than
+        // inspecting a file that's already fully saved with no way to
+        // retroactively block it.
+        warn("downloads: could not cancel", item.id, "-", chrome.runtime.lastError.message);
+        return;
+      }
+      log("downloads: intercepted download from watched host", host, "- inspecting before re-issuing");
+      shadowFetchAndDecide(item, host);
+    });
+  });
+}
+
+try {
+  chrome.downloads.onCreated.addListener(handleDownloadCreated);
+} catch (e) {
+  warn("chrome.downloads unavailable -- downloads hook inactive:", e && e.message);
+}

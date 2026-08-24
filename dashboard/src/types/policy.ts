@@ -244,18 +244,24 @@ export interface EmailConfig {
 // same "config saved verbatim" pattern printer_control/
 // file_identity_denylist already use).
 //
-// Only the 4 currently-meaningful/enforced cells are exposed here --
-// MEANINGFUL_CELLS in web_activity.py deliberately leaves upload/attach/
-// download unwired (see that file's docstring), so this form never shows a
-// control that silently does nothing.
+// Only the currently-meaningful/enforced cells are exposed here --
+// MEANINGFUL_CELLS in web_activity.py deliberately leaves upload/attach (and
+// genai.download) unwired (see that file's docstring), so this form never
+// shows a control that silently does nothing. "download" cells (gap-scan of
+// CyberSentinel-DLP, August 24, 2026) were added for the three categories
+// where the browser extension's chrome.downloads hook actually fires --
+// file_sharing/webmail/collaboration -- see background.js.
 export type WebActivityAction = 'allow' | 'alert' | 'block' | 'redact'
 
 export interface WebActivityControlConfig {
   matrix: {
     'webmail.send'?: WebActivityAction
+    'webmail.download'?: WebActivityAction
     'collaboration.send'?: WebActivityAction
+    'collaboration.download'?: WebActivityAction
     'genai.post'?: WebActivityAction
     'genai.ai_response'?: WebActivityAction
+    'file_sharing.download'?: WebActivityAction
   }
 }
 

@@ -8,6 +8,62 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## ✨ Downloads hook: watch downloads FROM monitored apps (gap-scan of CyberSentinel-DLP, August 24, 2026)
+
+New Web Activity Control capability. Until now, "download" was a real
+activity in the shared vocabulary (`app/core/web_activity.py`) that the
+server-side evaluator already handled correctly, but nothing in the browser
+extension ever sent it — file-sharing/webmail/collaboration downloads
+passed through completely unmonitored while uploads/prompts/messages to the
+same destinations were fully covered.
+
+**Server side** (`server/app/core/web_activity.py`, `dashboard/src/types/policy.ts`,
+`WebActivityControlPolicyForm.tsx`): added `(file_sharing, download)`,
+`(webmail, download)`, `(collaboration, download)` to `MEANINGFUL_CELLS` and
+the dashboard matrix. No server-side evaluation logic changed — the
+`/agents/{id}/web-activity/evaluate` endpoint and `skdlp_host.py`'s
+`web_activity` message handler were already fully generic per-activity;
+only the vocabulary needed extending. `genai.download` deliberately left
+out — not verified against real GenAI file-output domains yet. The dashboard
+form doesn't offer "Redact" for download cells (no text stream to
+substitute into for arbitrary downloaded bytes).
+
+**Extension side** (`background.js`): `chrome.downloads` is the only hook
+Chrome offers for a download already in progress, and `cancel()` is the
+only way to stop one — there's no MV3 equivalent of a blocking
+`onBeforeDownload`. So the shape here is cancel-first: `onCreated` fires →
+if the initiating host (referrer, falling back to the URL itself) is in the
+cached app catalog → `chrome.downloads.cancel()` → shadow-`fetch()` the
+same URL ourselves (capped at 10MB read via a streaming reader, matching
+`inject.js`'s existing upload cap, never buffering a whole multi-GB file
+into memory) → send it through the same `web_activity` native-host round
+trip as post/send/ai_response → block (leave cancelled) or
+allow/alert/redact (re-issue via a fresh `chrome.downloads.download()`).
+
+Three safety properties, given the Edge/`ExtensionSettings` incident's own
+lesson about this codebase never being allowed to break what it's
+protecting:
+1. Only `http(s)://` downloads from a catalogued host are ever touched.
+   `blob:`/`data:` downloads (e.g. a page's own "Export as CSV" button) are
+   left completely alone — they can't be re-fetched from a service worker
+   at all, so cancelling one would just destroy it with no way to recover.
+2. Every failure of the shadow-fetch (network error, 15s timeout, a
+   one-time signed URL that doesn't survive a second request) re-issues the
+   *original* download rather than leaving it cancelled — fail-open, same
+   posture as every other decision path in this extension.
+3. A `downloadsWeReissued` set tracks URLs this code itself just
+   re-triggered, so the re-issued download's own `onCreated` doesn't loop
+   back into cancelling itself.
+
+Verified with a mocked `chrome`/`fetch` harness (not a real browser, but
+exercises the actual file's logic): watched-host block, watched-host allow
+with correct basename-only re-issue filename, unwatched-host pass-through,
+shadow-fetch failure fail-open re-issue, and the re-issue-echo guard all
+behave as designed. Adds the `downloads` permission to `manifest.json`.
+Extension version bumped 1.0.5 → 1.0.6.
+
+---
+
 ## ✨ `wantVersion` push-trigger + update-check throttle fix (gap-scan of CyberSentinel-DLP 2.9.1, August 24, 2026)
 
 Second-round gap-scan of CyberSentinel-DLP's repo turned up a refinement to

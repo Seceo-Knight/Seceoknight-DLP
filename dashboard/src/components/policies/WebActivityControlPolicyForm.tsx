@@ -1,7 +1,7 @@
 'use client'
 
 import { WebActivityControlConfig, WebActivityAction } from '@/types/policy'
-import { Bot, Mail, Users } from 'lucide-react'
+import { Bot, Mail, Users, Cloud } from 'lucide-react'
 
 interface WebActivityControlPolicyFormProps {
   config: WebActivityControlConfig
@@ -10,16 +10,28 @@ interface WebActivityControlPolicyFormProps {
 
 // One row per currently-meaningful (category, activity) cell --
 // MEANINGFUL_CELLS in server/app/core/web_activity.py. Deliberately NOT a
-// full 4-category x 6-activity matrix grid: upload/attach/download aren't
-// wired to anything yet (the browser extension's file uploads still go
-// through the older Cloud Upload Guard path to avoid double-logging), so a
-// control for them would look configurable but never actually fire. Only
-// showing cells that do something real.
+// full 4-category x 6-activity matrix grid: upload/attach aren't wired to
+// anything yet (the browser extension's file uploads still go through the
+// older Cloud Upload Guard path to avoid double-logging), so a control for
+// them would look configurable but never actually fire. "download" rows
+// (gap-scan of CyberSentinel-DLP, August 24, 2026) ARE wired -- the
+// extension's chrome.downloads hook (background.js) intercepts, classifies,
+// and re-issues downloads from these three categories -- but only these
+// three; genai.download is left out until it's actually been verified
+// against real GenAI file-output domains. Only showing cells that do
+// something real.
 const rows: Array<{
   key: keyof WebActivityControlConfig['matrix']
   label: string
   description: string
   icon: typeof Bot
+  // Restricts which of the 4 actionOptions below are offered for this row.
+  // Omitted = all 4. "redact" only makes sense where there's a text stream
+  // to substitute into (a fetch request/response body) -- a download is
+  // arbitrary bytes hitting local disk with nothing to substitute text
+  // into, so offering it here would be exactly the "control that silently
+  // does nothing" the comment above says this form avoids.
+  actions?: WebActivityAction[]
 }> = [
   {
     key: 'genai.post',
@@ -40,10 +52,31 @@ const rows: Array<{
     icon: Mail,
   },
   {
+    key: 'webmail.download',
+    label: 'Webmail — Attachment Downloaded',
+    description: 'A file downloaded from an email attachment in Gmail, Outlook Web, etc.',
+    icon: Mail,
+    actions: ['allow', 'alert', 'block'],
+  },
+  {
     key: 'collaboration.send',
     label: 'Collaboration — Message Sent',
     description: 'A composed message submitted via Slack, Teams, Discord, WhatsApp Web, etc.',
     icon: Users,
+  },
+  {
+    key: 'collaboration.download',
+    label: 'Collaboration — File Downloaded',
+    description: 'A file downloaded from a shared link/attachment in Slack, Teams, Discord, etc.',
+    icon: Users,
+    actions: ['allow', 'alert', 'block'],
+  },
+  {
+    key: 'file_sharing.download',
+    label: 'File Sharing — File Downloaded',
+    description: 'A file downloaded from Google Drive, OneDrive, Dropbox, Box, etc. to local disk',
+    icon: Cloud,
+    actions: ['allow', 'alert', 'block'],
   },
 ]
 
@@ -72,15 +105,17 @@ export default function WebActivityControlPolicyForm({ config: rawConfig, onChan
   return (
     <div className="space-y-6">
       <div className="p-4 bg-amber-900/20 border border-amber-500/30 rounded-lg text-sm text-amber-200/90">
-        Detects and controls sensitive-data leakage through GenAI assistants and webmail/collaboration tools, via
-        the browser extension. Each row below is independent — leave a row unset (&quot;Not configured&quot;) to
-        take no action on that activity. &quot;Block&quot; and &quot;Alert&quot; only actually fire when the
-        content is genuinely sensitive (Confidential/Restricted); otherwise traffic passes through untouched.
+        Detects and controls sensitive-data leakage through GenAI assistants, webmail/collaboration tools, and file
+        downloads from managed cloud apps, via the browser extension. Each row below is independent — leave a row
+        unset (&quot;Not configured&quot;) to take no action on that activity. &quot;Block&quot; and
+        &quot;Alert&quot; only actually fire when the content is genuinely sensitive (Confidential/Restricted);
+        otherwise traffic passes through untouched.
       </div>
 
       <div className="space-y-3">
-        {rows.map(({ key, label, description, icon: Icon }) => {
+        {rows.map(({ key, label, description, icon: Icon, actions }) => {
           const current = config.matrix[key] || ''
+          const optionsForRow = actions ? actionOptions.filter((opt) => actions.includes(opt.value)) : actionOptions
           return (
             <div
               key={key}
@@ -109,7 +144,7 @@ export default function WebActivityControlPolicyForm({ config: rawConfig, onChan
                 >
                   Not configured
                 </button>
-                {actionOptions.map((opt) => (
+                {optionsForRow.map((opt) => (
                   <button
                     type="button"
                     key={opt.value}
@@ -138,8 +173,9 @@ export default function WebActivityControlPolicyForm({ config: rawConfig, onChan
 
       <div className="p-3 bg-gray-900/40 border border-gray-700 rounded-lg text-xs text-muted-foreground/70">
         Requires the SeceoKnight browser extension (with Web Activity Control support) to be installed on the
-        target endpoint(s). File uploads/attachments/downloads to these same destinations are covered separately
-        by Cloud Upload Guard, not by this policy.
+        target endpoint(s). File uploads/attachments TO these destinations are covered separately by Cloud Upload
+        Guard, not by this policy — but the Download rows above ARE this policy: the extension&apos;s
+        chrome.downloads hook cancels, classifies, and re-issues (or blocks) matching downloads in real time.
       </div>
     </div>
   )
