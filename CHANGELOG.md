@@ -48,6 +48,50 @@ of this pass to keep it bounded -- can follow up if wanted.
 
 ---
 
+## 🟢 Gap-scan: CyberSentinel-DLP extension update-mechanism fixes (August 26, 2026)
+
+Continuing the gap-scan into their installer-reliability cluster (8 commits,
+Aug 19) -- the same class of problem this session just fought by hand on a
+real endpoint (extension stuck on 1.0.6, self-update never taking, no
+DevTools access to see why).
+
+**cd070e7 "answer HEAD, and exempt it from the IP allowlist"** -- applies
+directly. `extension.py`'s three routes (update.xml, /info, /{filename})
+were GET-only; a HEAD reachability probe got 405, or fell through to a 404
+on update.xml, reporting a perfectly healthy feed as down. Fixed: all three
+now answer GET and HEAD (`@router.api_route(..., methods=["GET", "HEAD"])`).
+SeceoKnight's IP-allowlist exemption for this prefix was never method-gated
+to begin with, so unlike CyberSentinel's original bug there was no second
+layer to fix.
+
+**42e827f "Update said agent not detected for an agent that was running"**
+-- already fixed. `Update-Agent` in manage-agent.ps1 already retries the
+post-restart process check instead of a single 3-second look, with a
+comment dated August 19 crediting this exact CyberSentinel commit. No
+change needed.
+
+**63d77f5 / 261f852 / 90a2608 / 9e01900 / 996d2dd / c170346** (in-place
+extension update, browser-close-without-force-kill, a Deploy/Repair/Update/
+Diagnose menu) -- don't map cleanly. CyberSentinel's installer treats the
+extension as something it imperatively deploys/repairs; SeceoKnight's
+force-install is entirely reconcile-driven by the Browser Extension Guard
+scheduled task, with no equivalent imperative action to patch. That
+architectural gap is exactly what this session's live debugging hit: there
+was no "make it try again right now" button, only a manual registry
+remove/re-add. Added one: manage-agent.ps1's Browser controls menu gets a
+new **[3] Force extension reinstall**, which removes the
+ExtensionInstallForcelist entry (Chrome/Edge auto-uninstall on next policy
+read), immediately triggers the guard task to re-add it, and tells the
+operator to close/reopen the browser -- the exact procedure this session
+worked out by hand, now a menu option instead of typed-out registry
+commands. Deliberately does not force-kill the browser, on the same
+"don't break what you're protecting" reasoning as the downloads-hook fix
+above -- CyberSentinel's own 90a2608 documents real data loss from a
+2-second force-kill grace window, so this waits for the user to close it
+themselves.
+
+---
+
 ## 🟡 Follow-up same day: real Drive download went undetected -- missing catalog domain (August 26, 2026)
 
 Verification test on the test endpoint after the fix above (real extension

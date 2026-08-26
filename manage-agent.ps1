@@ -390,6 +390,87 @@
     $out
   }
 
+  # Forces a clean re-issue of the ExtensionInstallForcelist entry, then
+  # immediately kicks the guard task so it rewrites it -- instead of waiting
+  # up to 2 minutes for the task's own schedule.
+  #
+  # Added from this engagement's own live debugging (August 26 2026), not a
+  # line-for-line CyberSentinel-DLP port -- their equivalent problem (an
+  # extension stuck on an old version, self-update and every UI Update
+  # button failing to move it) was fixed in their installer script's
+  # Deploy/Repair flow, but SeceoKnight has no imperative "repair the
+  # extension" action at all: force-install is entirely reconcile-driven by
+  # the Browser Extension Guard task, with nothing that lets an operator
+  # force a fresh cycle on demand. On a real endpoint this session, Chrome
+  # DevTools access was itself blocked for this (force-installed) extension,
+  # so there was no way to inspect *why* it was stuck -- the only thing that
+  # actually worked was removing the ExtensionInstallForcelist entry
+  # (Chrome/Edge auto-uninstall on the next policy read), letting the guard
+  # task re-add it (a genuinely fresh install, not an in-place patch), then
+  # closing and reopening the browser. This function is exactly that
+  # procedure, so nobody has to type out raw registry commands by hand a
+  # second time.
+  #
+  # Deliberately does NOT force-kill the browser (CyberSentinel hit real
+  # data loss doing that with too short a grace window -- see their commit
+  # 90a2608). Removing the registry value is enough; Chrome/Edge only need
+  # to be closed and reopened once afterwards, on the user's own schedule.
+  function Reset-ExtensionForceInstall {
+    $extStatus = Get-ExtensionForceInstallStatus
+    if (-not $extStatus.ExtensionId) {
+      Err '   No extension id cached yet -- nothing to reset. Run [1] Install/[2] Update first.'
+      return
+    }
+    if (@($extStatus.Forced).Count -eq 0) {
+      Warn '   No browser currently shows a force-install entry for this extension -- nothing to remove.'
+      Warn '   If the extension still looks stuck, just restart the Browser Extension Guard task below.'
+    } else {
+      Write-Host ''
+      Warn "   This removes the ExtensionInstallForcelist entry for $($extStatus.ExtensionId) from:"
+      foreach ($name in $extStatus.Forced) { Warn "     - $name" }
+      Warn '   Chrome/Edge will auto-uninstall the extension on their next policy read, then the'
+      Warn '   guard task (triggered immediately below) re-adds the entry for a genuinely fresh install.'
+      Warn '   You will need to fully close and reopen each affected browser afterwards.'
+      $confirm = Read-Host "   Type 'y' to confirm (anything else cancels)"
+      if ($confirm -ne 'y' -and $confirm -ne 'Y') {
+        Warn '   Cancelled -- no changes made.'
+        return
+      }
+      foreach ($b in $BROWSERS) {
+        if ($extStatus.Forced -notcontains $b.Name) { continue }
+        $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
+        if (-not (Test-Path $fl)) { continue }
+        $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
+        $removed = $false
+        foreach ($p in $props.PSObject.Properties) {
+          if ($p.Name -like 'PS*') { continue }
+          if ($p.Value -like "$($extStatus.ExtensionId);*") {
+            Remove-ItemProperty -Path $fl -Name $p.Name -ErrorAction SilentlyContinue
+            $removed = $true
+          }
+        }
+        if ($removed) { Ok "   $($b.Name): force-install entry removed." }
+        else { Warn "   $($b.Name): entry not found when removing (already gone?)." }
+      }
+    }
+    Write-Host ''
+    $task = Get-ScheduledTask -TaskName $EXTGUARD_TASK -ErrorAction SilentlyContinue
+    if ($task) {
+      try {
+        Start-ScheduledTask -TaskName $EXTGUARD_TASK -ErrorAction Stop
+        Ok '   Browser Extension Guard task triggered -- it will re-add the entry within a few seconds.'
+      } catch {
+        Err "   Could not trigger the guard task: $($_.Exception.Message)"
+        Warn "   It will still run on its own schedule (up to 2 minutes)."
+      }
+    } else {
+      Warn '   Browser Extension Guard task is not installed -- run [1] Install/[2] Update first.'
+    }
+    Write-Host ''
+    Warn '   Now fully close and reopen each affected browser (not just a tab/window) to complete'
+    Warn '   the reinstall. Verify afterwards with chrome://extensions or edge://extensions.'
+  }
+
   function Show-BrowserControls {
     Write-Host ''
     Info 'Browser controls'
@@ -480,9 +561,10 @@
     Write-Host ''
     Write-Host '   [1] Disable private browsing ' -ForegroundColor Yellow -NoNewline; Write-Host '- closes the "open an Incognito window" DLP bypass'
     Write-Host '   [2] Re-allow private browsing' -ForegroundColor Gray   -NoNewline; Write-Host '- restores the browser default'
-    Write-Host '   [3] Back                     ' -ForegroundColor Gray   -NoNewline; Write-Host '- return to the main menu'
+    Write-Host '   [3] Force extension reinstall' -ForegroundColor Yellow -NoNewline; Write-Host '- extension stuck / wrong version and self-update is not fixing it'
+    Write-Host '   [4] Back                     ' -ForegroundColor Gray   -NoNewline; Write-Host '- return to the main menu'
     Write-Host ''
-    $bc = Read-Host '   Choose an option (1-3)'
+    $bc = Read-Host '   Choose an option (1-4)'
     switch ($bc.Trim()) {
       '1' {
         Write-Host ''
@@ -504,6 +586,10 @@
           if ($r.Applied) { Ok "   $($r.Name) ($($r.Label)): restored to default" }
           else { Err "   $($r.Name) ($($r.Label)): FAILED to restore$(if ($r.Error) { " - $($r.Error)" })" }
         }
+      }
+      '3' {
+        Write-Host ''
+        Reset-ExtensionForceInstall
       }
       default {}
     }
