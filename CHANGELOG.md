@@ -8,6 +8,38 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔧 Debugging aid: dlp-host.log now records every request, plus a debug relay from the extension (August 26, 2026)
+
+Found while validating the downloads hook (previous entry) on a real endpoint:
+Chrome's DevTools "Inspect views" appears to be blocked entirely for THIS
+extension specifically -- across multiple attempts, in Chrome, with
+Developer mode on, "service worker" never became clickable, before or
+immediately after triggering a download that should have woken it. Working
+theory: a Chrome enterprise-policy restriction on inspecting
+force-installed (`ExtensionInstallForcelist`) extensions, as opposed to
+ones loaded via "Load unpacked". Whatever the cause, it made the live
+console entirely unusable for confirming whether client-side code was even
+running.
+
+Two changes, both purely additive (no behavior change):
+- `skdlp_host.py` now logs every `web_activity`/`get_app_catalog` request
+  and its outcome unconditionally, not just failures -- previously only
+  errors were logged, so a request that arrived and was silently
+  fail-opened to "allow" looked identical in the log to a request that was
+  never sent at all.
+- A new `debug_log` native-message type lets the extension relay its own
+  step-by-step progress into `dlp-host.log` directly (`background.js`'s new
+  `dlog()` helper, used throughout the downloads hook: onCreated fired,
+  catalog/enforced check, host resolution, cancel, shadow-fetch
+  request/response, decision, re-issue). Since `dlp-host.log` is a plain
+  file with no DevTools dependency, this sidesteps the inspection-blocking
+  issue entirely going forward, for this feature and whatever needs
+  debugging next.
+
+Extension version bumped 1.0.6 → 1.0.7 to ship `dlog()`.
+
+---
+
 ## ✨ Downloads hook: watch downloads FROM monitored apps (gap-scan of CyberSentinel-DLP, August 24, 2026)
 
 New Web Activity Control capability. Until now, "download" was a real

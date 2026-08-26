@@ -464,6 +464,21 @@ def main():
             break
         if msg is None:
             break
+        if msg.get("type") == "debug_log":
+            # Debug relay from the extension (added August 26 2026): Chrome
+            # appears to block DevTools "Inspect views" for THIS extension
+            # specifically because it's force-installed via enterprise
+            # policy rather than loaded unpacked -- a real, observed gap
+            # during the downloads-hook rollout where the console genuinely
+            # could not be reached at all, in any Chrome version tried, to
+            # confirm whether client-side code was even running. Since
+            # dlp-host.log is a plain file on disk, it's reachable
+            # regardless of that restriction. Extension-side call sites for
+            # this are in background.js's downloads hook; kept generic
+            # (just a free-text message) so it's useful for whatever needs
+            # debugging next, not hardcoded to this one feature.
+            log("[ext] %s" % (msg.get("message") or ""))
+            continue
         if msg.get("type") == "ping":
             # Self-test from the extension: confirm the host is reachable.
             log("ping received -> pong")
@@ -480,6 +495,13 @@ def main():
             # Web Activity Control's watched-destination list + whether the
             # feature is configured at all — see fetch_app_catalog().
             domains, enforced = fetch_app_catalog()
+            # Logged unconditionally (debugging aid, August 26 2026) -- the
+            # downloads hook silently does nothing at all when enforced is
+            # False or domains is empty (by design, see background.js), so
+            # this is the one place that can confirm from the log alone
+            # whether that gate is actually open before blaming anything
+            # downstream of it.
+            log("get_app_catalog -> %d domains, enforced=%s" % (len(domains), enforced))
             send_message({"type": "app_catalog", "domains": domains, "enforced": enforced})
             continue
         if msg.get("type") == "web_activity":
@@ -491,8 +513,23 @@ def main():
             req_id = msg.get("requestId")
             meta = {k: msg.get(k) for k in
                     ("host", "url", "activity", "content", "fileName", "fileSize", "mimeType", "contentB64")}
+            # Success-path logging (debugging aid, August 26 2026): every
+            # other log() call in this file only fires on error, which made
+            # a real "did the extension even try?" question undiagnosable
+            # from dlp-host.log alone during the downloads-hook rollout --
+            # the log stayed completely silent whether the extension never
+            # sent anything, or sent it and got a quiet "allow" back. This
+            # logs every request received and its outcome unconditionally,
+            # so the log file alone can answer that question from now on.
+            log("web_activity request %s: activity=%s host=%s file=%s content_len=%d has_b64=%s" % (
+                req_id, meta.get("activity"), meta.get("host"), meta.get("fileName"),
+                len(meta.get("content") or ""), bool(meta.get("contentB64")),
+            ))
             try:
                 action, category, level, reason, redacted_content, labels_redacted = handle_web_activity(meta)
+                log("web_activity request %s -> action=%s category=%s level=%s reason=%s" % (
+                    req_id, action, category, level, reason,
+                ))
             except Exception as e:
                 log("handle_web_activity error: %s" % e)
                 action, category, level, reason = "allow", None, None, "host-error"

@@ -556,6 +556,26 @@ function isWatchedDownloadHost(host, catalogDomains) {
   });
 }
 
+// Debug relay (added August 26 2026): mirrors log() to the native host's
+// own dlp-host.log via a "debug_log" message, in addition to the normal
+// console. Chrome appears to block "Inspect views" DevTools access for
+// THIS extension specifically -- confirmed during the downloads-hook
+// rollout that its service worker console could not be opened at all, in
+// any Chrome version tried, despite Developer mode being on; the working
+// theory is a policy restriction on force-installed extensions. dlp-host.log
+// has no such restriction (it's a plain file), so every step of the
+// downloads hook below also reports here -- deliberately verbose, since the
+// whole point is answering "did this even run?" from a channel that's
+// actually reachable. Fire-and-forget: never awaited, never blocks the
+// decision path on whether the relay itself succeeds.
+function dlog(message) {
+  log(message);
+  try {
+    if (!port) connect();
+    if (port) port.postMessage({ type: "debug_log", message: String(message) });
+  } catch (e) {}
+}
+
 // A direct native-host round trip for one download's decision -- distinct
 // from the onMessage "webActivity" handler above (that one relays a
 // content-script's request; a download has no content script involved at
@@ -668,16 +688,20 @@ async function shadowFetchAndDecide(item, host) {
   const basename = ((item.filename || "").split(/[\\/]/).pop()) || "download";
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DOWNLOAD_FETCH_TIMEOUT_MS);
+  dlog("downloads: shadow-fetching " + targetUrl);
   try {
     const resp = await fetch(targetUrl, { credentials: "include", signal: controller.signal });
+    dlog("downloads: shadow-fetch responded status=" + resp.status + " ok=" + resp.ok);
     if (!resp.ok) throw new Error("shadow-fetch HTTP " + resp.status);
     const bytes = await readCappedBytes(resp.body, DOWNLOAD_CONTENT_CAP_BYTES);
+    dlog("downloads: read " + bytes.length + " bytes for " + basename);
     const contentB64 = bytes.length ? bytesToBase64(bytes) : "";
+    dlog("downloads: requesting decision for " + basename + " from " + host);
     const decision = await requestDownloadDecision({
       host, url: targetUrl, activity: "download", fileName: basename,
       fileSize: item.fileSize > 0 ? item.fileSize : bytes.length, contentB64,
     });
-    log("download decision for", basename, "from", host, "->", decision.action);
+    dlog("download decision for " + basename + " from " + host + " -> " + decision.action + " (" + (decision.reason || "") + ")");
     if (decision.action === "block") {
       // Left cancelled -- nothing more to do. The native host has already
       // logged the block event (see handle_web_activity in skdlp_host.py),
@@ -698,7 +722,7 @@ async function shadowFetchAndDecide(item, host) {
     // survive a second request) -- fail open per this section's safety
     // property 2: the user still gets their file, just without a content
     // inspection this particular time.
-    warn("downloads: shadow-fetch failed for", basename, "from", host, "-", e && e.message, "- allowing through");
+    dlog("downloads: shadow-fetch failed for " + basename + " from " + host + " - " + (e && e.message) + " - allowing through");
     reissueDownload(targetUrl, basename);
   } finally {
     clearTimeout(timer);
@@ -706,26 +730,35 @@ async function shadowFetchAndDecide(item, host) {
 }
 
 function handleDownloadCreated(item) {
-  if (!item || typeof item.url !== "string") return;
+  dlog("downloads.onCreated fired: url=" + (item && item.url) + " referrer=" + (item && item.referrer));
+  if (!item || typeof item.url !== "string") { dlog("downloads: no usable item/url, ignoring"); return; }
   if (downloadsWeReissued.has(item.url)) {
     // Our own re-issued download completing the round trip -- not a new
     // download to evaluate.
+    dlog("downloads: this is our own re-issued download completing, ignoring");
     downloadsWeReissued.delete(item.url);
     return;
   }
   if (!/^https?:\/\//i.test(item.url)) {
     // blob:/data:/filesystem:/etc. -- see safety property 1 above. Never
     // touched, not even a cancel attempt.
+    dlog("downloads: non-http(s) URL scheme, leaving untouched: " + item.url);
     return;
   }
 
   chrome.storage.local.get(["skdlpAppCatalog", "skdlpWebActivityEnforced"], (store) => {
     const catalog = Array.isArray(store.skdlpAppCatalog) ? store.skdlpAppCatalog : [];
-    if (!store.skdlpWebActivityEnforced || !catalog.length) return; // feature not configured -- zero cost
+    dlog("downloads: catalog check - enforced=" + store.skdlpWebActivityEnforced + " domains=" + catalog.length);
+    if (!store.skdlpWebActivityEnforced || !catalog.length) {
+      dlog("downloads: feature not configured (no active Web Activity Control policy, or catalog empty) -- skipping");
+      return; // feature not configured -- zero cost
+    }
 
     let host = "";
     try { host = new URL(item.referrer || item.url).hostname; } catch (e) {}
-    if (!isWatchedDownloadHost(host, catalog)) return; // not from a catalogued app -- normal download, untouched
+    const watched = isWatchedDownloadHost(host, catalog);
+    dlog("downloads: resolved host=" + host + " watched=" + watched);
+    if (!watched) return; // not from a catalogued app -- normal download, untouched
 
     chrome.downloads.cancel(item.id, () => {
       if (chrome.runtime.lastError) {
@@ -733,10 +766,10 @@ function handleDownloadCreated(item) {
         // late to intercept this one; do nothing further rather than
         // inspecting a file that's already fully saved with no way to
         // retroactively block it.
-        warn("downloads: could not cancel", item.id, "-", chrome.runtime.lastError.message);
+        dlog("downloads: could not cancel " + item.id + " - " + chrome.runtime.lastError.message);
         return;
       }
-      log("downloads: intercepted download from watched host", host, "- inspecting before re-issuing");
+      dlog("downloads: intercepted download from watched host " + host + " - inspecting before re-issuing");
       shadowFetchAndDecide(item, host);
     });
   });
