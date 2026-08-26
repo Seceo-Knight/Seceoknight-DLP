@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowUp, ArrowDown, Minus, RefreshCw, X, ShieldQuestion } from 'lucide-react'
+import { AlertTriangle, ArrowUp, ArrowDown, Minus, RefreshCw, ShieldQuestion } from 'lucide-react'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
@@ -10,6 +10,7 @@ import {
   type UserRiskScore, type RiskLevel,
 } from '@/lib/risk-scoring-api'
 import { usePagination } from '@/lib/hooks/useTableState'
+import Modal, { ModalHeader } from '@/components/ui/Modal'
 import { DataPagination } from '@/components/ui/pagination'
 
 // SeceoKnight-original -- not ported from CyberSentinel-DLP (task #120).
@@ -176,16 +177,23 @@ function DetailModal({ userEmail, onClose }: { userEmail: string; onClose: () =>
   })
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-cs-panel rounded-cs-card border border-cs-hair shadow-card w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-cs-hair sticky top-0 bg-cs-panel">
-          <h2 className="text-lg font-semibold text-cs-ink flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-cs-indigo" />{userEmail}
-          </h2>
-          <button className="p-1 rounded-cs-sm hover:bg-cs-hair-2" onClick={onClose}><X className="h-4 w-4 text-cs-muted" /></button>
-        </div>
-        <div className="px-5 py-4">
+    <Modal
+      open
+      onClose={onClose}
+      size="xl"
+      label={userEmail}
+      header={
+        <ModalHeader
+          title={
+            <span className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-cs-indigo" />
+              {userEmail}
+            </span>
+          }
+          onClose={onClose}
+        />
+      }
+    >
           {detailQ.isLoading && <LoadingSpinner size="md" />}
           {detailQ.error && <ErrorMessage message="Failed to load detail" retry={() => detailQ.refetch()} />}
           {detailQ.data && (
@@ -233,8 +241,6 @@ function DetailModal({ userEmail, onClose }: { userEmail: string; onClose: () =>
               </div>
             </div>
           )}
-        </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

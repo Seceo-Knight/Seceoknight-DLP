@@ -6,11 +6,32 @@ import { API_URL } from '@/lib/config'
 /**
  * SSO Callback page — mounted at /auth/sso.
  *
- * The SIEM redirects here with ?token=<exchange-token>. On mount we POST the
- * token to the backend /auth/sso/exchange endpoint which verifies it against
- * DLP_SSO_SECRET, looks up the user, and returns standard DLP access+refresh
- * tokens. We then decode the access token client-side (base64 parse — no
- * library needed) to populate the auth store and redirect to /dashboard.
+ * The SIEM redirects here with the exchange token. On mount we POST it to
+ * the backend /auth/sso/exchange endpoint, which verifies the signature
+ * (RS256 via JWKS, or DLP_SSO_SECRET as the HS256 fallback — see
+ * server/app/core/sso_verify.py), looks up the user, and returns standard
+ * DLP access+refresh tokens. We then decode the access token client-side
+ * (base64 parse — no library needed) to populate the auth store and
+ * redirect to /dashboard.
+ *
+ * WHERE THE TOKEN IS READ FROM, AND WHY THE FRAGMENT IS PREFERRED
+ * -----------------------------------------------------------------
+ * Ported from CyberSentinel-DLP (commit 074266b, gap-scan of August 26
+ * 2026). A URL fragment (#token=...) is never transmitted to a server. A
+ * query string (?token=...) is, and so it is written verbatim into the
+ * dashboard's nginx access log by the default log format — which is a
+ * live credential sitting in a log file that gets rotated, shipped and
+ * retained long after the token's short life. It also lands in browser
+ * history and in the Referer header of anything the page loads afterwards.
+ *
+ * So the fragment is read first and the query string is accepted as a
+ * fallback, which keeps a SIEM that already redirects with ?token= working
+ * unchanged while giving it a strictly better option to move to.
+ *
+ * Either way the token is stripped from the address bar before the
+ * exchange is attempted: it is single-use, so what is left behind is only
+ * useful to someone reading over a shoulder or a synced history, never to
+ * the user.
  */
 
 /** Decode a JWT payload WITHOUT verifying the signature (client-side only). */
@@ -34,11 +55,19 @@ export default function SSOCallback() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    const exchangeToken = searchParams.get('token')
+    // Fragment first (never leaves the browser), query string as the fallback.
+    const fragment = new URLSearchParams(
+      window.location.hash.replace(/^#/, '')
+    ).get('token')
+    const exchangeToken = fragment || searchParams.get('token')
     if (!exchangeToken) {
       setError('Missing SSO token in URL')
       return
     }
+
+    // Scrub it from the address bar before doing anything with it, so it
+    // is not left in history or handed to a Referer on the next navigation.
+    window.history.replaceState(null, '', window.location.pathname)
 
     let cancelled = false
 

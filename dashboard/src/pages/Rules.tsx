@@ -10,11 +10,13 @@ import { getRules, getRuleStatistics, deleteRule, toggleRule, type Rule } from '
 import { formatRelativeTime, cn } from '@/lib/utils'
 import { usePagination } from '@/lib/hooks/useTableState'
 import { DataPagination } from '@/components/ui/pagination'
+import { useConfirm } from '@/components/ui/Modal'
 import toast from 'react-hot-toast'
 
 type FilterType = 'all' | 'regex' | 'keyword' | 'dictionary'
 
 export default function Rules() {
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const [filter, setFilter] = useState<FilterType>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedRule, setSelectedRule] = useState<Rule | null>(null)
@@ -64,7 +66,11 @@ export default function Rules() {
   })
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete rule "${name}"?`)) {
+    if (!(await confirm({
+      title: 'Delete rule',
+      confirmLabel: 'Delete',
+      children: `Are you sure you want to delete rule "${name}"?`,
+    }))) {
       return
     }
     deleteMutation.mutate(id)
@@ -385,6 +391,8 @@ export default function Rules() {
       />
 
       <RuleTestModal isOpen={isTestModalOpen} onClose={() => setIsTestModalOpen(false)} />
+
+      {confirmDialog}
     </div>
   )
 }

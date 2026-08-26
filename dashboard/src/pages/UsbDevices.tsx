@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Usb, ShieldCheck, ShieldAlert, Plus, Trash2, Check, Ban, History, X, Pencil } from 'lucide-react'
+import { Usb, ShieldCheck, ShieldAlert, Plus, Trash2, Check, Ban, History, Pencil, EyeOff, Undo2 } from 'lucide-react'
+import Modal, { ModalHeader } from '@/components/ui/Modal'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import {
   listDevices, seenDevices, approveDevice, updateDevice, revokeDevice, setUsbEnforcement, deviceActivity,
+  dismissSeenDevice, restoreSeenDevice,
   type SanctionedDevice, type SeenDevice, type DeviceActivityEvent,
 } from '@/lib/usb-devices-api'
 import { usePagination } from '@/lib/hooks/useTableState'
@@ -30,7 +32,11 @@ const vidpid = (v?: string | null, p?: string | null) => (v || p ? `${v || '????
 export default function UsbDevices() {
   const qc = useQueryClient()
   const devicesQ = useQuery({ queryKey: ['usb-devices'], queryFn: listDevices })
-  const seenQ = useQuery({ queryKey: ['usb-devices-seen'], queryFn: seenDevices })
+  const [showDismissed, setShowDismissed] = useState(false)
+  const seenQ = useQuery({
+    queryKey: ['usb-devices-seen', showDismissed],
+    queryFn: () => seenDevices(showDismissed),
+  })
   const [historySerial, setHistorySerial] = useState<string | null>(null)
 
   const invalidate = () => {
@@ -171,8 +177,19 @@ export default function UsbDevices() {
       <Section
         title="Seen on endpoints — not sanctioned"
         count={seenQ.data?.count || 0}
-        subtitle="Devices observed connecting to an agent that aren't on the allowlist. Approve to permit them, or Disallow to reject."
+        subtitle="Devices observed connecting to an agent that aren't on the allowlist. Approve to permit them, Disallow to reject, or Dismiss to clear a triage item you've already looked at without deciding (reversible, does not authorize the device)."
       >
+        {(seenQ.data?.dismissed_count ?? 0) > 0 && (
+          <label className="mb-2 flex items-center gap-2 text-xs text-cs-ink-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showDismissed}
+              onChange={(e) => setShowDismissed(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            Show dismissed ({seenQ.data?.dismissed_count})
+          </label>
+        )}
         {seenQ.isLoading ? (
           <LoadingSpinner />
         ) : seenDevicesList.length === 0 ? (
@@ -373,10 +390,26 @@ function SeenRow({ s, onApproved, onHistory }: { s: SeenDevice; onApproved: () =
     onSuccess: (_r, decision) => { onApproved(); toast.success(decision === 'deny' ? `Disallowed ${s.serial_number}` : `Approved ${s.serial_number}`) },
     onError: (e: any) => toast.error(extractErrorDetail(e, 'Failed')),
   })
+  const dismiss = useMutation({
+    mutationFn: () => dismissSeenDevice({
+      serial_number: s.serial_number,
+      product_name: s.product_name || undefined,
+    }),
+    onSuccess: () => { onApproved(); toast.success(`Dismissed ${s.serial_number} — not approved, just cleared from the queue`) },
+    onError: (e: any) => toast.error(extractErrorDetail(e, 'Dismiss failed')),
+  })
+  const restore = useMutation({
+    mutationFn: () => restoreSeenDevice(s.serial_number),
+    onSuccess: () => { onApproved(); toast.success(`Restored ${s.serial_number} to the triage queue`) },
+    onError: (e: any) => toast.error(extractErrorDetail(e, 'Restore failed')),
+  })
   return (
-    <tr>
+    <tr className={s.dismissed ? 'opacity-60' : undefined}>
       <td><ConnectedDot connectionState={s.connection_state} connected={s.connected} /></td>
-      <td className="num text-cs-ink">{s.serial_number}</td>
+      <td className="num text-cs-ink">
+        {s.serial_number}
+        {s.dismissed && <span className="badge badge-info ml-2 text-[10px]">Dismissed</span>}
+      </td>
       <td className="text-cs-ink-2">{s.product_name || '—'}</td>
       <td className="num text-cs-muted">{vidpid(s.vendor_id, s.product_id)}</td>
       <td className="text-cs-muted text-xs">{fmt(s.last_seen)}</td>
@@ -390,6 +423,18 @@ function SeenRow({ s, onApproved, onHistory }: { s: SeenDevice; onApproved: () =
           onClick={onHistory} title="View insertion history">
           <History className="h-3.5 w-3.5" />History
         </button>
+        {s.dismissed ? (
+          <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
+            disabled={restore.isPending} onClick={() => restore.mutate()} title="Return to the active triage queue">
+            <Undo2 className="h-3.5 w-3.5" />Restore
+          </button>
+        ) : (
+          <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
+            disabled={dismiss.isPending} onClick={() => dismiss.mutate()}
+            title="Clear from the queue without approving or denying it -- reversible">
+            <EyeOff className="h-3.5 w-3.5" />Dismiss
+          </button>
+        )}
         <button className="btn btn-secondary inline-flex items-center gap-1 mr-2"
           disabled={decide.isPending} onClick={() => decide.mutate('deny')}>
           <Ban className="h-3.5 w-3.5" />Disallow
@@ -406,19 +451,20 @@ function SeenRow({ s, onApproved, onHistory }: { s: SeenDevice; onApproved: () =
 function HistoryModal({ serial, onClose }: { serial: string; onClose: () => void }) {
   const q = useQuery({ queryKey: ['usb-device-activity', serial], queryFn: () => deviceActivity(serial) })
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="fixed inset-0 bg-black bg-opacity-50" onClick={onClose} />
-      <div className="relative bg-card rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <div>
-            <h2 className="text-lg font-semibold text-foreground">Insertion history</h2>
-            <p className="num text-xs text-cs-muted">{serial}</p>
-          </div>
-          <button onClick={onClose} className="p-1 hover:bg-accent rounded transition-colors">
-            <X className="h-4 w-4 text-muted-foreground" />
-          </button>
-        </div>
-        <div className="px-6 py-4 overflow-y-auto text-sm">
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      label="Insertion history"
+      header={
+        <ModalHeader
+          title="Insertion history"
+          hint={<span className="num">{serial}</span>}
+          onClose={onClose}
+        />
+      }
+    >
+        <div className="text-sm">
           {q.isLoading ? (
             <LoadingSpinner />
           ) : (q.data?.events.length || 0) === 0 ? (
@@ -444,8 +490,7 @@ function HistoryModal({ serial, onClose }: { serial: string; onClose: () => void
             </ul>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }
 

@@ -4,7 +4,6 @@ import {
   Download,
   RefreshCw,
   Plus,
-  X,
   CheckCircle,
   Clock,
   AlertCircle,
@@ -15,6 +14,7 @@ import {
   Calendar,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import Modal, { ModalHeader, ModalFooter, useConfirm } from '@/components/ui/Modal'
 import {
   getReports,
   getReportsSummary,
@@ -132,6 +132,7 @@ function StatusBadge({ status }: { status: Report['status'] }) {
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function Reports() {
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const { user } = useAuthStore()
   const isAdmin = (user as any)?.role === 'admin' || (user as any)?.role === 'ADMIN'
 
@@ -247,7 +248,11 @@ export default function Reports() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this report and its files? This cannot be undone.')) return
+    if (!(await confirm({
+      title: 'Delete report',
+      confirmLabel: 'Delete',
+      children: 'Delete this report and its files? This cannot be undone.',
+    }))) return
     try {
       await deleteReport(id)
       toast.success('Report deleted')
@@ -474,21 +479,46 @@ export default function Reports() {
       </div>
 
       {/* Generate Report Modal */}
-      {showForm && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-gray-800 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl">
-            {/* Modal header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
-              <div className="flex items-center gap-2">
+      <Modal
+        open={showForm}
+        onClose={() => setShowForm(false)}
+        size="md"
+        className="!bg-gray-800 !border-gray-700"
+        label="Generate Report"
+        header={
+          <ModalHeader
+            title={
+              <span className="flex items-center gap-2">
                 <FileText className="w-5 h-5 text-indigo-400" />
-                <h2 className="text-lg font-semibold text-white">Generate Report</h2>
-              </div>
-              <button onClick={() => setShowForm(false)} className="text-muted-foreground/70 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="px-6 py-5 space-y-5">
+                Generate Report
+              </span>
+            }
+            onClose={() => setShowForm(false)}
+          />
+        }
+        footer={
+          <ModalFooter>
+            <button
+              onClick={() => setShowForm(false)}
+              className="flex-1 px-4 py-2 text-sm text-muted-foreground/50 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleGenerate}
+              disabled={generating}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-50"
+            >
+              {generating ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /> Queueing...</>
+              ) : (
+                <><BarChart2 className="w-4 h-4" /> Generate</>
+              )}
+            </button>
+          </ModalFooter>
+        }
+      >
+            <div className="space-y-5">
               {/* Name */}
               <div>
                 <label className="block text-sm font-medium text-muted-foreground/50 mb-1">Report Name</label>
@@ -573,30 +603,9 @@ export default function Reports() {
                 />
               </div>
             </div>
+      </Modal>
 
-            {/* Modal footer */}
-            <div className="flex gap-3 px-6 py-4 border-t border-gray-700">
-              <button
-                onClick={() => setShowForm(false)}
-                className="flex-1 px-4 py-2 text-sm text-muted-foreground/50 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleGenerate}
-                disabled={generating}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-50"
-              >
-                {generating ? (
-                  <><Loader2 className="w-4 h-4 animate-spin" /> Queueing...</>
-                ) : (
-                  <><BarChart2 className="w-4 h-4" /> Generate</>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {confirmDialog}
     </div>
   )
 }

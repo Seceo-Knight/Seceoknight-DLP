@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import {
-  UserPlus, Edit3, Power, Trash2, X, Shield, Loader2, AlertCircle,
+  UserPlus, Edit3, Power, Trash2, Shield, Loader2, AlertCircle,
   Users as UsersIcon, ShieldOff,
 } from 'lucide-react'
+import SharedModal, { ModalHeader, useConfirm } from '@/components/ui/Modal'
 
 import {
   adminListUsers,
@@ -46,6 +47,7 @@ export default function UserManagement() {
   const { has, permissions, role } = usePermission()
   const canManage = has('manage_users')
   const queryClient = useQueryClient()
+  const { confirm, dialog: confirmDialog } = useConfirm()
 
   // MANDATORY debug (retained from previous version).
   useEffect(() => {
@@ -244,11 +246,14 @@ export default function UserManagement() {
                         {u.mfa_enabled && (
                           <IconButton
                             title="Reset MFA (disable for account recovery)"
-                            onClick={() => {
+                            onClick={async () => {
                               if (
-                                window.confirm(
-                                  `Reset MFA for ${u.email}?\n\nThis will disable two-factor authentication on their account. They can re-enable it from Settings.`
-                                )
+                                await confirm({
+                                  title: 'Reset MFA',
+                                  confirmLabel: 'Reset MFA',
+                                  tone: 'primary',
+                                  children: `Reset MFA for ${u.email}? This will disable two-factor authentication on their account. They can re-enable it from Settings.`,
+                                })
                               )
                                 resetMfaMutation.mutate(u.id)
                             }}
@@ -261,11 +266,13 @@ export default function UserManagement() {
                         {u.is_active && (
                           <IconButton
                             title="Deactivate (soft)"
-                            onClick={() => {
+                            onClick={async () => {
                               if (
-                                window.confirm(
-                                  `Deactivate ${u.email}? They will no longer be able to log in. You can reactivate them later.`
-                                )
+                                await confirm({
+                                  title: 'Deactivate account',
+                                  confirmLabel: 'Deactivate',
+                                  children: `Deactivate ${u.email}? They will no longer be able to log in. You can reactivate them later.`,
+                                })
                               )
                                 deactivateMutation.mutate(u.id)
                             }}
@@ -322,6 +329,8 @@ export default function UserManagement() {
           isSubmitting={hardDeleteMutation.isPending}
         />
       )}
+
+      {confirmDialog}
     </div>
   )
 }
@@ -861,6 +870,10 @@ function PermissionPicker({
 }
 
 // ── Shared primitives ─────────────────────────────────────────────────────
+// This local wrapper used to reimplement Escape-handling and body-scroll
+// locking itself; it now just adapts the existing (title, children, onClose,
+// wide) call-site signature onto the shared Modal, which owns that behavior
+// centrally (plus focus trap, focus restoration, and nested-dialog support).
 function Modal({
   title,
   children,
@@ -872,52 +885,16 @@ function Modal({
   onClose: () => void
   wide?: boolean
 }) {
-  // Close on Escape, lock body scroll while open.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    const prevOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('keydown', onKey)
-      document.body.style.overflow = prevOverflow
-    }
-  }, [onClose])
-
   return (
-    // Use items-start + py-8 so tall content doesn't get its top clipped off
-    // the viewport (flex-centering would push it beyond the scroll region).
-    // The outer layer scrolls if the card exceeds viewport height.
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 overflow-y-auto py-8 px-4"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
-      }}
+    <SharedModal
+      open
+      onClose={onClose}
+      size={wide ? '2xl' : 'md'}
+      label={title}
+      header={<ModalHeader title={title} onClose={onClose} />}
     >
-      <div
-        // max-h caps the card to leave breathing room top+bottom; min-h-0 on
-        // the flex child lets the body's overflow-y-auto actually scroll.
-        className={`bg-card rounded-xl shadow-xl w-full flex flex-col max-h-[calc(100vh-4rem)] ${
-          wide ? 'max-w-2xl' : 'max-w-md'
-        }`}
-        role="dialog"
-        aria-modal="true"
-      >
-        <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
-          <h2 className="text-lg font-semibold text-foreground">{title}</h2>
-          <button
-            onClick={onClose}
-            className="p-1 rounded hover:bg-accent text-muted-foreground"
-            aria-label="Close dialog"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <div className="px-6 py-5 overflow-y-auto flex-1 min-h-0">{children}</div>
-      </div>
-    </div>
+      {children}
+    </SharedModal>
   )
 }
 

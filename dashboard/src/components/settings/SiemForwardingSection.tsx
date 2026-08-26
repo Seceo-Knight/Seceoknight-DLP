@@ -8,6 +8,7 @@ import {
   deleteSiemConnector,
   type SiemConnector,
 } from '@/lib/api'
+import { useConfirm } from '@/components/ui/Modal'
 
 const PROTOCOLS = ['udp', 'tcp', 'tls']
 const FORMATS = ['cef', 'leef']
@@ -25,6 +26,7 @@ const DEFAULT_FORM = {
 }
 
 export default function SiemForwardingSection() {
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const [connectors, setConnectors] = useState<SiemConnector[]>([])
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState({ ...DEFAULT_FORM })
@@ -74,7 +76,11 @@ export default function SiemForwardingSection() {
   }
 
   const handleDelete = async (name: string) => {
-    if (!window.confirm(`Remove SIEM connector "${name}"?`)) return
+    if (!(await confirm({
+      title: 'Remove SIEM connector',
+      confirmLabel: 'Remove',
+      children: `Remove SIEM connector "${name}"?`,
+    }))) return
     try {
       await deleteSiemConnector(name)
       toast.success(`Removed "${name}"`)
@@ -219,6 +225,8 @@ export default function SiemForwardingSection() {
           {busy ? 'Adding…' : 'Add connector'}
         </button>
       </form>
+
+      {confirmDialog}
     </div>
   )
 }

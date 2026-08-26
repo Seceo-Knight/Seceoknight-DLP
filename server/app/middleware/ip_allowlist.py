@@ -63,6 +63,48 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+def _is_sso_session(request: Request) -> bool:
+    """True when the caller presents a DLP token minted by an SSO exchange.
+
+    Ported from CyberSentinel-DLP (commit 074266b, gap-scan of August 26
+    2026). The SIEM authenticates the human and vouches for them; gating
+    that session by source IP as WELL means an off-network analyst logs in
+    successfully and then gets 403 on every subsequent call — a working
+    login attached to a dead console, which reads as the product being
+    broken rather than restricted. Exempting only /auth/sso/exchange fixes
+    the first request and none of the others, so the exemption has to
+    follow the session.
+
+    The claim is inside a token signed with SECRET_KEY, so it cannot be
+    added by the caller. Password sessions carry no such claim and stay
+    gated, which is where the network control earns its keep.
+    """
+    from app.core.config import settings
+
+    if not getattr(settings, "SSO_ALLOWLIST_BYPASS", True):
+        return False
+
+    auth = request.headers.get("authorization") or ""
+    scheme, _, token = auth.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return False
+
+    try:
+        from jose import jwt as _jwt
+
+        claims = _jwt.decode(
+            token.strip(),
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+        )
+    except Exception:
+        # Expired, forged, or malformed — no bypass. Whatever comes next in
+        # the stack will reject it on its own terms.
+        return False
+
+    return claims.get("sso") is True
+
+
 def _is_exempt(method: str, path: str) -> bool:
     if path in ("/health", "/api/v1/health"):
         return True
@@ -84,6 +126,12 @@ def _is_exempt(method: str, path: str) -> bool:
         return True
     # Agent registration.
     if method == "POST" and path.rstrip("/") == "/api/v1/agents":
+        return True
+    # SSO exchange itself. The exchange token is the proof of authentication
+    # and is signed by the SIEM (or verified against its published JWKS);
+    # the source IP adds nothing to that, and the SIEM's own users arrive
+    # from wherever they happen to be.
+    if method == "POST" and path.rstrip("/") == "/api/v1/auth/sso/exchange":
         return True
     # Agent lifecycle (heartbeat / sync / evaluate / unregister).
     if method == "PUT" and _AGENT_HEARTBEAT.match(path):
@@ -147,6 +195,9 @@ class IPAllowlistMiddleware(BaseHTTPMiddleware):
             return await call_next(request)  # feature off (empty allowlist)
 
         if _is_exempt(request.method, request.url.path):
+            return await call_next(request)
+
+        if _is_sso_session(request):
             return await call_next(request)
 
         ip_str = get_client_ip(request)

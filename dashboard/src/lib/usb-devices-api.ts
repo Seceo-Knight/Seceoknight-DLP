@@ -41,6 +41,11 @@ export interface SanctionedDevice {
 
 export interface SeenDevice {
   serial_number: string
+  // True when this device was cleared off the triage queue via Dismiss. It
+  // is NOT allowed by that -- the strict allowlist still blocks it if
+  // enforced -- only hidden from the default view. Ported from
+  // CyberSentinel-DLP commit 7ae4671.
+  dismissed?: boolean
   vendor_id?: string | null
   product_id?: string | null
   product_name?: string | null
@@ -96,9 +101,32 @@ export const listDevices = async (): Promise<DeviceListResponse> => {
   return data
 }
 
-export const seenDevices = async (): Promise<{ devices: SeenDevice[]; count: number }> => {
-  const { data } = await apiClient.get('/usb-devices/seen')
+export const seenDevices = async (
+  includeDismissed = false,
+): Promise<{
+  devices: SeenDevice[]
+  count: number
+  dismissed_count: number
+  include_dismissed: boolean
+}> => {
+  const { data } = await apiClient.get('/usb-devices/seen', {
+    params: includeDismissed ? { include_dismissed: true } : undefined,
+  })
   return data
+}
+
+export const dismissSeenDevice = async (body: {
+  serial_number: string
+  product_name?: string
+  manufacturer?: string
+  note?: string
+}): Promise<{ serial_number: string; dismissed: boolean; already: boolean }> => {
+  const { data } = await apiClient.post('/usb-devices/seen/dismiss', body)
+  return data
+}
+
+export const restoreSeenDevice = async (serial: string): Promise<void> => {
+  await apiClient.delete(`/usb-devices/seen/dismiss/${encodeURIComponent(serial)}`)
 }
 
 export const deviceActivity = async (

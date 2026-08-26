@@ -8,6 +8,349 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🟣 Dashboard: shared overlay/modal design system (August 26, 2026)
+
+Gap-scan of CyberSentinel-DLP found 11 commits ("one overlay instead of
+nineteen") replacing every hand-rolled dialog across their dashboard with
+a single `Modal` component. SeceoKnight had the same problem independently:
+~13 dialogs, each with its own copy of Escape-handling, body-scroll
+locking, and backdrop-click dismissal, several with a bug where putting
+`max-h-[90vh] overflow-y-auto` on the whole panel let a tall dialog's
+title and action buttons scroll away with the content. Full migration —
+new shared primitive plus every dialog moved onto it, matching
+CyberSentinel's own scope rather than stopping at the primitive alone.
+
+**Design-token decision.** CyberSentinel's `Modal` is built on their
+light-theme `cs-*` token vocabulary; SeceoKnight is a dark "obsidian
+vault" theme on shadcn/ui semantic tokens (`bg-card`, `border-border`,
+`text-foreground`, etc.). Porting the `cs-*` tokens verbatim would have
+meant a second, disconnected design system living inside a dark app, or
+repeating CyberSentinel's own "unstyled/invisible" bug in reverse. `Modal.tsx`
+(`dashboard/src/components/ui/Modal.tsx`, new) is built entirely on
+SeceoKnight's existing tokens instead — same three-band structure and
+behavior, native palette.
+
+**Three-band layout.** Header, body, and footer are DOM siblings (not one
+scrolling wrapper) — only the body scrolls, so a dialog's title and action
+buttons stay put regardless of content length. This is the actual fix for
+the "footer scrolls away" bug present in several of the migrated dialogs.
+Header/footer shadows appear only when there's genuinely hidden content
+above/below (measured via `ResizeObserver`), not decoratively.
+
+**Behavior centralized once:** focus trap (Tab cycling stays inside the
+dialog), a document-level Escape stack so only the top-most of nested
+dialogs responds, a scroll-lock counter that compensates for scrollbar
+width to avoid a page jolt, backdrop dismissal on `mousedown` (not
+`click`) so a text-selection drag that ends outside the panel doesn't
+discard it, and focus restoration to whatever triggered the dialog on
+close. Entrance/exit animation reuses the already-installed
+`tailwindcss-animate` plugin rather than introducing a second animation
+system.
+
+**`useConfirm()`** replaces `window.confirm()` everywhere in the
+dashboard (13 call sites across 9 files: Policies, Rules, Reports,
+Events, DataMatching, ThreatIntelligence ×2, and the three Settings
+sections — IP allowlist, cloud-upload hosts, SIEM forwarding — plus the
+two MFA-reset/deactivate confirms in User Management). A drop-in
+`const { confirm, dialog } = useConfirm()`; `confirm({ title,
+confirmLabel, children })` returns a `Promise<boolean>` instead of
+blocking the renderer, and the button says the actual verb ("Delete
+rule", "Remove SIEM connector") instead of a stock "OK" that gives no
+hint what committing will do.
+
+**Migrated onto the shared Modal:** `PolicyCreatorModal`,
+`PolicyDetailsModal`, `ExportPoliciesModal`, `ImportPoliciesModal`,
+`AlertDetailsModal`, `RuleModal`, `RuleTestModal`, `Reports.tsx`'s
+generate-report dialog, `DataMatching.tsx`'s two local dialogs,
+`RiskScoring.tsx`'s user-detail dialog, `UsbDevices.tsx`'s history
+dialog, `Agents.tsx`'s cleanup-stale and remove/decommission-confirm
+dialogs, and `UserManagement.tsx`'s create/edit/delete dialogs (this one
+already had correct scroll structure, per CyberSentinel's own commit
+note — it only needed its local Escape/scroll-lock reimplementation
+swapped for the shared one).
+
+**Two React gotchas hit repeatedly, fixed the same way each time:**
+- Several dialogs' parent clears both `isOpen` and the dialog's data
+  prop (e.g. `policy`) in the same click handler, landing in one React
+  batch — a naive `if (!data) return null` would unmount the whole
+  subtree instantly and skip Modal's ~150ms exit animation. Fixed with a
+  `useRef` remembering the last non-null value, used only while closing
+  (`PolicyDetailsModal`, `AlertDetailsModal`, `Agents.tsx`'s confirm
+  dialog).
+- `RuleModal.tsx` wrapped its entire dialog in one `<form>`, which can't
+  survive header/body/footer becoming DOM siblings. Fixed with the
+  HTML5 `form="rule-modal-form"` attribute so the footer's submit
+  button reaches the body's form by id instead of by DOM nesting.
+
+**Fixed for free along the way:** `rounded-cs-card` and `shadow-card`
+were referenced by `DataMatching.tsx`'s and `RiskScoring.tsx`'s local
+dialogs but never registered in `tailwind.config.cjs`, generating no CSS
+at all — an undocumented instance of the same "invisible" class bug the
+codebase's own `index.css` comment had only flagged for two other files.
+Both are now on the shared Modal, which doesn't use those classes.
+
+Verified via `tsc --noEmit` after every file, diffed against a captured
+pre-change baseline (23 pre-existing, unrelated type errors) to confirm
+each migration introduced zero new errors — no dev server or browser
+available in this environment to screenshot the result directly.
+
+---
+
+## 🔵 SSO/SIEM hardening: RS256/JWKS, cert pinning, role/ABAC mapping (August 26, 2026)
+
+Gap-scan of CyberSentinel-DLP (commits ad46e71, 074266b, f41a9db) found
+SeceoKnight's `/auth/sso/exchange` was still the pre-hardening design:
+HS256-only against a shared secret, no audience check, every SSO login
+landed on whatever role the account already had (or VIEWER on first
+provision), and the exchange session was still IP-gated like a password
+login. SeceoKnight already had the exact role vocabulary and ABAC columns
+(department/clearance_level, "NULL department denies everything") this
+hardening pass assumes, which made the port unusually direct.
+
+**RS256 via JWKS (`server/app/core/sso_jwks.py`, `sso_verify.py`, new).**
+The token's own signed `alg` header routes verification: RS/PS/ES → the
+SIEM's public key set fetched from `SIEM_JWKS_URL` and selected by `kid`;
+HS256 → `DLP_SSO_SECRET`, kept only as a migration fallback. With HS256 the
+DLP holds a secret that can *forge* SIEM tokens, not just verify them; with
+RS256 it holds only a public key. Routing is safe against the classic
+RS256→HS256 key-confusion downgrade attack because the two paths use
+disjoint key material — verified directly: forging an HS256 token signed
+with the RSA public key bytes is correctly rejected once `DLP_SSO_SECRET`
+is cleared. `alg:none` is unreachable by construction (verified). The JWKS
+cache fails **closed** (unlike every other cache in this codebase) since it
+backs an auth decision — an unfetchable key set refuses the login rather
+than accepting it unverified.
+
+**Certificate pinning (`SIEM_JWKS_CA_BUNDLE`).** The JWKS endpoint is the
+trust anchor for every RS256 login, so TLS verification is never disabled,
+only re-pointed at a pinned certificate — a SIEM on an internal network
+typically presents a self-signed cert, and a misconfigured/missing pinned
+path fails closed rather than silently falling back to the system store
+(verified).
+
+**Audience + clock hardening.** `aud` (`SSO_AUDIENCE`, default
+`seceoknight-dlp`) is enforced strictly on RS256, and on HS256 only when
+the token actually carries the claim — so an already-integrated SIEM isn't
+locked out by turning RS256 on. `SSO_CLOCK_LEEWAY_SECONDS` absorbs clock
+skew between boxes; the nonce-replay window is derived from the token's own
+`exp` (not a flat guess) so raising leeway can't silently reopen it.
+Verified: correct-aud accepted, wrong-aud rejected, expired token rejected,
+unknown-`kid` correctly refused with one rate-limited refetch for rotation.
+
+**Role/ABAC mapping (`server/app/core/sso_roles.py`, new, ported near-
+verbatim from CyberSentinel-DLP — SeceoKnight's `UserRole` enum already has
+all eight of the same values).** The SIEM's Administrator/L1/L2/L3 ×
+read-write/read-only vocabulary translates to SeceoKnight's existing roles
+via a table, overridable with `SSO_ROLE_MAP` (JSON) and capped by
+`SSO_MAX_ROLE` — set below ADMIN and no SSO login, forged or genuine, can
+exceed it. `department`/`clearance_level` sync alongside role, since a
+department-less account sees nothing under SeceoKnight's own ABAC rule.
+Verified against a real interpreter: all role/access combinations, the
+`SSO_MAX_ROLE` clamp, the `SSO_ROLE_MAP` JSON override, and its
+malformed-input fallback.
+
+**Ownership + ordering.** New `users.sso_managed` / `sso_source_role` /
+`siem_sub` columns (migration `042_sso_role_provenance`). SSO-provisioned
+accounts re-sync role/department/clearance on every login
+(`SSO_SYNC_ON_LOGIN`); an admin editing such a user's role by hand through
+`PUT /users` detaches it permanently instead of having the edit silently
+revert at the next login. `POST /users` and `PUT /users/{id}` both gained
+`siem_role`/`access` fields so the SIEM's seeding call and the exchange
+token agree by construction. `siem_sub` (the SIEM's immutable user id) is
+now the preferred match key over email — an email rename no longer orphans
+the account and silently double-provisions.
+
+**JIT provisioning** (`SSO_JIT_PROVISION`, off by default — unchanged from
+SeceoKnight's existing contract where the SIEM seeds accounts itself via
+`POST /users`) is available and bounded by `SSO_MAX_ROLE` + RS256 for
+anyone who wants the SIEM to provision purely from the exchange token.
+
+**SSO sessions bypass the IP allowlist** (`SSO_ALLOWLIST_BYPASS`, default
+on) — an off-network analyst arriving via the SIEM no longer gets a
+successful login attached to a console that 403s on every subsequent
+request. The bypass reads a `sso: true` claim inside a token signed with
+`SECRET_KEY`, so it cannot be added by the caller; password sessions carry
+no such claim and stay gated. `/auth/sso/exchange` itself is exempt too
+(it runs before there is a session at all).
+
+**Token-in-log fix (dashboard).** `SSOCallback.tsx` now reads the exchange
+token from the URL *fragment* first (never sent to a server) with the
+query string as a fallback, and scrubs the address bar before doing
+anything with the token. `dashboard/nginx.conf` gained a log-format
+override (`$dlp_logged_uri` map) that strips the query string specifically
+on `/auth/sso`, applied server-wide rather than per-location because this
+SPA's `try_files` fallback to `/index.html` means a per-location directive
+on `/auth/sso` itself never fires.
+
+**Deliberately not ported:** CyberSentinel's `csdlp sso-cert` CLI helper
+(a bash wrapper that automates setting `SIEM_JWKS_URL` and fetching/
+trusting a cert) — SeceoKnight has no equivalent management CLI to hang it
+off of, and the manual equivalent (drop a PEM under `./config/`, point
+`SIEM_JWKS_CA_BUNDLE` at `/etc/seceoknight/<file>.pem`) is now documented
+directly in `.env.example`. Can be added later if wanted.
+
+Verified end-to-end against a real Python interpreter (not just brace-
+balance/AST checks, since this is authentication code): HS256 with/without
+aud, RS256 against a generated RSA keypair and a mocked JWKS response,
+the downgrade-attack rejection, expiry, unknown-kid rotation handling, the
+missing-CA-bundle fail-closed path, and every role-mapping branch including
+the `SSO_MAX_ROLE` clamp and `SSO_ROLE_MAP` override. `tsc --noEmit` clean
+on `SSOCallback.tsx`. Not yet exercised against a live SIEM integration —
+new deployments turning SSO on for the first time should start on Alert-
+style low-privilege roles (`SSO_DEFAULT_ROLE`, `SSO_MAX_ROLE`) before
+trusting it for ADMIN-level access.
+
+---
+
+## 🟢 Installer: 32-bit-on-64-bit guard + Diagnose subsystem (August 26, 2026)
+
+Gap-scan of CyberSentinel-DLP (commit `9e01900`, "report what the BROWSER
+sees, and refuse to run where it cannot") ported into `manage-agent.ps1`.
+Pure PowerShell, no compilation involved.
+
+**The bug this defends against:** on 64-bit Windows, a 32-bit PowerShell
+process has every `HKLM:\SOFTWARE\Policies\...` registry access silently
+redirected into `HKLM:\SOFTWARE\WOW6432Node\Policies\...`, which no
+64-bit browser ever reads. A script running 32-bit can write its
+extension force-install policy, read it back successfully, report
+success -- and the browser sees none of it. CyberSentinel's own commit
+message says this cost them real days to track down. It's directly
+relevant here because `manage-agent.ps1` writes the exact same
+`ExtensionInstallForcelist` key, both from the Browser Extension Guard
+task and from this session's own `[3] Force extension reinstall` action
+added earlier today.
+
+**What changed:**
+- Added a startup guard at the very top of the script: refuses to run
+  and explains why if launched as 32-bit PowerShell on a 64-bit OS,
+  with the exact `sysnative` relaunch command to fix it.
+- Added `Get-PolicyValueInView`, a small helper reading a registry value
+  from an explicit 64-bit or 32-bit view regardless of the running
+  process's own bitness (`Microsoft.Win32.RegistryKey]::OpenBaseKey`).
+- Added `Show-ExtensionDiagnostics`, wired in as a new `[4] Diagnose`
+  option under `[4] Browser` (previously `[3] Force extension
+  reinstall` / `[4] Back`, now `[4] Diagnose` / `[5] Back`). Reports,
+  per browser: process/OS bitness, whether the force-install entry is
+  visible in the 64-bit registry view specifically (the one the browser
+  reads, not just whatever view this process defaults to), whether an
+  `ExtensionSettings` policy (if set) is valid JSON, the `wantVersion`
+  pin if present, an explicit WOW6432Node shadow-copy check (should
+  always be empty -- its mere presence, regardless of what the 64-bit
+  view says, is the bug), installed-vs-published version per browser
+  profile (reuses the existing `Get-ExtensionInstallSources` scan), and
+  a reachability check against this agent's own configured update-feed
+  URL.
+- `Show-BrowserControls` now takes `$s` (the already-computed
+  `Get-AgentStatus` result from the main menu loop) so Diagnose can
+  build the update-feed URL from `$s.ServerUrl` without a second
+  round-trip to re-detect it.
+
+Verified via brace-balance check across the whole file (312 open / 312
+close, unchanged shape) and manual review of every added block -- no
+PowerShell interpreter is available in this environment to actually run
+it, so this is first exercised for real the next time it's run on a
+managed endpoint. Read-only where it matters: Diagnose only reads the
+registry and probes an HTTP HEAD request; it makes no changes.
+
+---
+
+## 🟠 New capability: typed-message inspection in desktop chat apps (August 26, 2026)
+
+Gap-scan of CyberSentinel-DLP found their biggest remaining feature gap:
+Messaging App Attachment Control only ever watched the file picker. Typing
+or pasting sensitive data straight into WhatsApp/Teams/Telegram/etc opened
+no dialog, so nothing ran and nothing was logged -- a policy set to Block
+attachments gave no protection against the same data typed instead.
+
+**Higher risk than everything else ported this session, flagged explicitly
+to the user before starting:** the mechanism is a low-level Windows
+keyboard hook (`WH_KEYBOARD_LL`) that can hold the Enter/send keystroke
+system-wide while it inspects the message. A bug in a browser extension
+breaks one feature; a bug in a global keyboard hook can freeze keyboard
+input on the whole machine. User explicitly chose the full port (block
+capability included) after being shown this trade-off.
+
+**What was ported, and how:** CyberSentinel's CURRENT implementation
+(1355-line .cpp), not their original commit -- the module doubled in size
+through several real bugs found on real machines after shipping: a
+packaged/MSIX WhatsApp resolving to the wrong process
+(ApplicationFrameHost.exe instead of the app), the composer being located
+by size instead of focus (which blocked sends on last month's conversation,
+not the actual message), and a wedged UI Automation call holding Enter
+forever with no watchdog. Porting the original version would have
+reintroduced bugs already found and fixed upstream.
+
+`messaging_text_monitor.h`/`.cpp` were copied byte-for-byte from
+CyberSentinel's tested source into this repo (via direct file copy, not
+retyped through chat -- transcription risk in COM/threading/pointer code is
+exactly how new bugs get introduced) and adapted for SeceoKnight's own
+`NetworkExfilMonitor` plumbing:
+
+  - `MessagingVerdict` (network_exfil_monitor.h) gains `inspectMessages` and
+    `messageDataTypes` fields -- independent of `managed`/`block` above
+    (attachment control) so enabling one doesn't silently enable the other.
+  - New exported `NetworkExfilMonitor::TypeSeverity()` (was internal-only)
+    since the new module needs to rank an operator's chosen data-type list
+    without duplicating the severity table.
+  - agent.cpp: new `messagingInspectMessages`/`messagingDataTypes` state,
+    parsed from `GET /agents/{id}/messaging-app-policy`'s new
+    `inspect_messages`/`message_data_types` fields, wired into
+    `GetMessagingVerdict()`. `MessagingTextMonitor::Start()`/`Stop()` called
+    alongside the existing `NetworkExfilMonitor::Start()`/`Stop()`, reusing
+    every callback (classify/sendEvent/log/messagingPolicy) verbatim.
+  - Server: `inspect_messages` is server-resolved to `false` whenever the
+    operator's data-type selection is empty, so "picked nothing" can never
+    be misread as "everything" on the agent side -- ported exactly as
+    CyberSentinel designed it.
+  - Dashboard: MessagingAppControlPolicyForm gets a separate, clearly-marked
+    typed-message section -- checkbox defaults off, does not inherit from
+    the attachment settings above it, and shows an explicit warning with a
+    recommendation to validate in Alert mode before ever switching to Block
+    (Alert mode never touches the keyboard at all).
+
+**Safety rules preserved from the source, unchanged:** Alert mode never
+touches input. Every failure path releases the keystroke (UIA unreadable,
+worker slow, anything thrown) -- a watchdog independently releases anything
+held past `decisionTimeoutMs` in case the worker itself wedges. Injected
+keystrokes are ignored so the module's own replay can't re-enter the hook.
+The hook takes no locks and does no I/O, so it can't approach
+`LowLevelHooksTimeout`. Exactly one of {worker, watchdog} ever resolves a
+given keystroke, by atomic claim -- both releasing would send the message
+twice.
+
+**Not verified end-to-end on a real machine yet** (unlike everything else
+in this changelog) -- this sandbox has no Windows toolchain to compile or
+test a keyboard hook against. Verification will happen via SeceoKnight's
+own CI (real `windows-latest` + MSYS2 mingw-w64-x86_64-gcc, genuine Windows
+SDK headers -- notably BETTER coverage than CyberSentinel's own build host,
+which only has Debian mingw's UIAutomation stub headers) and then, strongly
+recommended, an Alert-mode rollout on the test PC before ever setting a
+policy's action to Block.
+
+---
+
+## 🟢 Gap-scan: CyberSentinel-DLP USB dismiss-seen-device feature (August 26, 2026)
+
+Ported the half of commit 7ae4671 left out of the earlier connection-state
+fix: dismissing a "seen but not yet decided" device off the triage queue.
+Devices observed connecting that aren't sanctioned or denied build up on
+the USB Devices page forever; most are one-off dongles/phones/printers an
+admin looks at once and has no intention of ever approving, but there was
+no way to clear them without either approving or denying (a "deny" for a
+device nobody actually cares about is misleading in an audit trail).
+
+New `dismissed_usb_devices` table (migration 041), POST
+`/usb-devices/seen/dismiss` and DELETE `/usb-devices/seen/dismiss/{serial}`.
+Dismissing is pure bookkeeping -- it does NOT authorize the device (the
+strict allowlist still blocks it if enforced), doesn't stop monitoring, and
+is fully reversible via Restore. A later real allow/deny always supersedes
+a dismissal automatically (new `_clear_dismissal()` helper, called from both
+the create and update branches of `approve_device()`). Dashboard: dismissed devices hide by default
+behind a "Show dismissed (N)" checkbox; each dismissed row gets a badge and
+a Restore button instead of Dismiss.
+
+---
+
 ## 🟢 Gap-scan: CyberSentinel-DLP USB fixes (August 26, 2026)
 
 Fresh gap-scan against effaaykhan/cybersentineldlp-prod (their commit
@@ -45,6 +388,50 @@ not persisted.
 Scope note: CyberSentinel's commit also adds a "dismiss a seen-but-not-yet-
 decided device" bookkeeping feature (separate table + endpoints). Left out
 of this pass to keep it bounded -- can follow up if wanted.
+
+---
+
+## 🟢 Gap-scan: CyberSentinel-DLP extension update-mechanism fixes (August 26, 2026)
+
+Continuing the gap-scan into their installer-reliability cluster (8 commits,
+Aug 19) -- the same class of problem this session just fought by hand on a
+real endpoint (extension stuck on 1.0.6, self-update never taking, no
+DevTools access to see why).
+
+**cd070e7 "answer HEAD, and exempt it from the IP allowlist"** -- applies
+directly. `extension.py`'s three routes (update.xml, /info, /{filename})
+were GET-only; a HEAD reachability probe got 405, or fell through to a 404
+on update.xml, reporting a perfectly healthy feed as down. Fixed: all three
+now answer GET and HEAD (`@router.api_route(..., methods=["GET", "HEAD"])`).
+SeceoKnight's IP-allowlist exemption for this prefix was never method-gated
+to begin with, so unlike CyberSentinel's original bug there was no second
+layer to fix.
+
+**42e827f "Update said agent not detected for an agent that was running"**
+-- already fixed. `Update-Agent` in manage-agent.ps1 already retries the
+post-restart process check instead of a single 3-second look, with a
+comment dated August 19 crediting this exact CyberSentinel commit. No
+change needed.
+
+**63d77f5 / 261f852 / 90a2608 / 9e01900 / 996d2dd / c170346** (in-place
+extension update, browser-close-without-force-kill, a Deploy/Repair/Update/
+Diagnose menu) -- don't map cleanly. CyberSentinel's installer treats the
+extension as something it imperatively deploys/repairs; SeceoKnight's
+force-install is entirely reconcile-driven by the Browser Extension Guard
+scheduled task, with no equivalent imperative action to patch. That
+architectural gap is exactly what this session's live debugging hit: there
+was no "make it try again right now" button, only a manual registry
+remove/re-add. Added one: manage-agent.ps1's Browser controls menu gets a
+new **[3] Force extension reinstall**, which removes the
+ExtensionInstallForcelist entry (Chrome/Edge auto-uninstall on next policy
+read), immediately triggers the guard task to re-add it, and tells the
+operator to close/reopen the browser -- the exact procedure this session
+worked out by hand, now a menu option instead of typed-out registry
+commands. Deliberately does not force-kill the browser, on the same
+"don't break what you're protecting" reasoning as the downloads-hook fix
+above -- CyberSentinel's own 90a2608 documents real data loss from a
+2-second force-kill grace window, so this waits for the user to close it
+themselves.
 
 ---
 

@@ -29,6 +29,17 @@ Content is produced by ``scripts/pack-extension.py`` into
 with a message saying so, which is the honest answer to "nothing has been
 packed yet" and far easier to diagnose than an empty feed that looks like it
 worked.
+
+All three routes answer GET and HEAD (ported from CyberSentinel-DLP commit
+cd070e7, August 26 2026 gap-scan). Browsers only ever GET these -- HEAD
+support exists so a reachability check ("is the feed/package up?") can ask
+without pulling the full .crx. Without it a HEAD probe 405'd on /info and
+the package, and fell through to a 404 on update.xml (matched the
+catch-all /{filename} route, which then failed the .crx suffix check) --
+reporting a perfectly healthy feed as down. SeceoKnight's IP-allowlist
+exemption for this prefix was never method-gated (see _is_exempt() in
+app/middleware/ip_allowlist.py), so unlike CyberSentinel's original bug
+there was no second layer to fix here.
 """
 from __future__ import annotations
 
@@ -66,7 +77,7 @@ def _dist_file(name: str) -> pathlib.Path:
     return candidate
 
 
-@router.get("/update.xml")
+@router.api_route("/update.xml", methods=["GET", "HEAD"])
 async def update_manifest(request: Request):
     """The update feed. Polled by every force-installed browser a few times a day.
 
@@ -93,7 +104,7 @@ async def update_manifest(request: Request):
     return Response(content=xml, media_type="application/xml")
 
 
-@router.get("/info")
+@router.api_route("/info", methods=["GET", "HEAD"])
 async def extension_info():
     """Extension id, version and hash -- what agent.cpp's
     ApplyBrowserExtensionPolicy() reads to write the ExtensionInstallForcelist
@@ -107,7 +118,7 @@ async def extension_info():
     return json.loads(path.read_text())
 
 
-@router.get("/{filename}")
+@router.api_route("/{filename}", methods=["GET", "HEAD"])
 async def download_crx(filename: str):
     """The signed package itself."""
     if not filename.endswith(".crx"):

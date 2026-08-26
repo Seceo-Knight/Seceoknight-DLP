@@ -1,9 +1,19 @@
 import { useState, useEffect } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import { useMutation } from '@tanstack/react-query'
-import { X, Plus, Trash2 } from 'lucide-react'
+import { X, Plus } from 'lucide-react'
 import { createRule, updateRule, type Rule, type RuleCreate } from '@/lib/rules-api'
 import toast from 'react-hot-toast'
+import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
+
+// Modal.tsx renders header/body/footer as siblings (that split is the whole
+// point -- see Modal.tsx's docstring on why sticky bands over one scrolling
+// box breaks), so a single <form> can no longer wrap the header+body+footer
+// together the way this dialog used to. The <form> now wraps only the body
+// fields; the footer's submit button reaches it via the HTML `form=` attribute
+// instead of physically nesting inside it. Ported approach from
+// CyberSentinel-DLP's own equivalent fix (commit cd3bd63).
+const FORM_ID = 'rule-modal-form'
 
 interface RuleModalProps {
   rule: Rule | null
@@ -185,28 +195,35 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
     })
   }
 
-  if (!isOpen) return null
-
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-6 z-50">
-      <div className="bg-card rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-        <form onSubmit={handleSubmit}>
-          {/* Header */}
-          <div className="flex items-center justify-between p-6 border-b border-border">
-            <h3 className="text-2xl font-bold text-foreground">
-              {isEdit ? 'Edit Rule' : 'Create Rule'}
-            </h3>
-            <button
-              type="button"
-              onClick={onClose}
-              className="text-muted-foreground/70 hover:text-foreground transition-colors"
-            >
-              <X className="w-6 h-6" />
-            </button>
-          </div>
-
-          {/* Content */}
-          <div className="p-6 space-y-6">
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      size="lg"
+      label={isEdit ? 'Edit Rule' : 'Create Rule'}
+      header={<ModalHeader title={isEdit ? 'Edit Rule' : 'Create Rule'} onClose={onClose} />}
+      bodyClassName="p-0"
+      footer={
+        <ModalFooter>
+          <button type="button" onClick={onClose} className="btn btn-secondary">
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form={FORM_ID}
+            disabled={createMutation.isPending || updateMutation.isPending}
+            className="btn btn-primary"
+          >
+            {createMutation.isPending || updateMutation.isPending
+              ? 'Saving...'
+              : isEdit
+              ? 'Update Rule'
+              : 'Create Rule'}
+          </button>
+        </ModalFooter>
+      }
+    >
+        <form id={FORM_ID} onSubmit={handleSubmit} className="p-6 space-y-6">
             {/* Basic Info */}
             <div className="space-y-4">
               <div>
@@ -510,27 +527,7 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                 Enable this rule immediately
               </label>
             </div>
-          </div>
-
-          {/* Footer */}
-          <div className="flex items-center justify-end gap-3 p-6 border-t border-border bg-muted/30">
-            <button type="button" onClick={onClose} className="btn-secondary">
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={createMutation.isPending || updateMutation.isPending}
-              className="btn-primary"
-            >
-              {createMutation.isPending || updateMutation.isPending
-                ? 'Saving...'
-                : isEdit
-                ? 'Update Rule'
-                : 'Create Rule'}
-            </button>
-          </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   )
 }

@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { Server, RefreshCw, Trash2, PowerOff, X, Eraser } from 'lucide-react'
+import { Server, RefreshCw, Trash2, PowerOff, Eraser } from 'lucide-react'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
+import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
 import {
   getAllAgents,
   deleteAgent,
@@ -199,15 +200,22 @@ export default function Agents() {
     navigate(`/events?agent=${agentId}`)
   }
 
+  // The confirm dialog is driven by setConfirm(null) on close, which would
+  // otherwise blank the panel mid-exit-animation -- remember the last
+  // non-null value so Modal's ~150ms fade-out still has content to show.
+  const lastConfirmRef = useRef<ConfirmState | null>(null)
+  if (confirm) lastConfirmRef.current = confirm
+  const displayConfirm = confirm ?? lastConfirmRef.current
+
   const confirmTitle =
-    confirm?.action === 'delete' ? 'Remove Agent' : 'Mark as Decommissioned'
+    displayConfirm?.action === 'delete' ? 'Remove Agent' : 'Mark as Decommissioned'
   const confirmBody =
-    confirm?.action === 'delete'
+    displayConfirm?.action === 'delete'
       ? 'This soft-deletes the agent record. Event history is preserved, but the agent will no longer appear in this list. Admins can restore it via the API audit view.'
       : 'This marks the agent as decommissioned. The record stays visible with a "Decommissioned" badge and event history is preserved.'
-  const confirmCta = confirm?.action === 'delete' ? 'Remove' : 'Decommission'
+  const confirmCta = displayConfirm?.action === 'delete' ? 'Remove' : 'Decommission'
   const confirmCtaClass =
-    confirm?.action === 'delete'
+    displayConfirm?.action === 'delete'
       ? 'bg-red-600 hover:bg-red-700 text-white'
       : 'bg-amber-600 hover:bg-amber-700 text-white'
 
@@ -452,176 +460,166 @@ export default function Agents() {
       </div>
 
       {/* Cleanup-stale modal — admin sweeps agents not seen for >N days */}
-      {cleanupOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="fixed inset-0 bg-black bg-opacity-50"
-            onClick={() => {
+      <Modal
+        open={cleanupOpen}
+        onClose={() => {
+          if (cleanupApplyMutation.isPending) return
+          setCleanupOpen(false)
+          setCleanupPreview(null)
+        }}
+        size="lg"
+        label="Cleanup Stale Agents"
+        header={
+          <ModalHeader
+            title="Cleanup Stale Agents"
+            onClose={() => {
               if (cleanupApplyMutation.isPending) return
               setCleanupOpen(false)
               setCleanupPreview(null)
             }}
           />
-          <div className="relative bg-card rounded-lg shadow-xl max-w-lg w-full mx-4">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-              <h2 className="text-lg font-semibold text-foreground">Cleanup Stale Agents</h2>
-              <button
-                onClick={() => {
-                  if (cleanupApplyMutation.isPending) return
-                  setCleanupOpen(false)
+        }
+        footer={
+          <ModalFooter>
+            <button
+              onClick={() => {
+                setCleanupOpen(false)
+                setCleanupPreview(null)
+              }}
+              className="px-3 py-1.5 rounded text-sm font-medium text-foreground/90 hover:bg-accent"
+              disabled={cleanupApplyMutation.isPending}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => cleanupApplyMutation.mutate(cleanupDays)}
+              className="px-3 py-1.5 rounded text-sm font-medium bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
+              disabled={
+                !cleanupPreview ||
+                cleanupPreview.would_remove_count === 0 ||
+                cleanupApplyMutation.isPending
+              }
+              title={
+                !cleanupPreview
+                  ? 'Run a preview first'
+                  : cleanupPreview.would_remove_count === 0
+                    ? 'Nothing to remove'
+                    : 'Soft-delete the listed agents'
+              }
+            >
+              {cleanupApplyMutation.isPending ? 'Removing…' : 'Apply Cleanup'}
+            </button>
+          </ModalFooter>
+        }
+      >
+          <div className="space-y-4 text-sm">
+            <p className="text-muted-foreground">
+              Soft-deletes agents whose last heartbeat is older than the
+              threshold below. Event history is preserved.
+            </p>
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-medium text-foreground/90">
+                Older than
+              </label>
+              <input
+                type="number"
+                min={1}
+                value={cleanupDays}
+                onChange={(e) => {
+                  const next = Number(e.target.value)
+                  setCleanupDays(Number.isFinite(next) && next > 0 ? next : 1)
                   setCleanupPreview(null)
                 }}
-                className="p-1 hover:bg-accent rounded transition-colors"
+                className="w-24 px-2 py-1 border border-border rounded text-sm"
                 disabled={cleanupApplyMutation.isPending}
+              />
+              <span className="text-sm text-foreground/90">days</span>
+              <button
+                onClick={() => cleanupPreviewMutation.mutate(cleanupDays)}
+                className="ml-auto px-3 py-1 rounded text-sm font-medium border border-border hover:bg-accent disabled:opacity-50"
+                disabled={cleanupPreviewMutation.isPending || cleanupApplyMutation.isPending}
               >
-                <X className="h-4 w-4 text-muted-foreground" />
+                {cleanupPreviewMutation.isPending ? 'Previewing…' : 'Preview'}
               </button>
             </div>
-            <div className="px-6 py-4 space-y-4 text-sm">
-              <p className="text-muted-foreground">
-                Soft-deletes agents whose last heartbeat is older than the
-                threshold below. Event history is preserved.
-              </p>
-              <div className="flex items-center gap-3">
-                <label className="text-sm font-medium text-foreground/90">
-                  Older than
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  value={cleanupDays}
-                  onChange={(e) => {
-                    const next = Number(e.target.value)
-                    setCleanupDays(Number.isFinite(next) && next > 0 ? next : 1)
-                    setCleanupPreview(null)
-                  }}
-                  className="w-24 px-2 py-1 border border-border rounded text-sm"
-                  disabled={cleanupApplyMutation.isPending}
-                />
-                <span className="text-sm text-foreground/90">days</span>
-                <button
-                  onClick={() => cleanupPreviewMutation.mutate(cleanupDays)}
-                  className="ml-auto px-3 py-1 rounded text-sm font-medium border border-border hover:bg-accent disabled:opacity-50"
-                  disabled={cleanupPreviewMutation.isPending || cleanupApplyMutation.isPending}
-                >
-                  {cleanupPreviewMutation.isPending ? 'Previewing…' : 'Preview'}
-                </button>
-              </div>
-              {cleanupPreview && (
-                <div className="border border-border rounded p-3 bg-muted/30 max-h-60 overflow-y-auto">
-                  <p className="font-medium text-foreground mb-2">
-                    {cleanupPreview.would_remove_count === 0
-                      ? 'No agents match — nothing to remove.'
-                      : `${cleanupPreview.would_remove_count} agent${cleanupPreview.would_remove_count === 1 ? '' : 's'} would be soft-deleted:`}
-                  </p>
-                  {cleanupPreview.candidates.length > 0 && (
-                    <ul className="space-y-1 text-xs">
-                      {cleanupPreview.candidates.map((c) => (
-                        <li key={c.agent_id} className="flex items-center gap-2">
-                          {typeof c.agent_code === 'number' && (
-                            <span className="font-mono tabular-nums text-muted-foreground">
-                              {String(c.agent_code).padStart(3, '0')}
-                            </span>
-                          )}
-                          <span className="font-medium">{c.name || c.agent_id}</span>
-                          <span className="text-muted-foreground ml-auto">
-                            {c.last_seen ? formatRelativeTime(c.last_seen) : 'Never'}
+            {cleanupPreview && (
+              <div className="border border-border rounded p-3 bg-muted/30 max-h-60 overflow-y-auto">
+                <p className="font-medium text-foreground mb-2">
+                  {cleanupPreview.would_remove_count === 0
+                    ? 'No agents match — nothing to remove.'
+                    : `${cleanupPreview.would_remove_count} agent${cleanupPreview.would_remove_count === 1 ? '' : 's'} would be soft-deleted:`}
+                </p>
+                {cleanupPreview.candidates.length > 0 && (
+                  <ul className="space-y-1 text-xs">
+                    {cleanupPreview.candidates.map((c) => (
+                      <li key={c.agent_id} className="flex items-center gap-2">
+                        {typeof c.agent_code === 'number' && (
+                          <span className="font-mono tabular-nums text-muted-foreground">
+                            {String(c.agent_code).padStart(3, '0')}
                           </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="px-6 py-3 border-t border-border flex justify-end gap-2">
-              <button
-                onClick={() => {
-                  setCleanupOpen(false)
-                  setCleanupPreview(null)
-                }}
-                className="px-3 py-1.5 rounded text-sm font-medium text-foreground/90 hover:bg-accent"
-                disabled={cleanupApplyMutation.isPending}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => cleanupApplyMutation.mutate(cleanupDays)}
-                className="px-3 py-1.5 rounded text-sm font-medium bg-red-600 hover:bg-red-700 text-white disabled:opacity-50"
-                disabled={
-                  !cleanupPreview ||
-                  cleanupPreview.would_remove_count === 0 ||
-                  cleanupApplyMutation.isPending
-                }
-                title={
-                  !cleanupPreview
-                    ? 'Run a preview first'
-                    : cleanupPreview.would_remove_count === 0
-                      ? 'Nothing to remove'
-                      : 'Soft-delete the listed agents'
-                }
-              >
-                {cleanupApplyMutation.isPending ? 'Removing…' : 'Apply Cleanup'}
-              </button>
-            </div>
+                        )}
+                        <span className="font-medium">{c.name || c.agent_id}</span>
+                        <span className="text-muted-foreground ml-auto">
+                          {c.last_seen ? formatRelativeTime(c.last_seen) : 'Never'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
           </div>
-        </div>
-      )}
+      </Modal>
 
       {/* Confirmation modal — shared for both Remove and Decommission actions */}
-      {confirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div
-            className="fixed inset-0 bg-black bg-opacity-50"
-            onClick={() => !isMutating && setConfirm(null)}
-          />
-          <div className="relative bg-card rounded-lg shadow-xl max-w-md w-full mx-4">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-              <h2 className="text-lg font-semibold text-foreground">{confirmTitle}</h2>
-              <button
-                onClick={() => !isMutating && setConfirm(null)}
-                className="p-1 hover:bg-accent rounded transition-colors"
-                disabled={isMutating}
-              >
-                <X className="h-4 w-4 text-muted-foreground" />
-              </button>
-            </div>
-            <div className="px-6 py-4 space-y-3 text-sm">
+      <Modal
+        open={!!confirm}
+        onClose={() => !isMutating && setConfirm(null)}
+        size="md"
+        label={confirmTitle}
+        header={
+          <ModalHeader title={confirmTitle} onClose={() => !isMutating && setConfirm(null)} />
+        }
+        footer={
+          <ModalFooter>
+            <button
+              onClick={() => setConfirm(null)}
+              className="px-3 py-1.5 rounded text-sm font-medium text-foreground/90 hover:bg-accent"
+              disabled={isMutating}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                if (!displayConfirm) return
+                if (displayConfirm.action === 'delete') {
+                  deleteMutation.mutate(displayConfirm.agent.agent_id)
+                } else {
+                  decommissionMutation.mutate(displayConfirm.agent.agent_id)
+                }
+              }}
+              className={`px-3 py-1.5 rounded text-sm font-medium ${confirmCtaClass} disabled:opacity-50`}
+              disabled={isMutating}
+            >
+              {isMutating ? 'Working…' : confirmCta}
+            </button>
+          </ModalFooter>
+        }
+      >
+          {displayConfirm && (
+            <div className="space-y-3 text-sm">
               <p className="text-foreground/90">
-                <span className="font-medium">{confirm.agent.name}</span>
-                {typeof confirm.agent.agent_code === 'number' && (
+                <span className="font-medium">{displayConfirm.agent.name}</span>
+                {typeof displayConfirm.agent.agent_code === 'number' && (
                   <span className="ml-2 font-mono text-xs text-muted-foreground">
-                    ({String(confirm.agent.agent_code).padStart(3, '0')})
+                    ({String(displayConfirm.agent.agent_code).padStart(3, '0')})
                   </span>
                 )}
               </p>
               <p className="text-muted-foreground">{confirmBody}</p>
             </div>
-            <div className="px-6 py-3 border-t border-border flex justify-end gap-2">
-              <button
-                onClick={() => setConfirm(null)}
-                className="px-3 py-1.5 rounded text-sm font-medium text-foreground/90 hover:bg-accent"
-                disabled={isMutating}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  if (confirm.action === 'delete') {
-                    deleteMutation.mutate(confirm.agent.agent_id)
-                  } else {
-                    decommissionMutation.mutate(confirm.agent.agent_id)
-                  }
-                }}
-                className={`px-3 py-1.5 rounded text-sm font-medium ${confirmCtaClass} disabled:opacity-50`}
-                disabled={isMutating}
-              >
-                {isMutating ? 'Working…' : confirmCta}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          )}
+      </Modal>
     </div>
   )
 }

@@ -47,6 +47,7 @@
  #include "screen_capture_monitor.h"
  #include "print_monitor.h"
  #include "network_exfil_monitor.h"
+ #include "messaging_text_monitor.h"
  #include "policy_engine.h"
  #include "kernel/filter_comm.h"
  #include <regex>
@@ -2682,6 +2683,19 @@ static ClassificationResult Classify(const std::string& content,
      std::set<std::string> messagingApps;                // managed messaging exe names
      std::set<std::string> messagingExceptUsers;          // users exempt
      std::vector<std::string> messagingExemptTypes;      // extensions, no leading dot
+     // Typed-message inspection (gap-scan of August 26 2026, ported from
+     // CyberSentinel-DLP). messagingAction above (alert/block) is SHARED
+     // between the file-attachment path and this one -- an operator sets one
+     // action for the messaging_app_control policy, and it governs both
+     // surfaces once each is switched on. What's independent is whether the
+     // typed-message surface is switched on AT ALL: messagingInspectMessages
+     // defaults false and does NOT inherit from an enforced attachment-
+     // control policy, because that sits in front of a file dialog and this
+     // sits in front of the keyboard -- an operator enabling one should not
+     // silently also get the other. See GetMessagingVerdict() and
+     // messaging_text_monitor.h's rollout note.
+     std::atomic<bool> messagingInspectMessages{false};
+     std::vector<std::string> messagingDataTypes;        // empty (server-resolved) = inspection effectively off
      std::mutex messagingMutex;
 
      // ── Offline event spool (task #116) ─────────────────────────────────────
@@ -4614,6 +4628,38 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  logger.Warning("Network Exfiltration Monitor did not start");
              }
 
+             // ── Typed-message inspection (gap-scan of August 26 2026) ──
+             // Separate module, separate hook, but reuses every callback
+             // above verbatim -- one classifier, one event sender, one
+             // logger, one messaging-policy resolver for both the file-
+             // attachment and typed-message surfaces. Always started: the
+             // module's own hook only ever holds a keystroke when
+             // GetMessagingVerdict() reports inspectMessages=true AND
+             // block=true for the foreground app (see messaging_text_
+             // monitor.h) -- which requires an operator to have explicitly
+             // turned on typed-message inspection AND set the policy action
+             // to Block. Everywhere else (feature off, alert mode, an
+             // unmanaged app) the hook passes every keystroke straight
+             // through untouched, same as if it were never installed.
+             MessagingTextMonitor::Config mtmCfg;
+             mtmCfg.agentId         = config.agentId;
+             mtmCfg.agentName       = config.agentName;
+             mtmCfg.username        = nemCfg.username;
+             mtmCfg.hostname        = nemCfg.hostname;
+             mtmCfg.classify        = nemCfg.classify;
+             mtmCfg.sendEvent       = nemCfg.sendEvent;
+             mtmCfg.log             = nemCfg.log;
+             mtmCfg.messagingPolicy = nemCfg.messagingPolicy;
+
+             if (MessagingTextMonitor::Start(mtmCfg)) {
+                 logger.Info("Typed-Message Monitor started (hook installed; "
+                             "holds a keystroke only when a policy explicitly "
+                             "enables inspection in Block mode)");
+             } else {
+                 logger.Warning("Typed-Message Monitor did not start -- "
+                                "typed-message inspection unavailable this run");
+             }
+
              // NOTE (task #145): do NOT call ApplyCliGuardIfeo() from here.
              // Confirmed live on a real endpoint: this main task runs
              // UNELEVATED on purpose (RunLevel Limited -- see
@@ -4661,6 +4707,13 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          // Shut down the isolated network exfil monitor before joining the
          // DLPAgent worker threads so its background threads exit cleanly.
          try { NetworkExfilMonitor::Stop(); } catch (...) {}
+         // Same for the typed-message monitor -- MUST run before process exit
+         // so its WH_KEYBOARD_LL hook is cleanly uninstalled (UnhookWindowsHookEx
+         // in HookThread()) rather than left for Windows to notice the owning
+         // thread is gone. A held keystroke at this exact moment is released by
+         // the module's own watchdog, not by this call, so shutdown never eats
+         // a keypress.
+         try { MessagingTextMonitor::Stop(); } catch (...) {}
 
          try {
              UnregisterAgent();
@@ -5119,16 +5172,35 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                          "whatsapp.exe", "telegram.exe", "slack.exe",
                          "discord.exe", "signal.exe"};
              }
+
+             // Typed-message inspection (gap-scan of August 26 2026). Reuses
+             // `action` above (alert/block) as its own action -- see the
+             // field comment on messagingInspectMessages for why it's only
+             // the ENABLE flag that's independent. The server has already
+             // resolved "operator picked zero data types" down to
+             // inspect_messages=false, so an empty array here always means
+             // inspection is effectively off, never "everything". Defaults
+             // false if the server omits the key entirely (older manager
+             // build), which is the safe direction: no keystroke is ever
+             // held unless the server explicitly says so.
+             bool inspectMessages = ExtractJsonBool(response, "inspect_messages");
+             auto dataTypes = ExtractJsonArray(response, "message_data_types");
+             for (auto& t : dataTypes) { for (auto& c : t) c = (char)toupper((unsigned char)c); }
+
              {
                  std::lock_guard<std::mutex> lock(messagingMutex);
                  messagingAction      = action;
                  messagingApps        = std::set<std::string>(apps.begin(), apps.end());
                  messagingExceptUsers = std::set<std::string>(exUsers.begin(), exUsers.end());
                  messagingExemptTypes = exTypes;
+                 messagingDataTypes   = dataTypes;
              }
              messagingEnforced.store(enforced);
+             messagingInspectMessages.store(inspectMessages);
              logger.Debug("Messaging app control: enforced=" + std::string(enforced ? "true" : "false") +
-                         " action=" + action + " apps=" + std::to_string(apps.size()));
+                         " action=" + action + " apps=" + std::to_string(apps.size()) +
+                         " inspect_messages=" + std::string(inspectMessages ? "true" : "false") +
+                         " message_data_types=" + std::to_string(dataTypes.size()));
          } catch (const std::exception& e) {
              logger.Debug(std::string("FetchMessagingAppPolicy failed: ") + e.what());
          } catch (...) {
@@ -5185,8 +5257,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          }
          if (matched) {
              v.managed          = true;
-             v.block            = (messagingAction == "block");
+             v.block            = (messagingAction == "block");   // shared action -- see struct comment
              v.exemptExtensions = messagingExemptTypes;
+             // Typed-message inspection (gap-scan of August 26 2026). Gated on
+             // the SAME app match as the attachment path (an operator picks
+             // which apps are managed once) and the SAME action as above --
+             // only whether it's switched on at all is independent. See the
+             // field comment on messagingInspectMessages.
+             v.inspectMessages  = messagingInspectMessages.load();
+             v.messageDataTypes = messagingDataTypes;
          }
          return v;
      }

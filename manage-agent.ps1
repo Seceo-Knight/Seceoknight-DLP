@@ -35,6 +35,29 @@
 #     model would under-report "installed" and leave two orphaned tasks
 #     behind on uninstall.
 
+# On 64-bit Windows, a 32-bit PowerShell has every HKLM:\SOFTWARE\Policies\...
+# access silently redirected into WOW6432Node, which no browser reads at all.
+# This script (and specifically [4] Browser -> [3] Force extension reinstall,
+# added August 26 2026) writes/removes ExtensionInstallForcelist there -- from
+# a 32-bit process it would write and read back policy from a hidden copy of
+# the hive, reporting success on every operation while Chrome/Edge never see
+# any of it. Ported from CyberSentinel-DLP's own installer, which lost real
+# time to exactly this before adding the same guard. Refusing to run here is
+# better than a silent no-op that claims to have worked.
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+  Write-Host ''
+  Write-Host '  This is 32-bit PowerShell on 64-bit Windows.' -ForegroundColor Red
+  Write-Host '  Browser policy written from here goes to WOW6432Node, which Chrome' -ForegroundColor Red
+  Write-Host '  and Edge never read -- every extension operation in this script would' -ForegroundColor Red
+  Write-Host '  silently do nothing while reporting success.' -ForegroundColor Red
+  Write-Host ''
+  Write-Host '  Re-run with the 64-bit PowerShell:' -ForegroundColor Yellow
+  Write-Host '    %SystemRoot%\sysnative\WindowsPowerShell\v1.0\powershell.exe -File "' -NoNewline -ForegroundColor Yellow
+  Write-Host "$PSCommandPath`"" -ForegroundColor Yellow
+  Write-Host ''
+  exit 1
+}
+
 & {
   $ErrorActionPreference = 'Continue'
 
@@ -390,7 +413,254 @@
     $out
   }
 
-  function Show-BrowserControls {
+  # Forces a clean re-issue of the ExtensionInstallForcelist entry, then
+  # immediately kicks the guard task so it rewrites it -- instead of waiting
+  # up to 2 minutes for the task's own schedule.
+  #
+  # Added from this engagement's own live debugging (August 26 2026), not a
+  # line-for-line CyberSentinel-DLP port -- their equivalent problem (an
+  # extension stuck on an old version, self-update and every UI Update
+  # button failing to move it) was fixed in their installer script's
+  # Deploy/Repair flow, but SeceoKnight has no imperative "repair the
+  # extension" action at all: force-install is entirely reconcile-driven by
+  # the Browser Extension Guard task, with nothing that lets an operator
+  # force a fresh cycle on demand. On a real endpoint this session, Chrome
+  # DevTools access was itself blocked for this (force-installed) extension,
+  # so there was no way to inspect *why* it was stuck -- the only thing that
+  # actually worked was removing the ExtensionInstallForcelist entry
+  # (Chrome/Edge auto-uninstall on the next policy read), letting the guard
+  # task re-add it (a genuinely fresh install, not an in-place patch), then
+  # closing and reopening the browser. This function is exactly that
+  # procedure, so nobody has to type out raw registry commands by hand a
+  # second time.
+  #
+  # Deliberately does NOT force-kill the browser (CyberSentinel hit real
+  # data loss doing that with too short a grace window -- see their commit
+  # 90a2608). Removing the registry value is enough; Chrome/Edge only need
+  # to be closed and reopened once afterwards, on the user's own schedule.
+  function Reset-ExtensionForceInstall {
+    $extStatus = Get-ExtensionForceInstallStatus
+    if (-not $extStatus.ExtensionId) {
+      Err '   No extension id cached yet -- nothing to reset. Run [1] Install/[2] Update first.'
+      return
+    }
+    if (@($extStatus.Forced).Count -eq 0) {
+      Warn '   No browser currently shows a force-install entry for this extension -- nothing to remove.'
+      Warn '   If the extension still looks stuck, just restart the Browser Extension Guard task below.'
+    } else {
+      Write-Host ''
+      Warn "   This removes the ExtensionInstallForcelist entry for $($extStatus.ExtensionId) from:"
+      foreach ($name in $extStatus.Forced) { Warn "     - $name" }
+      Warn '   Chrome/Edge will auto-uninstall the extension on their next policy read, then the'
+      Warn '   guard task (triggered immediately below) re-adds the entry for a genuinely fresh install.'
+      Warn '   You will need to fully close and reopen each affected browser afterwards.'
+      $confirm = Read-Host "   Type 'y' to confirm (anything else cancels)"
+      if ($confirm -ne 'y' -and $confirm -ne 'Y') {
+        Warn '   Cancelled -- no changes made.'
+        return
+      }
+      foreach ($b in $BROWSERS) {
+        if ($extStatus.Forced -notcontains $b.Name) { continue }
+        $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
+        if (-not (Test-Path $fl)) { continue }
+        $props = Get-ItemProperty -Path $fl -ErrorAction SilentlyContinue
+        $removed = $false
+        foreach ($p in $props.PSObject.Properties) {
+          if ($p.Name -like 'PS*') { continue }
+          if ($p.Value -like "$($extStatus.ExtensionId);*") {
+            Remove-ItemProperty -Path $fl -Name $p.Name -ErrorAction SilentlyContinue
+            $removed = $true
+          }
+        }
+        if ($removed) { Ok "   $($b.Name): force-install entry removed." }
+        else { Warn "   $($b.Name): entry not found when removing (already gone?)." }
+      }
+    }
+    Write-Host ''
+    $task = Get-ScheduledTask -TaskName $EXTGUARD_TASK -ErrorAction SilentlyContinue
+    if ($task) {
+      try {
+        Start-ScheduledTask -TaskName $EXTGUARD_TASK -ErrorAction Stop
+        Ok '   Browser Extension Guard task triggered -- it will re-add the entry within a few seconds.'
+      } catch {
+        Err "   Could not trigger the guard task: $($_.Exception.Message)"
+        Warn "   It will still run on its own schedule (up to 2 minutes)."
+      }
+    } else {
+      Warn '   Browser Extension Guard task is not installed -- run [1] Install/[2] Update first.'
+    }
+    Write-Host ''
+    Warn '   Now fully close and reopen each affected browser (not just a tab/window) to complete'
+    Warn '   the reinstall. Verify afterwards with chrome://extensions or edge://extensions.'
+  }
+
+  # Reads a registry value from an EXPLICIT view (64-bit or 32-bit),
+  # regardless of which bitness this PowerShell process happens to be. The
+  # startup guard at the top of this script already refuses to run under
+  # 32-bit PowerShell at all, so in normal use this and Get-ItemProperty
+  # agree -- this exists for [5] Diagnose, which deliberately checks BOTH
+  # views side by side to prove there's no WOW6432Node shadow copy sitting
+  # underneath the real one (see Show-ExtensionDiagnostics below). Ported
+  # from CyberSentinel-DLP commit 9e01900.
+  function Get-PolicyValueInView {
+    param(
+      [Parameter(Mandatory)][string]$SubKey,   # e.g. 'SOFTWARE\Policies\Google\Chrome'
+      [Parameter(Mandatory)][string]$ValueName,
+      [ValidateSet('Registry64', 'Registry32')][string]$View = 'Registry64'
+    )
+    try {
+      $viewEnum = [Microsoft.Win32.RegistryView]::$View
+      $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, $viewEnum)
+      $key = $base.OpenSubKey($SubKey)
+      if (-not $key) { return $null }
+      $val = $key.GetValue($ValueName)
+      $key.Close(); $base.Close()
+      return $val
+    } catch { return $null }
+  }
+
+  # [5] Diagnose -- reports what the BROWSER actually sees, not what this
+  # script last wrote. Ported from CyberSentinel-DLP commit 9e01900
+  # ("report what the BROWSER sees, and refuse to run where it cannot"),
+  # adapted to SeceoKnight's own $BROWSERS table, $EXT_STATE_CACHE-cached
+  # extension id, and $s.ServerUrl for the update-feed reachability check.
+  #
+  # Exists for the same reason the startup bitness guard exists: every
+  # write this script (and the reconcile-driven Browser Extension Guard
+  # task) makes to ExtensionInstallForcelist goes through
+  # HKLM:\SOFTWARE\Policies\..., and on 64-bit Windows a 32-bit process
+  # reading or writing that path is silently redirected into
+  # WOW6432Node\Policies\... instead -- a hidden copy no browser ever
+  # reads. The guard task itself runs as SYSTEM via Task Scheduler, which
+  # is always the native 64-bit host, so it isn't at risk -- but this
+  # gives an operator a direct way to PROVE that, per browser, instead of
+  # trusting it.
+  function Show-ExtensionDiagnostics($s) {
+    Write-Host ''
+    Info 'Extension diagnostics -- what the browser sees'
+    Write-Host ''
+
+    # 1) This process's own bitness view (informational -- the startup
+    #    guard already refused to run at all if this were 32-bit process
+    #    on a 64-bit OS).
+    $procBits = if ([Environment]::Is64BitProcess) { '64-bit' } else { '32-bit' }
+    $osBits   = if ([Environment]::Is64BitOperatingSystem) { '64-bit' } else { '32-bit' }
+    Write-Host "   1. Process/OS bitness"
+    Ok "     This PowerShell process: $procBits  (OS: $osBits)"
+
+    # 2) Per-browser, per-view policy read -- the registry view that
+    #    actually matters is Registry64 (browsers are always 64-bit
+    #    processes on a 64-bit OS today), read explicitly rather than
+    #    relying on this process's own default view.
+    $extId = $null
+    if (Test-Path $EXT_STATE_CACHE) {
+      $lines = Get-Content -Path $EXT_STATE_CACHE -ErrorAction SilentlyContinue
+      if ($lines -and $lines.Count -ge 1) { $extId = $lines[0].Trim() }
+    }
+    Write-Host ''
+    Write-Host "   2. Per-browser policy (Registry64 view -- what the browser itself reads)"
+    if (-not $extId) {
+      Warn '     No extension id cached yet -- run [1] Install/[2] Update first.'
+    } else {
+      foreach ($b in $BROWSERS) {
+        $subKey = $b.Root -replace '^HKLM:\\', ''
+        $flVal  = Get-PolicyValueInView -SubKey "$subKey\ExtensionInstallForcelist" -ValueName '1' -View Registry64
+        # Forcelist entries aren't guaranteed to be under name "1" -- walk
+        # all of them via the standard API for an authoritative read, this
+        # 64-bit-view probe is just to prove the view itself isn't empty
+        # while Get-ItemProperty (native view) shows something.
+        $present = $false
+        try {
+          $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+          $key = $base.OpenSubKey("$subKey\ExtensionInstallForcelist")
+          if ($key) {
+            foreach ($name in $key.GetValueNames()) {
+              $v = $key.GetValue($name)
+              if ($v -like "$extId;*") { $present = $true; break }
+            }
+            $key.Close()
+          }
+          $base.Close()
+        } catch {}
+        if ($present) { Ok "     $($b.Name): force-install entry visible in the 64-bit registry view" }
+        else { Warn "     $($b.Name): NOT visible in the 64-bit view (the one the browser reads)" }
+
+        # ExtensionSettings JSON validity, if the admin has also set that
+        # (a separate, richer policy some deployments layer on top).
+        $esRaw = Get-PolicyValueInView -SubKey $subKey -ValueName 'ExtensionSettings' -View Registry64
+        if ($esRaw) {
+          try { $null = $esRaw | ConvertFrom-Json; Ok "     $($b.Name): ExtensionSettings present and is valid JSON" }
+          catch { Err "     $($b.Name): ExtensionSettings present but is NOT valid JSON -- the browser will ignore it" }
+        }
+
+        # wantVersion -- the managed minimum-version pin agent.cpp/self-update
+        # publishes (see task #23/#26's history: this key is powerful enough
+        # to block Chrome/Edge startup entirely if malformed, handle with care).
+        $wantVer = Get-PolicyValueInView -SubKey $subKey -ValueName 'wantVersion' -View Registry64
+        if ($wantVer) { Write-Host "     $($b.Name): wantVersion policy = $wantVer" -ForegroundColor DarkGray }
+      }
+
+      # 3) WOW6432Node shadow-copy detection -- if ANYTHING for this
+      #    extension id exists under the 32-bit view, some process (this
+      #    script running 32-bit in the past, a scheduled task misconfigured
+      #    to launch 32-bit PowerShell, etc.) wrote there by mistake. Its
+      #    mere presence is the bug, regardless of what the 64-bit view says.
+      Write-Host ''
+      Write-Host '   3. WOW6432Node shadow-copy check (32-bit view -- should be EMPTY)'
+      $shadowFound = $false
+      foreach ($b in $BROWSERS) {
+        $subKey = $b.Root -replace '^HKLM:\\', ''
+        try {
+          $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry32)
+          $key = $base.OpenSubKey("$subKey\ExtensionInstallForcelist")
+          if ($key) {
+            foreach ($name in $key.GetValueNames()) {
+              $v = $key.GetValue($name)
+              if ($v -like "$extId;*") {
+                $shadowFound = $true
+                Err "     $($b.Name): entry found under WOW6432Node -- this is a shadow copy no browser reads"
+              }
+            }
+            $key.Close()
+          }
+          $base.Close()
+        } catch {}
+      }
+      if (-not $shadowFound) { Ok '     No WOW6432Node shadow copy found in either browser -- clean.' }
+
+      # 4) Installed-vs-published version, per profile that actually has
+      #    the extension -- reuses the same profile-scan Get-ExtensionInstallSources
+      #    already does for the unpacked-copy check above.
+      Write-Host ''
+      Write-Host '   4. Installed version (per browser profile)'
+      $sources = Get-ExtensionInstallSources $extId
+      if (@($sources).Count -eq 0) {
+        Warn '     Extension not found installed in any browser profile on this machine yet.'
+      } else {
+        foreach ($src in $sources) {
+          Write-Host "     $($src.Browser) / $($src.User) / $($src.Profile): v$($src.Version)  ($($src.Label))"
+        }
+      }
+    }
+
+    # 5) Update-feed reachability -- the same URL the browser itself polls
+    #    for updates, built from this agent's own configured server.
+    Write-Host ''
+    Write-Host '   5. Update-feed reachability'
+    if (-not $s.ServerUrl) {
+      Warn '     Agent is not configured with a server URL yet -- cannot build the feed URL.'
+    } else {
+      $feedUrl = "$($s.ServerUrl.TrimEnd('/'))/api/v1/extension/update.xml"
+      try {
+        $resp = Invoke-WebRequest -Uri $feedUrl -UseBasicParsing -Method Head -TimeoutSec 8 -ErrorAction Stop
+        Ok "     $feedUrl -- reachable (HTTP $($resp.StatusCode))"
+      } catch {
+        Err "     $feedUrl -- NOT reachable: $($_.Exception.Message)"
+      }
+    }
+  }
+
+  function Show-BrowserControls($s) {
     Write-Host ''
     Info 'Browser controls'
     Write-Host ''
@@ -480,9 +750,11 @@
     Write-Host ''
     Write-Host '   [1] Disable private browsing ' -ForegroundColor Yellow -NoNewline; Write-Host '- closes the "open an Incognito window" DLP bypass'
     Write-Host '   [2] Re-allow private browsing' -ForegroundColor Gray   -NoNewline; Write-Host '- restores the browser default'
-    Write-Host '   [3] Back                     ' -ForegroundColor Gray   -NoNewline; Write-Host '- return to the main menu'
+    Write-Host '   [3] Force extension reinstall' -ForegroundColor Yellow -NoNewline; Write-Host '- extension stuck / wrong version and self-update is not fixing it'
+    Write-Host '   [4] Diagnose                 ' -ForegroundColor Cyan   -NoNewline; Write-Host '- report exactly what the browser sees (both registry views, versions, update-feed)'
+    Write-Host '   [5] Back                     ' -ForegroundColor Gray   -NoNewline; Write-Host '- return to the main menu'
     Write-Host ''
-    $bc = Read-Host '   Choose an option (1-3)'
+    $bc = Read-Host '   Choose an option (1-5)'
     switch ($bc.Trim()) {
       '1' {
         Write-Host ''
@@ -504,6 +776,13 @@
           if ($r.Applied) { Ok "   $($r.Name) ($($r.Label)): restored to default" }
           else { Err "   $($r.Name) ($($r.Label)): FAILED to restore$(if ($r.Error) { " - $($r.Error)" })" }
         }
+      }
+      '3' {
+        Write-Host ''
+        Reset-ExtensionForceInstall
+      }
+      '4' {
+        Show-ExtensionDiagnostics $s
       }
       default {}
     }
@@ -916,7 +1195,7 @@
       }
 
       '4' {
-        Show-BrowserControls
+        Show-BrowserControls $s
       }
 
       '5' {

@@ -35,6 +35,7 @@ echo ""
 # in main() so std::cout still works when you want to see it.
 g++ -std=c++17 -O2 -mwindows \
     agent.cpp screen_capture_monitor.cpp print_monitor.cpp network_exfil_monitor.cpp \
+    messaging_text_monitor.cpp \
     -o seceoknight_agent.exe \
     -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lgdi32 \
     -lws2_32 -lsetupapi -ladvapi32 -lcfgmgr32 -lshell32 -lwinspool \

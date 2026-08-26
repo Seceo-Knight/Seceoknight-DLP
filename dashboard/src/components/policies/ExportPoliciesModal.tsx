@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { X, Download, CheckSquare, Square } from 'lucide-react'
+import { Download, CheckSquare, Square } from 'lucide-react'
 import { Policy } from '@/types/policy'
 import { exportPolicies } from '@/lib/api'
 import { getPolicyTypeLabel } from '@/utils/policyUtils'
 import toast from 'react-hot-toast'
+import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
 
 interface ExportPoliciesModalProps {
   isOpen: boolean
@@ -24,8 +25,6 @@ export default function ExportPoliciesModal({ isOpen, onClose, policies }: Expor
       setSelected(new Set(policies.map((p) => p.id)))
     }
   }, [isOpen, policies])
-
-  if (!isOpen) return null
 
   const allSelected = selected.size === policies.length && policies.length > 0
 
@@ -66,19 +65,33 @@ export default function ExportPoliciesModal({ isOpen, onClose, policies }: Expor
   }
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div
-        className="bg-gray-800 rounded-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto border border-gray-700"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between p-6 border-b border-gray-700 sticky top-0 bg-gray-800 z-10">
-          <h3 className="text-xl font-bold text-white">Export Policies</h3>
-          <button onClick={onClose} className="text-muted-foreground/70 hover:text-white transition-colors">
-            <X className="w-5 h-5" />
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      size="md"
+      className="!bg-gray-800 !border-gray-700"
+      label="Export Policies"
+      header={<ModalHeader title="Export Policies" onClose={onClose} />}
+      footer={
+        <ModalFooter>
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-muted-foreground/70 hover:text-white transition-colors"
+          >
+            Cancel
           </button>
-        </div>
-
-        <div className="p-6 space-y-4">
+          <button
+            onClick={handleExport}
+            disabled={exporting || selected.size === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
+          >
+            <Download className="w-4 h-4" />
+            {exporting ? 'Exporting...' : `Export ${selected.size} Polic${selected.size === 1 ? 'y' : 'ies'}`}
+          </button>
+        </ModalFooter>
+      }
+    >
+        <div className="space-y-4">
           <p className="text-sm text-muted-foreground/70">
             Downloads a JSON file that can be imported into any other SeceoKnight deployment.
             Agent scoping is not included -- imported policies apply to all agents until re-scoped.
@@ -117,24 +130,6 @@ export default function ExportPoliciesModal({ isOpen, onClose, policies }: Expor
             ))}
           </div>
         </div>
-
-        <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-700">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-muted-foreground/70 hover:text-white transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleExport}
-            disabled={exporting || selected.size === 0}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
-          >
-            <Download className="w-4 h-4" />
-            {exporting ? 'Exporting…' : `Export ${selected.size} Polic${selected.size === 1 ? 'y' : 'ies'}`}
-          </button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

@@ -201,7 +201,30 @@ export interface MessagingAppControlConfig {
     users?: string[]
     file_types?: string[]
   }
+  // Typed-message inspection, a different surface from the file-attachment
+  // control above -- the agent holds the send keystroke in a managed app,
+  // reads the composer via UI Automation, classifies it locally, and
+  // re-injects the key if clean or drops it (in Block mode) if not. Ported
+  // from CyberSentinel-DLP, gap-scan of August 26 2026. `action` above is
+  // SHARED between both surfaces once switched on; this flag is only
+  // whether the typed-message one is on AT ALL, and it defaults to false /
+  // does not inherit from the rest of this policy on purpose -- see
+  // MessagingTypedMessagePanel's warning copy.
+  inspect_messages?: boolean
+  // Which detector types count as sensitive for a TYPED message specifically.
+  // Undefined/omitted = server-side default (every type except INDIAN_PHONE,
+  // since a phone number is the most ordinary thing typed into a chat app).
+  // An explicit empty array is a real choice and means inspection is
+  // effectively off, mirrored by the server collapsing inspect_messages to
+  // false when the list is empty.
+  message_data_types?: string[]
 }
+
+// Kept in sync with _MESSAGING_DATA_TYPES in server/app/api/v1/agents.py.
+export const MESSAGING_DATA_TYPES = [
+  'CREDIT_CARD', 'AADHAAR', 'PAN', 'SSN', 'INDIAN_PASSPORT',
+  'AWS_KEY', 'PRIVATE_KEY', 'JWT_TOKEN', 'IFSC', 'UPI_ID', 'INDIAN_PHONE',
+] as const
 
 export type PrinterControlMode = 'enforce' | 'audit'
 export type PrinterControlScope = 'block_all' | 'block_network' | 'block_local' | 'allowlist'

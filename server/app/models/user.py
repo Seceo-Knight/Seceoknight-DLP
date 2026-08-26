@@ -60,5 +60,26 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
     last_login = Column(DateTime(timezone=True), nullable=True)
 
+    # ── SSO/SIEM provenance (app/core/sso_roles.py) ──────────────────────
+    # Ported from CyberSentinel-DLP, gap-scan of August 26 2026.
+    # sso_managed marks an account as owned by the SIEM sync: role,
+    # department and clearance are re-applied from the exchange token on
+    # every login (SSO_SYNC_ON_LOGIN). An admin editing such a user's role
+    # by hand through the normal admin UI detaches it (sso_managed=false)
+    # rather than having the edit silently revert at the user's next login.
+    # sso_source_role records the last SIEM role:access pair seen (e.g.
+    # "L3:ro"), purely for tracing — an unexpected DLP role can be traced
+    # back to what the SIEM actually sent.
+    sso_managed = Column(Boolean, default=False, nullable=False, server_default="false")
+    sso_source_role = Column(String(64), nullable=True)
+    # siem_sub is the SIEM's own immutable user id (the exchange token's
+    # `sub` claim), and is the key an SSO login is matched on in preference
+    # to email. Email is a display attribute that people change: keyed on
+    # email alone, a rename orphans the account and the next login silently
+    # provisions a SECOND one, leaving the original's history attached to
+    # nobody. Nullable because locally-created accounts have no SIEM
+    # identity, and backfilled on the first login that presents a sub.
+    siem_sub = Column(String(255), unique=True, nullable=True, index=True)
+
     def __repr__(self):
         return f"<User {self.email}>"

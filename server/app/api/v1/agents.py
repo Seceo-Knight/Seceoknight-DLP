@@ -1588,6 +1588,32 @@ _DEFAULT_MESSAGING_APPS = [
     "telegram.exe", "slack.exe", "discord.exe", "signal.exe",
 ]
 
+# Every type the local agent-side classifier can report for a typed message,
+# so a typo in policy config is rejected rather than silently narrowing
+# coverage to nothing. Ported from CyberSentinel-DLP, gap-scan of August 26
+# 2026 -- mirrors NetworkExfilMonitor's NxTypeSeverity() table in agent.cpp.
+_MESSAGING_DATA_TYPES = [
+    "CREDIT_CARD", "AADHAAR", "PAN", "SSN", "INDIAN_PASSPORT",
+    "AWS_KEY", "PRIVATE_KEY", "JWT_TOKEN", "IFSC", "UPI_ID", "INDIAN_PHONE",
+]
+
+# What a policy that hasn't chosen a data-type list gets: everything above
+# EXCEPT INDIAN_PHONE. Not a blanket "everything", deliberately -- the
+# endpoint treats an omitted key as "use this default", but an EXPLICIT empty
+# selection (an operator unticking every box) as "inspection is off" -- see
+# inspect_messages below. Naming a real default here is what keeps a phone
+# number, the most ordinary thing typed into a chat app, from being the
+# out-of-the-box thing that gets every message blocked.
+_DEFAULT_MESSAGE_DATA_TYPES = [t for t in _MESSAGING_DATA_TYPES if t != "INDIAN_PHONE"]
+
+
+def _message_data_types(cfg: dict) -> list:
+    raw = cfg.get("message_data_types")
+    if raw is None:
+        return list(_DEFAULT_MESSAGE_DATA_TYPES)
+    known = set(_MESSAGING_DATA_TYPES)
+    return [t for t in (str(x).strip().upper() for x in raw) if t in known]
+
 
 @router.get("/{agent_id}/messaging-app-policy")
 async def get_messaging_app_policy(
@@ -1612,6 +1638,20 @@ async def get_messaging_app_policy(
     app window bypasses the common dialog and would need a filesystem
     minifilter (out of scope for this user-mode agent).
 
+    Also carries typed-message inspection (inspect_messages /
+    message_data_types), ported from CyberSentinel-DLP in a gap-scan of
+    August 26 2026. This is a different surface from the attachment path
+    above -- the agent's messaging_text_monitor.cpp holds the Enter/send
+    keystroke in a managed app via a low-level keyboard hook, reads the
+    composer through UI Automation, classifies it locally, and re-injects
+    the key if clean or drops it (in Block mode) if not. `action` above is
+    SHARED between both surfaces once each is switched on; inspect_messages
+    is the independent enable flag for the typed-message one specifically,
+    and it defaults to FALSE and does NOT inherit from `enforced` -- an
+    operator turning on attachment control should not silently also get a
+    keyboard hook. See messaging_text_monitor.h's rollout note for why
+    Alert mode should be validated before ever setting action to Block.
+
     Driven by a Policy row with type="messaging_app_control". The agent
     polls this on the same cadence as policy sync and caches the result.
     Requires ``X-Agent-Key`` header.
@@ -1634,6 +1674,8 @@ async def get_messaging_app_policy(
             "apps": [],
             "exception_users": [],
             "exempt_file_types": [],
+            "inspect_messages": False,
+            "message_data_types": [],
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -1647,12 +1689,24 @@ async def get_messaging_app_policy(
 
     apps = _lc_list(cfg.get("apps")) or list(_DEFAULT_MESSAGING_APPS)
     exc = cfg.get("exceptions") or {}
+
+    data_types = _message_data_types(cfg)
+    # An empty selection is resolved HERE, not on the agent: the agent can't
+    # tell "operator picked nothing" from "server too old to send the field"
+    # -- both arrive as an absent/empty array, and reading that as "every
+    # Confidential/Restricted type" is the exact opposite of what unticking
+    # every box means. So an explicit empty selection collapses inspection
+    # to off, the one way that can't be misread.
+    inspect_messages = bool(cfg.get("inspect_messages")) and bool(data_types)
+
     return {
         "enforced": True,
         "action": action,
         "apps": apps,
         "exception_users": _lc_list(exc.get("users")),
         "exempt_file_types": [s.lstrip(".") for s in _lc_list(exc.get("file_types"))],
+        "inspect_messages": inspect_messages,
+        "message_data_types": data_types,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 

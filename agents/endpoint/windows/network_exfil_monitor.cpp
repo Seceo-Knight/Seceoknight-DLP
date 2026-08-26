@@ -2800,6 +2800,11 @@ int NxTypeSeverity(const std::string& type) {   // 0=Public, 3=Restricted
 
 } // anonymous namespace
 
+// Exported wrapper around the internal severity table above -- messaging_text_
+// monitor.cpp needs it too (RestrictToTypes(), gap-scan of August 26 2026) to
+// rank an operator's chosen data-type list without duplicating the table.
+int TypeSeverity(const std::string& type) { return NxTypeSeverity(type); }
+
 ClassifyResult ClassifyNetworkContent(const std::string& content) {
     ClassifyResult out;
     std::vector<NxItem> items = NxDetectAll(content);

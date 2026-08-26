@@ -1,8 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { MessagingAppControlConfig } from '@/types/policy'
-import { Plus, X } from 'lucide-react'
+import { MessagingAppControlConfig, MESSAGING_DATA_TYPES } from '@/types/policy'
+import { Plus, X, Keyboard } from 'lucide-react'
 
 interface MessagingAppControlPolicyFormProps {
   config: MessagingAppControlConfig
@@ -28,6 +28,18 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
       users: rawConfig?.exceptions?.users ?? [],
       file_types: rawConfig?.exceptions?.file_types ?? [],
     },
+    inspect_messages: rawConfig?.inspect_messages ?? false,
+    message_data_types: rawConfig?.message_data_types,
+  }
+
+  const toggleDataType = (type: string) => {
+    // undefined means "server default (everything except INDIAN_PHONE)" --
+    // the first click here has to materialize that into an explicit list
+    // before it can be edited, otherwise toggling one type off would look
+    // like it did nothing (still undefined, still "default").
+    const current = config.message_data_types ?? MESSAGING_DATA_TYPES.filter((t) => t !== 'INDIAN_PHONE')
+    const next = current.includes(type) ? current.filter((t) => t !== type) : [...current, type]
+    onChange({ ...config, message_data_types: next })
   }
 
   const [newApp, setNewApp] = useState('')
@@ -162,6 +174,73 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
             Add
           </button>
         </div>
+      </div>
+
+      {/* Typed-message inspection */}
+      <div className="border-t border-gray-700 pt-6">
+        <label className="flex items-start gap-3 p-3 rounded-lg border-2 border-amber-500/40 bg-amber-900/10 cursor-pointer hover:border-amber-500/60 transition-all">
+          <input
+            type="checkbox"
+            checked={config.inspect_messages ?? false}
+            onChange={(e) => onChange({ ...config, inspect_messages: e.target.checked })}
+            className="w-4 h-4 mt-0.5 text-indigo-400"
+          />
+          <div>
+            <div className="text-white font-medium text-sm flex items-center gap-2">
+              <Keyboard className="w-4 h-4 text-amber-400" />
+              Also inspect typed messages (not just file attachments)
+            </div>
+            <div className="text-muted-foreground/70 text-xs mt-1">
+              A different, separate control from the attachment settings above. When on, the agent watches for
+              the send key (Enter) in a managed app, reads the message box, and classifies it locally before the
+              message leaves. Off by default and does not inherit from anything else on this policy -- this is a
+              decision to make on purpose.
+            </div>
+            {(config.inspect_messages ?? false) && config.action === 'block' && (
+              <div className="text-amber-300 text-xs mt-2 font-medium">
+                ⚠ Action is set to Block above, so this will hold and drop the send keystroke for a sensitive
+                message in a managed app. Strongly recommended: validate on Alert first (switch Action to Alert),
+                confirm detections on the dashboard look right, THEN switch to Block. Alert mode never touches
+                the keyboard at all.
+              </div>
+            )}
+          </div>
+        </label>
+
+        {(config.inspect_messages ?? false) && (
+          <div className="mt-3">
+            <label className="block text-xs text-muted-foreground/70 mb-2">
+              Data types that count as sensitive in a typed message (separate from attachments -- a phone number
+              typed into chat is ordinary; leave INDIAN_PHONE off unless you actually want it flagged there).
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {MESSAGING_DATA_TYPES.map((type) => {
+                const selected = config.message_data_types ?? MESSAGING_DATA_TYPES.filter((t) => t !== 'INDIAN_PHONE')
+                const isSelected = selected.includes(type)
+                return (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => toggleDataType(type)}
+                    className={`px-3 py-1 rounded-lg border-2 text-xs font-mono transition-all ${
+                      isSelected
+                        ? 'border-indigo-500 bg-indigo-900/30 text-white'
+                        : 'border-gray-600 bg-gray-900/30 text-muted-foreground/70 hover:border-gray-500'
+                    }`}
+                  >
+                    {type}
+                  </button>
+                )
+              })}
+            </div>
+            {(config.message_data_types ?? []).length === 0 && rawConfig?.message_data_types !== undefined && (
+              <div className="text-muted-foreground/70 text-xs mt-2">
+                No data types selected -- typed-message inspection is effectively off even though the checkbox
+                above is checked.
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Exceptions */}

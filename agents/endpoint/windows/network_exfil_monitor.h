@@ -65,6 +65,21 @@ struct MessagingVerdict {
     bool managed = false;                       // is exeLower a managed messaging app?
     bool block   = false;                       // sensitive attach: true = block, false = alert
     std::vector<std::string> exemptExtensions;  // lowercased, no leading dot
+    // Typed chat text, not attachments (see messaging_text_monitor.h). Ported
+    // from CyberSentinel-DLP, gap-scan of August 26 2026. Separate from
+    // `managed` because an operator may well want attachment control on a
+    // fleet without the agent holding keystrokes in it -- that is a bigger
+    // step, and it should be one they take on purpose rather than inherit.
+    // Defaults false and does not inherit from `managed`/`block` above for
+    // exactly that reason.
+    bool inspectMessages = false;
+    // Which detector types count as "sensitive" for a TYPED message, e.g.
+    // {"CREDIT_CARD","AADHAAR"}. Chosen by the operator per policy, because the
+    // right answer is channel-specific: a phone number in a chat app is the
+    // most ordinary message there is, and the same number in an outbound curl
+    // is not. Empty means "every Confidential/Restricted type", which is what
+    // the attachment path above has always done.
+    std::vector<std::string> messageDataTypes;
 };
 using MessagingPolicyFn = std::function<MessagingVerdict(const std::string& exeLower,
                                                          const std::string& userName)>;
@@ -132,5 +147,11 @@ std::vector<std::string> IfeoScopedExecutables();
 // UPI_ID) so the dashboard displays the right data type.
 // -----------------------------------------------------------------------------
 ClassifyResult ClassifyNetworkContent(const std::string& content);
+
+// 0 (Public) .. 3 (Restricted) for a single detector type name, e.g.
+// "CREDIT_CARD" -> 3. Exported for messaging_text_monitor.cpp, which needs to
+// rank an operator-selected list of data types without its own copy of the
+// severity table (gap-scan of August 26 2026).
+int TypeSeverity(const std::string& type);
 
 } // namespace NetworkExfilMonitor
