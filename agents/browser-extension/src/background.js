@@ -500,51 +500,45 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 // Downloads hook -- "watch downloads FROM monitored apps" (gap-scan of
 // CyberSentinel-DLP, August 24, 2026).
 //
-// Unlike every other decision this file makes, chrome.downloads is a
-// background/service-worker-only API -- there's no content-script relay
-// step (no window.postMessage round trip to a page), which also means
-// there's no MAIN-world fetch() to intercept the way web-activity.js and
-// inject.js do for uploads/prompts. The only hook Chrome offers at all for
-// a download already under way is chrome.downloads.onCreated, and the only
-// way to stop one is chrome.downloads.cancel() -- there is no MV3
-// equivalent of a blocking onBeforeDownload event.
+// REVISED same day (August 26, 2026): the original design cancelled the
+// download, shadow-fetched the same URL for inspection, then either
+// re-issued it (chrome.downloads.download()) or left it cancelled. That
+// broke real downloads in the field -- confirmed on a real endpoint against
+// Google Drive AND, separately, SharePoint/OneDrive: both mint a one-time,
+// session-bound signed download URL (Drive's "at=" token, SharePoint's
+// "tempauth" JWT). The instant Chrome's original request goes out, that
+// link is spent -- so cancelling it and trying to fetch or re-download the
+// SAME url ourselves gets rejected outright ("Failed - Forbidden" /
+// "Failed - Needs authorization" in chrome://downloads, observed
+// repeatedly). This isn't a Drive-specific edge case; it's how essentially
+// every major cloud provider protects download links, which means the
+// cancel-and-replay approach was silently breaking every real download
+// from a catalogued host, sensitive or not -- exactly the "must never
+// break what it's protecting" failure this codebase already learned once
+// from the Edge/ExtensionSettings incident.
 //
-// So the shape here is necessarily different from every other path in this
-// file: cancel first, THEN decide, THEN either re-issue the download (a
-// brand new chrome.downloads.download() call) or leave it cancelled. Three
-// safety properties matter more here than anywhere else in the extension,
-// because getting this wrong doesn't just mis-classify traffic -- it can
-// eat a real file the user was trying to save, which is a much worse
-// failure than the Edge/ExtensionSettings incident this codebase already
-// learned its "never break what you're protecting" lesson from once:
+// So: this hook NEVER calls chrome.downloads.cancel() or
+// chrome.downloads.download() anymore. The real download always proceeds
+// completely untouched and always succeeds. In parallel, it makes a
+// best-effort attempt to fetch the same URL itself purely to classify the
+// content for logging/alerting on the dashboard -- this will often fail
+// for the exact one-time-link reason above, and that's fine: it fails
+// open into "detected, but couldn't inspect content" rather than doing
+// anything to the real file. There is currently no way to truly BLOCK a
+// browser download in MV3 without this exact failure mode, so this
+// consciously trades "prevent the download" for "never break the
+// download" -- detection and audit trail, not enforcement.
 //
-//   1. Only http(s):// downloads from a CATALOGUED host are ever touched.
-//      blob:/data:/filesystem: downloads (e.g. a page's own "Export as
-//      CSV" button building a Blob in-page) are LEFT COMPLETELY ALONE --
-//      they can't be re-fetched from this service worker at all (blob:
-//      URLs are scoped to the page that created them), so cancelling one
-//      would just destroy it with no way to recover it. Silent pass-
-//      through, not a gap being hidden: there's genuinely nothing safe to
-//      do here.
-//   2. Every failure mode of the shadow-fetch below (network error,
-//      timeout, the source requiring a cookie/auth context this fetch
-//      doesn't have) re-issues the ORIGINAL download rather than leaving
-//      it cancelled. A DLP hiccup must never just make a legitimate
-//      download vanish with no explanation -- fail-open, same posture as
-//      every other decision path in this file.
-//   3. downloadsWeReissued tracks the exact URLs this code itself just
-//      re-triggered, so the onCreated firing a SECOND time for our own
-//      re-issued download doesn't loop back into cancelling itself.
-//
-// What this can't do: inspect a download whose bytes it can't fetch with
-// the same access the browser had (e.g. some file-sharing CDNs mint a
-// one-time signed URL tied to the exact request that triggered onCreated,
-// which a second fetch() from here may not satisfy) -- that's caught by
-// safety property 2 above and simply allowed through, logged as best-effort
-// rather than silently claiming coverage it doesn't have.
+// Still true from the original design:
+//   - Only http(s):// downloads from a CATALOGUED host are ever inspected.
+//     blob:/data:/filesystem: downloads (e.g. a page's own "Export as CSV"
+//     button building a Blob in-page) are left alone -- they can't be
+//     fetched from this service worker at all (blob: URLs are scoped to
+//     the page that created them).
+//   - The 10MB streaming-capped read (matches inject.js's own upload cap)
+//     and the fetch timeout are both still here, unchanged.
 const DOWNLOAD_CONTENT_CAP_BYTES = 10 * 1024 * 1024; // matches inject.js's MAX_CLASSIFY_BYTES
 const DOWNLOAD_FETCH_TIMEOUT_MS = 15000;
-const downloadsWeReissued = new Set(); // URLs re-triggered by reissueDownload() below, to ignore their own onCreated
 let dlSeq = 0; // own counter -- this file's other "seq" (web-activity.js's) lives in a different JS world entirely
 
 function isWatchedDownloadHost(host, catalogDomains) {
@@ -659,40 +653,22 @@ function bytesToBase64(bytes) {
   return btoa(bin);
 }
 
-// Re-triggers the download for real, either because it was approved or
-// because inspection itself failed (fail-open — see safety property 2 in
-// this section's module comment). filename is deliberately just the
-// basename, not item.filename's full local path Chrome had already chosen
-// -- chrome.downloads.download()'s filename option is relative to the
-// default Downloads directory, and passing an absolute path back into it
-// is undefined behavior, not a shortcut.
-function reissueDownload(url, basename) {
-  downloadsWeReissued.add(url);
-  try {
-    chrome.downloads.download({ url, filename: basename || undefined, saveAs: false }, () => {
-      if (chrome.runtime.lastError) {
-        warn("downloads: re-issue failed for", url, "-", chrome.runtime.lastError.message);
-      }
-      // Small delay, not an immediate delete: onCreated for this exact
-      // re-issued download needs to see it in the set when it fires.
-      setTimeout(() => downloadsWeReissued.delete(url), 30000);
-    });
-  } catch (e) {
-    downloadsWeReissued.delete(url);
-    warn("downloads: chrome.downloads.download threw:", e && e.message);
-  }
-}
-
-async function shadowFetchAndDecide(item, host) {
+// Best-effort content inspection for a download that's already proceeding
+// normally and untouched -- see this section's module comment for why this
+// no longer cancels or re-issues anything. Failure here (network error,
+// timeout, a one-time signed URL already spent by the real download) just
+// means this particular download gets logged without content detail;
+// nothing about the file on disk is affected either way.
+async function inspectDownloadForLogging(item, host) {
   const targetUrl = item.finalUrl || item.url;
   const basename = ((item.filename || "").split(/[\\/]/).pop()) || "download";
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DOWNLOAD_FETCH_TIMEOUT_MS);
-  dlog("downloads: shadow-fetching " + targetUrl);
+  dlog("downloads: inspecting " + targetUrl + " (real download proceeding unaffected)");
   try {
     const resp = await fetch(targetUrl, { credentials: "include", signal: controller.signal });
-    dlog("downloads: shadow-fetch responded status=" + resp.status + " ok=" + resp.ok);
-    if (!resp.ok) throw new Error("shadow-fetch HTTP " + resp.status);
+    dlog("downloads: inspection fetch responded status=" + resp.status + " ok=" + resp.ok);
+    if (!resp.ok) throw new Error("inspection fetch HTTP " + resp.status);
     const bytes = await readCappedBytes(resp.body, DOWNLOAD_CONTENT_CAP_BYTES);
     dlog("downloads: read " + bytes.length + " bytes for " + basename);
     const contentB64 = bytes.length ? bytesToBase64(bytes) : "";
@@ -701,29 +677,18 @@ async function shadowFetchAndDecide(item, host) {
       host, url: targetUrl, activity: "download", fileName: basename,
       fileSize: item.fileSize > 0 ? item.fileSize : bytes.length, contentB64,
     });
+    // Purely informational at this point -- see the native host's own
+    // handling of a "block" decision for a download activity (downgraded
+    // to a high-severity alert, never claims blocked=True, since the file
+    // genuinely already reached disk and this code has no way to undo
+    // that).
     dlog("download decision for " + basename + " from " + host + " -> " + decision.action + " (" + (decision.reason || "") + ")");
-    if (decision.action === "block") {
-      // Left cancelled -- nothing more to do. The native host has already
-      // logged the block event (see handle_web_activity in skdlp_host.py),
-      // same as every other blocked path in this product.
-      return;
-    }
-    // allow/alert/redact all result in the file actually reaching disk --
-    // "redact" has no meaning for arbitrary downloaded bytes (there's no
-    // text stream to substitute into, unlike a fetch body/response; see
-    // WebActivityControlPolicyForm.tsx's per-row action restriction on the
-    // dashboard, which doesn't even offer "redact" for download cells), so
-    // treat it the same as "allow" here rather than silently dropping the
-    // file for an action that was never meant to apply to it.
-    reissueDownload(targetUrl, basename);
   } catch (e) {
-    // Couldn't fetch/read the file ourselves for whatever reason (network
-    // error, our fetch abort timeout, a signed one-time URL that doesn't
-    // survive a second request) -- fail open per this section's safety
-    // property 2: the user still gets their file, just without a content
-    // inspection this particular time.
-    dlog("downloads: shadow-fetch failed for " + basename + " from " + host + " - " + (e && e.message) + " - allowing through");
-    reissueDownload(targetUrl, basename);
+    // Couldn't fetch/read the file ourselves -- most commonly because the
+    // source's download URL was already single-use and the real download
+    // already spent it (see module comment). Nothing to do but note it;
+    // the file already downloaded fine regardless.
+    dlog("downloads: inspection fetch failed for " + basename + " from " + host + " - " + (e && e.message) + " - no content detail for this one");
   } finally {
     clearTimeout(timer);
   }
@@ -732,16 +697,10 @@ async function shadowFetchAndDecide(item, host) {
 function handleDownloadCreated(item) {
   dlog("downloads.onCreated fired: url=" + (item && item.url) + " referrer=" + (item && item.referrer));
   if (!item || typeof item.url !== "string") { dlog("downloads: no usable item/url, ignoring"); return; }
-  if (downloadsWeReissued.has(item.url)) {
-    // Our own re-issued download completing the round trip -- not a new
-    // download to evaluate.
-    dlog("downloads: this is our own re-issued download completing, ignoring");
-    downloadsWeReissued.delete(item.url);
-    return;
-  }
   if (!/^https?:\/\//i.test(item.url)) {
-    // blob:/data:/filesystem:/etc. -- see safety property 1 above. Never
-    // touched, not even a cancel attempt.
+    // blob:/data:/filesystem:/etc. -- left alone; can't be fetched from a
+    // service worker at all (blob: URLs are scoped to the page that
+    // created them), and this hook never touches the real download anyway.
     dlog("downloads: non-http(s) URL scheme, leaving untouched: " + item.url);
     return;
   }
@@ -760,18 +719,9 @@ function handleDownloadCreated(item) {
     dlog("downloads: resolved host=" + host + " watched=" + watched);
     if (!watched) return; // not from a catalogued app -- normal download, untouched
 
-    chrome.downloads.cancel(item.id, () => {
-      if (chrome.runtime.lastError) {
-        // Couldn't cancel (already finished, already gone, etc.) -- too
-        // late to intercept this one; do nothing further rather than
-        // inspecting a file that's already fully saved with no way to
-        // retroactively block it.
-        dlog("downloads: could not cancel " + item.id + " - " + chrome.runtime.lastError.message);
-        return;
-      }
-      dlog("downloads: intercepted download from watched host " + host + " - inspecting before re-issuing");
-      shadowFetchAndDecide(item, host);
-    });
+    // The real download is already proceeding at this point and is never
+    // interfered with -- this only ever inspects a copy for logging.
+    inspectDownloadForLogging(item, host);
   });
 }
 

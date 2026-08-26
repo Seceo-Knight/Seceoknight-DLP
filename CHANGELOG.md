@@ -8,6 +8,52 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔴 REVISED same day: downloads hook was silently breaking real downloads (August 26, 2026)
+
+Confirmed on a real endpoint, using the new dlp-host.log/debug_log tracing
+below: the downloads hook shipped earlier today (cancel the download,
+shadow-fetch the same URL for inspection, then re-issue it or leave it
+cancelled) was breaking every real download from a catalogued host, not
+just the sensitive ones it was meant to catch. `chrome://downloads` showed
+repeated "Failed - Forbidden" / "Failed - Needs authorization" entries
+attributed to the extension. Root cause: Google Drive and SharePoint/
+OneDrive (and almost certainly most other providers) mint a one-time,
+session-bound signed download URL -- Drive's `at=` token, SharePoint's
+`tempauth` JWT. The instant Chrome's original request goes out, that link
+is spent, so cancelling it and fetching or re-downloading the SAME url
+ourselves gets flatly rejected. This is a hard MV3 limitation, not a bug in
+the request logic: there is no blocking `onBeforeDownload`-style event in
+Manifest V3, so "stop first, decide, resume" was always going to run into
+this for any provider using signed links.
+
+**Fix:** the downloads hook no longer calls `chrome.downloads.cancel()` or
+`chrome.downloads.download()` at all. The real download always proceeds
+completely untouched and always succeeds. It still makes a best-effort
+attempt to fetch the same URL itself purely to classify the content for
+the dashboard's Events/Alerts -- this will often fail for the exact
+one-time-link reason above, and that's fine: it fails open into "detected,
+but no content detail this time" rather than ever touching the real file.
+`skdlp_host.py`'s `handle_web_activity()` now downgrades a "block" decision
+for a download activity to a critical-severity alert rather than emitting
+`blocked=True` -- the file already reached disk by the time this code runs
+and always will, so claiming an enforcement outcome it can't deliver would
+be a real, not just optimistic, false statement on the dashboard. The
+Policies page's Download rows relabel "Block" to "Alert (Critical)" with a
+hint explaining why, for the same reason.
+
+**What this means for the feature:** downloads from watched apps are
+detected and audited/alerted on, with content classification wherever the
+inspection fetch happens to succeed -- but cannot be reliably prevented.
+Same trade-off this codebase already made once before, deliberately, in
+favor of "never break what you're protecting" over "attempt an enforcement
+guarantee MV3 can't actually back up here."
+
+Verified against the mock chrome/fetch test harness: a simulated one-time-
+link failure (fetch returns 403) no longer touches `chrome.downloads` at
+all -- zero `cancel()`/`download()` calls in any scenario now, by design.
+
+---
+
 ## 🔧 Debugging aid: dlp-host.log now records every request, plus a debug relay from the extension (August 26, 2026)
 
 Found while validating the downloads hook (previous entry) on a real endpoint:

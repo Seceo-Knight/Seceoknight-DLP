@@ -13,13 +13,23 @@ interface WebActivityControlPolicyFormProps {
 // full 4-category x 6-activity matrix grid: upload/attach aren't wired to
 // anything yet (the browser extension's file uploads still go through the
 // older Cloud Upload Guard path to avoid double-logging), so a control for
-// them would look configurable but never actually fire. "download" rows
-// (gap-scan of CyberSentinel-DLP, August 24, 2026) ARE wired -- the
-// extension's chrome.downloads hook (background.js) intercepts, classifies,
-// and re-issues downloads from these three categories -- but only these
-// three; genai.download is left out until it's actually been verified
-// against real GenAI file-output domains. Only showing cells that do
-// something real.
+// them would look configurable but never actually fire.
+//
+// "download" rows (gap-scan of CyberSentinel-DLP, August 24, 2026, REVISED
+// August 26, 2026): originally designed to cancel-then-re-issue downloads
+// so a block could actually stop one, but that broke real downloads
+// outright -- Google Drive, SharePoint/OneDrive, and likely most other
+// providers mint a one-time signed download URL, and cancelling the
+// original request spends it, so re-issuing the same URL just fails
+// ("Failed - Forbidden" / "Failed - Needs authorization", confirmed on a
+// real endpoint). background.js's downloads hook now NEVER cancels or
+// re-issues a download -- the file always reaches disk normally. It only
+// still inspects the content for logging/alerting, best-effort. So
+// "Block" on a download row means "raise a critical alert", not "stop the
+// download" -- see the blockLabel/blockHint override below, which is the
+// UI being honest about that rather than implying an enforcement guarantee
+// this hook cannot back up. genai.download is left out entirely until it's
+// been verified against real GenAI file-output domains.
 const rows: Array<{
   key: keyof WebActivityControlConfig['matrix']
   label: string
@@ -32,6 +42,10 @@ const rows: Array<{
   // into, so offering it here would be exactly the "control that silently
   // does nothing" the comment above says this form avoids.
   actions?: WebActivityAction[]
+  // Overrides the "Block" button's label/hint for this row only -- see the
+  // download-rows note above for why "Block" doesn't mean "stop it" here.
+  blockLabel?: string
+  blockHint?: string
 }> = [
   {
     key: 'genai.post',
@@ -57,6 +71,8 @@ const rows: Array<{
     description: 'A file downloaded from an email attachment in Gmail, Outlook Web, etc.',
     icon: Mail,
     actions: ['allow', 'alert', 'block'],
+    blockLabel: 'Alert (Critical)',
+    blockHint: 'Cannot actually stop the download (one-time signed download links break on a second request) -- raises a critical-severity alert instead if the content is genuinely sensitive',
   },
   {
     key: 'collaboration.send',
@@ -70,6 +86,8 @@ const rows: Array<{
     description: 'A file downloaded from a shared link/attachment in Slack, Teams, Discord, etc.',
     icon: Users,
     actions: ['allow', 'alert', 'block'],
+    blockLabel: 'Alert (Critical)',
+    blockHint: 'Cannot actually stop the download (one-time signed download links break on a second request) -- raises a critical-severity alert instead if the content is genuinely sensitive',
   },
   {
     key: 'file_sharing.download',
@@ -77,6 +95,8 @@ const rows: Array<{
     description: 'A file downloaded from Google Drive, OneDrive, Dropbox, Box, etc. to local disk',
     icon: Cloud,
     actions: ['allow', 'alert', 'block'],
+    blockLabel: 'Alert (Critical)',
+    blockHint: 'Cannot actually stop the download (Drive/SharePoint/OneDrive use one-time signed download links that break on a second request) -- raises a critical-severity alert instead if the content is genuinely sensitive',
   },
 ]
 
@@ -113,9 +133,14 @@ export default function WebActivityControlPolicyForm({ config: rawConfig, onChan
       </div>
 
       <div className="space-y-3">
-        {rows.map(({ key, label, description, icon: Icon, actions }) => {
+        {rows.map(({ key, label, description, icon: Icon, actions, blockLabel, blockHint }) => {
           const current = config.matrix[key] || ''
-          const optionsForRow = actions ? actionOptions.filter((opt) => actions.includes(opt.value)) : actionOptions
+          const baseOptionsForRow = actions ? actionOptions.filter((opt) => actions.includes(opt.value)) : actionOptions
+          const optionsForRow = baseOptionsForRow.map((opt) =>
+            opt.value === 'block' && (blockLabel || blockHint)
+              ? { ...opt, label: blockLabel || opt.label, hint: blockHint || opt.hint }
+              : opt
+          )
           return (
             <div
               key={key}
@@ -174,8 +199,10 @@ export default function WebActivityControlPolicyForm({ config: rawConfig, onChan
       <div className="p-3 bg-gray-900/40 border border-gray-700 rounded-lg text-xs text-muted-foreground/70">
         Requires the SeceoKnight browser extension (with Web Activity Control support) to be installed on the
         target endpoint(s). File uploads/attachments TO these destinations are covered separately by Cloud Upload
-        Guard, not by this policy — but the Download rows above ARE this policy: the extension&apos;s
-        chrome.downloads hook cancels, classifies, and re-issues (or blocks) matching downloads in real time.
+        Guard, not by this policy — the Download rows above are detection and alerting only: the download always
+        completes normally (Drive/SharePoint/OneDrive-style one-time signed links make actually stopping a
+        download unreliable in a browser extension), and the extension classifies its content best-effort for
+        logging and alerting on this dashboard.
       </div>
     </div>
   )

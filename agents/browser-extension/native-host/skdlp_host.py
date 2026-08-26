@@ -393,7 +393,21 @@ def handle_web_activity(meta):
     (action, category, level, reason, redacted_content, labels_redacted,
      policy_id, policy_name) = evaluate_web_activity(meta)
 
-    if action == "block":
+    # Downloads (August 26, 2026): the extension can no longer actually
+    # block a download -- it used to cancel-then-re-issue, but that broke
+    # real downloads outright against any source using a one-time signed
+    # URL (Google Drive, SharePoint/OneDrive, likely most others -- see
+    # background.js's own comment on this hook for what was observed). By
+    # the time this function runs, the file has already reached disk
+    # regardless of what "action" says. Claiming blocked=True here would be
+    # an outright false statement on the dashboard, not just an optimistic
+    # one -- downgrade to a high-severity alert instead, which is exactly
+    # as visible without asserting an enforcement outcome this code cannot
+    # actually deliver for downloads.
+    if action == "block" and activity == "download":
+        emit_web_activity_event(meta, category, activity, "alerted", "critical", level, blocked=False,
+                                 policy_id=policy_id, policy_name=policy_name)
+    elif action == "block":
         emit_web_activity_event(meta, category, activity, "alerted", "high", level, blocked=False,
                                  policy_id=policy_id, policy_name=policy_name)
         emit_web_activity_event(meta, category, activity, "blocked", "critical", level, blocked=True,
