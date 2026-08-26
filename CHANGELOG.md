@@ -8,6 +8,42 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🟡 Follow-up same day: real Drive download went undetected -- missing catalog domain (August 26, 2026)
+
+Verification test on the test endpoint after the fix above (real extension
+reinstalled clean at 1.0.8, confirmed no more cancel/reissue attempts and no
+more "Failed - Forbidden" downloads): the actual test download still wasn't
+detected at all. dlp-host.log showed why:
+
+```
+downloads.onCreated fired: url=https://drive.usercontent.google.com/download?id=...  referrer=
+downloads: catalog check - enforced=true domains=47
+downloads: resolved host=drive.usercontent.google.com watched=false
+```
+
+Google serves real Drive file downloads from `drive.usercontent.google.com`,
+a distinct domain from `googleusercontent.com` (already seeded) --
+`drive.usercontent.google.com` does not end with `.googleusercontent.com`,
+it ends with `.usercontent.google.com`. The host-match in background.js is
+a strict suffix check, so this was a silent miss: the download itself was
+never at risk (this hook never blocks, per the fix above), but it also
+never got inspected/classified, so a genuinely sensitive Drive download
+would pass with no alert and no event.
+
+Also present in the same log: a burst of ~30 "signal is aborted without
+reason" inspection-fetch failures, all timestamped to the exact moment of
+the forced extension reinstall (removing/re-adding the
+`ExtensionInstallForcelist` registry entry, full Chrome restarts). These
+are stale in-flight requests from the OLD 1.0.6 service worker being torn
+down mid-fetch during that reinstall, not a live issue with 1.0.8 -- no
+recurrence in the clean post-reinstall entries.
+
+**Fix:** migration `040_app_catalog_drive_usercontent` adds
+`usercontent.google.com` to `app_catalog` (file_sharing), closing the gap
+via the existing suffix-match logic -- no extension code change needed.
+
+---
+
 ## 🔴 REVISED same day: downloads hook was silently breaking real downloads (August 26, 2026)
 
 Confirmed on a real endpoint, using the new dlp-host.log/debug_log tracing
