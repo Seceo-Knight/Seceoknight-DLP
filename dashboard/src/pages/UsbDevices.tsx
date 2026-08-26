@@ -241,13 +241,40 @@ function Empty({ text }: { text: string }) {
   )
 }
 
-function ConnectedDot({ connected }: { connected?: boolean }) {
-  return (
-    <span
-      className={`inline-block h-2.5 w-2.5 rounded-full ${connected ? 'bg-success' : 'bg-cs-muted-2'}`}
-      title={connected ? 'Currently connected' : 'Not currently connected'}
-    />
-  )
+// Three states, not two (ported from CyberSentinel-DLP commit 7ae4671,
+// August 26 2026). A connect event with no matching disconnect does NOT
+// prove the device is still attached -- only a running agent emits a
+// disconnect, so a machine that was shut down, slept, or had its agent
+// stopped leaves its last connect standing forever. `connection_state` is
+// the authoritative field; `connected` (legacy boolean) is accepted as a
+// fallback for any caller that hasn't been updated to pass it yet.
+//   green dot  = connected    -- reporting agent is online and says attached
+//   grey dot   = unknown      -- last heard attached, but that agent has gone
+//                                quiet, so an unplug could never have been reported
+//   grey ring  = disconnected -- an actual unplug was reported (trusted)
+function ConnectedDot({
+  connectionState,
+  connected,
+}: {
+  connectionState?: 'connected' | 'disconnected' | 'unknown' | null
+  connected?: boolean
+}) {
+  const state = connectionState ?? (connected ? 'connected' : connected === false ? 'disconnected' : null)
+  if (state === 'connected') {
+    return <span className="inline-block h-2.5 w-2.5 rounded-full bg-success" title="Connected — reporting agent is online" />
+  }
+  if (state === 'unknown') {
+    return (
+      <span
+        className="inline-block h-2.5 w-2.5 rounded-full bg-warning/70"
+        title="Last seen attached, but the reporting agent has gone quiet since — it may or may not still be plugged in"
+      />
+    )
+  }
+  if (state === 'disconnected') {
+    return <span className="inline-block h-2.5 w-2.5 rounded-full bg-cs-muted-2" title="Disconnected" />
+  }
+  return <span className="inline-block h-2.5 w-2.5 rounded-full bg-cs-muted-2 opacity-40" title="Not applicable / never seen" />
 }
 
 function AliasCell({ d, onChange }: { d: SanctionedDevice; onChange: () => void }) {
@@ -301,7 +328,7 @@ function SanctionedRow({ d, onChange, onHistory }: { d: SanctionedDevice; onChan
   })
   return (
     <tr>
-      <td><ConnectedDot connected={d.connected} /></td>
+      <td><ConnectedDot connectionState={d.connection_state} connected={d.connected} /></td>
       <td className="num text-cs-ink">{d.serial_number}</td>
       <td><AliasCell d={d} onChange={onChange} /></td>
       <td className="text-cs-ink-2">{d.product_name || '—'}{d.manufacturer ? ` (${d.manufacturer})` : ''}</td>
@@ -348,7 +375,7 @@ function SeenRow({ s, onApproved, onHistory }: { s: SeenDevice; onApproved: () =
   })
   return (
     <tr>
-      <td><ConnectedDot connected={s.connected} /></td>
+      <td><ConnectedDot connectionState={s.connection_state} connected={s.connected} /></td>
       <td className="num text-cs-ink">{s.serial_number}</td>
       <td className="text-cs-ink-2">{s.product_name || '—'}</td>
       <td className="num text-cs-muted">{vidpid(s.vendor_id, s.product_id)}</td>

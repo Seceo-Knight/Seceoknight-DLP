@@ -26,8 +26,16 @@ export interface SanctionedDevice {
   notes?: string | null
   approved_at?: string | null
   /** Live status computed server-side from the most recent connect/
-   *  disconnect event for this serial. */
+   *  disconnect event for this serial, cross-checked against whether the
+   *  reporting agent is still online (ported from CyberSentinel-DLP commit
+   *  7ae4671, August 26 2026) -- a connect with no disconnect does NOT mean
+   *  a device is still plugged in if the agent that reported it has gone
+   *  quiet since (shutdown/sleep/stopped agent never emits a disconnect).
+   *  Prefer connection_state; `connected` is kept for old call sites and is
+   *  true only when connection_state === 'connected'. */
   connected?: boolean
+  connection_state?: 'connected' | 'disconnected' | 'unknown' | null
+  reporting_agent_online?: boolean | null
   last_activity_at?: string | null
 }
 
@@ -45,6 +53,8 @@ export interface SeenDevice {
   last_seen?: string | null
   sanctioned: boolean
   connected?: boolean
+  connection_state?: 'connected' | 'disconnected' | 'unknown' | null
+  reporting_agent_online?: boolean | null
   last_activity_at?: string | null
 }
 

@@ -8,6 +8,46 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🟢 Gap-scan: CyberSentinel-DLP USB fixes (August 26, 2026)
+
+Fresh gap-scan against effaaykhan/cybersentineldlp-prod (their commit
+history moved ~90 commits since our last scan). Reviewed the two USB
+device-control fixes from that window:
+
+**98b47af "honour an explicit device denial when the manager is
+unreachable"** -- does NOT apply. That bug only exists because
+CyberSentinel's offline allowlist matches broader than serial number
+(manufacturer/device-id/model), so a vendor-level allow can silently cover
+a serial that should be denied. SanctionedUsbDevice's docstring already
+states SeceoKnight matches on serial_number alone, by design -- there is no
+broader-than-serial allow rule for a deny to be shadowed by, so this class
+of bug can't occur here. No change needed; confirmed via reading the model.
+
+**7ae4671 "stop reporting a device as connected when its agent is
+offline"** -- DOES apply, and did apply: `_annotate_connection_state()` in
+usb_devices.py computed `connected` purely from the last connect/disconnect
+event, with no check on whether the reporting agent was still alive. A
+machine that's shut down never emits a disconnect, so its last connect
+stands forever -- a stick unplugged months ago on an offline machine still
+showed a green "connected" dot.
+
+**Fix:** `_annotate_connection_state()` now cross-checks the reporting
+agent's liveness via the same `_compute_lifecycle_status()` freshness rule
+the Agents page uses, and reports one of three states instead of two:
+`connected` (agent online, says attached), `unknown` (last heard attached,
+but that agent has gone quiet -- an unplug could never have been reported),
+`disconnected` (an actual unplug was reported, trusted regardless). Both
+`list_devices` and `seen_devices` pick this up for free since they already
+call the shared helper. Dashboard's `ConnectedDot` renders three states:
+green / amber (unknown) / grey. No DB migration needed -- purely computed,
+not persisted.
+
+Scope note: CyberSentinel's commit also adds a "dismiss a seen-but-not-yet-
+decided device" bookkeeping feature (separate table + endpoints). Left out
+of this pass to keep it bounded -- can follow up if wanted.
+
+---
+
 ## 🟡 Follow-up same day: real Drive download went undetected -- missing catalog domain (August 26, 2026)
 
 Verification test on the test endpoint after the fix above (real extension
