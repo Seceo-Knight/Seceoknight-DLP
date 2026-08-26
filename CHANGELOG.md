@@ -42,6 +42,15 @@ recurrence in the clean post-reinstall entries.
 `usercontent.google.com` to `app_catalog` (file_sharing), closing the gap
 via the existing suffix-match logic -- no extension code change needed.
 
+**Verified end-to-end on the real endpoint** after `update.sh` applied the
+migration (catalog domain count went 47 -> 48): a real Drive download of
+the SSN test file now resolves `watched=true`, the inspection fetch
+succeeds (200 OK, content read), gets classified Restricted (100%), and
+correctly triggers the `file_sharing.download` = block cell -- downgraded
+to a critical alert per the fix above, with the actual file still reaching
+disk untouched. This is the full downloads-hook feature (Task #28) working
+as designed: detected, classified, alerted, never broken.
+
 ---
 
 ## 🔴 REVISED same day: downloads hook was silently breaking real downloads (August 26, 2026)
