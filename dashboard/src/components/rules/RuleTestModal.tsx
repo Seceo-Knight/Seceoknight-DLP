@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
 import { useMutation } from '@tanstack/react-query'
-import { X, TestTube, AlertTriangle, CheckCircle } from 'lucide-react'
+import { TestTube, AlertTriangle, CheckCircle } from 'lucide-react'
 import { testRules, type RuleTestResponse } from '@/lib/rules-api'
 import { cn } from '@/lib/utils'
 import toast from 'react-hot-toast'
+import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
 
 interface RuleTestModalProps {
   isOpen: boolean
@@ -60,35 +61,35 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
     return 'text-green-400'
   }
 
-  if (!isOpen) return null
-
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-6 z-50">
-      <div className="bg-card rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-border">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-500/15 rounded-lg">
-              <TestTube className="h-6 w-6 text-blue-400" />
-            </div>
-            <div>
-              <h3 className="text-2xl font-bold text-foreground">Rule Testing Tool</h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                Test content against your classification rules
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-muted-foreground/70 hover:text-foreground transition-colors"
-          >
-            <X className="w-6 h-6" />
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      size="2xl"
+      label="Rule Testing Tool"
+      header={
+        <ModalHeader
+          title={
+            <span className="flex items-center gap-3">
+              <span className="p-2 bg-blue-500/15 rounded-lg inline-flex">
+                <TestTube className="h-6 w-6 text-blue-400" />
+              </span>
+              Rule Testing Tool
+            </span>
+          }
+          hint="Test content against your classification rules"
+          onClose={onClose}
+        />
+      }
+      footer={
+        <ModalFooter>
+          <button onClick={onClose} className="btn btn-secondary">
+            Close
           </button>
-        </div>
-
-        {/* Content */}
-        <div className="p-6 space-y-6">
+        </ModalFooter>
+      }
+    >
+        <div className="space-y-6">
           {/* Input */}
           <div>
             <label className="block text-sm font-medium text-foreground/90 mb-2">
@@ -269,14 +270,6 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
             </div>
           )}
         </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-3 p-6 border-t border-border bg-muted/30">
-          <button onClick={onClose} className="btn-secondary">
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

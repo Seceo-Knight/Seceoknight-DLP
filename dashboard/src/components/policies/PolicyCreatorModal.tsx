@@ -43,7 +43,8 @@ import EmailPolicyForm from './EmailPolicyForm'
 import WebActivityControlPolicyForm from './WebActivityControlPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
-import { X, ChevronLeft, ChevronRight, Check } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Check } from 'lucide-react'
+import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
 import toast from 'react-hot-toast'
 
 interface PolicyCreatorModalProps {
@@ -477,31 +478,67 @@ export default function PolicyCreatorModal({
   )
   const canSave = policyName.trim() !== '' && policyType !== null
 
-  if (!isOpen) return null
-
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={handleClose}>
-      <div 
-        className="bg-gray-800 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto border border-gray-700" 
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-700 sticky top-0 bg-gray-800 z-10">
-          <div>
-            <h3 className="text-2xl font-bold text-white">
-              {editingPolicy ? 'Edit Policy' : 'Create New Policy'}
-            </h3>
-            <p className="text-muted-foreground/70 mt-1">
-              {step === 1 && 'Select policy type'}
-              {step === 2 && 'Configure policy settings'}
-              {step === 3 && 'Review and save'}
-            </p>
-          </div>
-          <button onClick={handleClose} className="text-muted-foreground/70 hover:text-white transition-colors">
-            <X className="w-6 h-6" />
-          </button>
-        </div>
+    <Modal
+      open={isOpen}
+      onClose={handleClose}
+      size="2xl"
+      bodyClassName="p-0 bg-gray-800"
+      className="!bg-gray-800 !border-gray-700"
+      label={editingPolicy ? 'Edit Policy' : 'Create New Policy'}
+      header={
+        <ModalHeader
+          title={editingPolicy ? 'Edit Policy' : 'Create New Policy'}
+          hint={
+            (step === 1 && 'Select policy type') ||
+            (step === 2 && 'Configure policy settings') ||
+            (step === 3 && 'Review and save')
+          }
+          onClose={handleClose}
+        />
+      }
+      footer={
+        <ModalFooter>
+          {step > 1 && (
+            <button
+              onClick={handleBack}
+              className="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-xl transition-colors flex items-center gap-2"
+            >
+              <ChevronLeft className="w-5 h-5" />
+              Back
+            </button>
+          )}
 
+          <div className="flex-1" />
+
+          {step < 3 ? (
+            <button
+              onClick={handleNext}
+              disabled={step === 1 ? !canProceedFromStep1 : !canProceedFromStep2}
+              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white font-semibold rounded-xl transition-colors flex items-center gap-2"
+            >
+              Next
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          ) : (
+            <button
+              onClick={handleSave}
+              disabled={!canSave}
+              className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-700 disabled:to-gray-700 disabled:text-muted-foreground text-white font-semibold rounded-xl transition-all"
+            >
+              {editingPolicy ? 'Update Policy' : 'Create Policy'}
+            </button>
+          )}
+
+          <button
+            onClick={handleClose}
+            className="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-xl transition-colors"
+          >
+            Cancel
+          </button>
+        </ModalFooter>
+      }
+    >
         {/* Progress Indicator */}
         <div className="px-6 pt-6">
           <div className="flex items-center justify-between max-w-md mx-auto">
@@ -837,48 +874,6 @@ export default function PolicyCreatorModal({
             </div>
           )}
         </div>
-
-        {/* Footer */}
-        <div className="flex gap-3 p-6 border-t border-gray-700 sticky bottom-0 bg-gray-800">
-          {step > 1 && (
-            <button
-              onClick={handleBack}
-              className="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-xl transition-colors flex items-center gap-2"
-            >
-              <ChevronLeft className="w-5 h-5" />
-              Back
-            </button>
-          )}
-          
-          <div className="flex-1" />
-          
-          {step < 3 ? (
-            <button
-              onClick={handleNext}
-              disabled={step === 1 ? !canProceedFromStep1 : !canProceedFromStep2}
-              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white font-semibold rounded-xl transition-colors flex items-center gap-2"
-            >
-              Next
-              <ChevronRight className="w-5 h-5" />
-            </button>
-          ) : (
-            <button
-              onClick={handleSave}
-              disabled={!canSave}
-              className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-700 disabled:to-gray-700 disabled:text-muted-foreground text-white font-semibold rounded-xl transition-all"
-            >
-              {editingPolicy ? 'Update Policy' : 'Create Policy'}
-            </button>
-          )}
-          
-          <button
-            onClick={handleClose}
-            className="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-xl transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

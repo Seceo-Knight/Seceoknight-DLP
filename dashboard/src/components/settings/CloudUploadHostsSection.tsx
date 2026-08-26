@@ -7,8 +7,10 @@ import {
   deleteCloudUploadHost,
   type CloudUploadHost,
 } from '@/lib/api'
+import { useConfirm } from '@/components/ui/Modal'
 
 export default function CloudUploadHostsSection() {
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const [entries, setEntries] = useState<CloudUploadHost[]>([])
   const [loading, setLoading] = useState(true)
   const [domain, setDomain] = useState('')
@@ -47,7 +49,11 @@ export default function CloudUploadHostsSection() {
   }
 
   const handleDelete = async (entry: CloudUploadHost) => {
-    if (!window.confirm(`Stop monitoring ${entry.domain}?`)) return
+    if (!(await confirm({
+      title: 'Stop monitoring destination',
+      confirmLabel: 'Stop monitoring',
+      children: `Stop monitoring ${entry.domain}?`,
+    }))) return
     try {
       await deleteCloudUploadHost(entry.id)
       toast.success(`Removed ${entry.domain}`)
@@ -153,6 +159,8 @@ export default function CloudUploadHostsSection() {
       <p className="text-xs text-cs-muted mt-3">
         Endpoints pick up changes within about 15 minutes (or immediately after a browser restart).
       </p>
+
+      {confirmDialog}
     </div>
   )
 }

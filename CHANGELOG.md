@@ -8,6 +8,94 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🟣 Dashboard: shared overlay/modal design system (August 26, 2026)
+
+Gap-scan of CyberSentinel-DLP found 11 commits ("one overlay instead of
+nineteen") replacing every hand-rolled dialog across their dashboard with
+a single `Modal` component. SeceoKnight had the same problem independently:
+~13 dialogs, each with its own copy of Escape-handling, body-scroll
+locking, and backdrop-click dismissal, several with a bug where putting
+`max-h-[90vh] overflow-y-auto` on the whole panel let a tall dialog's
+title and action buttons scroll away with the content. Full migration —
+new shared primitive plus every dialog moved onto it, matching
+CyberSentinel's own scope rather than stopping at the primitive alone.
+
+**Design-token decision.** CyberSentinel's `Modal` is built on their
+light-theme `cs-*` token vocabulary; SeceoKnight is a dark "obsidian
+vault" theme on shadcn/ui semantic tokens (`bg-card`, `border-border`,
+`text-foreground`, etc.). Porting the `cs-*` tokens verbatim would have
+meant a second, disconnected design system living inside a dark app, or
+repeating CyberSentinel's own "unstyled/invisible" bug in reverse. `Modal.tsx`
+(`dashboard/src/components/ui/Modal.tsx`, new) is built entirely on
+SeceoKnight's existing tokens instead — same three-band structure and
+behavior, native palette.
+
+**Three-band layout.** Header, body, and footer are DOM siblings (not one
+scrolling wrapper) — only the body scrolls, so a dialog's title and action
+buttons stay put regardless of content length. This is the actual fix for
+the "footer scrolls away" bug present in several of the migrated dialogs.
+Header/footer shadows appear only when there's genuinely hidden content
+above/below (measured via `ResizeObserver`), not decoratively.
+
+**Behavior centralized once:** focus trap (Tab cycling stays inside the
+dialog), a document-level Escape stack so only the top-most of nested
+dialogs responds, a scroll-lock counter that compensates for scrollbar
+width to avoid a page jolt, backdrop dismissal on `mousedown` (not
+`click`) so a text-selection drag that ends outside the panel doesn't
+discard it, and focus restoration to whatever triggered the dialog on
+close. Entrance/exit animation reuses the already-installed
+`tailwindcss-animate` plugin rather than introducing a second animation
+system.
+
+**`useConfirm()`** replaces `window.confirm()` everywhere in the
+dashboard (13 call sites across 9 files: Policies, Rules, Reports,
+Events, DataMatching, ThreatIntelligence ×2, and the three Settings
+sections — IP allowlist, cloud-upload hosts, SIEM forwarding — plus the
+two MFA-reset/deactivate confirms in User Management). A drop-in
+`const { confirm, dialog } = useConfirm()`; `confirm({ title,
+confirmLabel, children })` returns a `Promise<boolean>` instead of
+blocking the renderer, and the button says the actual verb ("Delete
+rule", "Remove SIEM connector") instead of a stock "OK" that gives no
+hint what committing will do.
+
+**Migrated onto the shared Modal:** `PolicyCreatorModal`,
+`PolicyDetailsModal`, `ExportPoliciesModal`, `ImportPoliciesModal`,
+`AlertDetailsModal`, `RuleModal`, `RuleTestModal`, `Reports.tsx`'s
+generate-report dialog, `DataMatching.tsx`'s two local dialogs,
+`RiskScoring.tsx`'s user-detail dialog, `UsbDevices.tsx`'s history
+dialog, `Agents.tsx`'s cleanup-stale and remove/decommission-confirm
+dialogs, and `UserManagement.tsx`'s create/edit/delete dialogs (this one
+already had correct scroll structure, per CyberSentinel's own commit
+note — it only needed its local Escape/scroll-lock reimplementation
+swapped for the shared one).
+
+**Two React gotchas hit repeatedly, fixed the same way each time:**
+- Several dialogs' parent clears both `isOpen` and the dialog's data
+  prop (e.g. `policy`) in the same click handler, landing in one React
+  batch — a naive `if (!data) return null` would unmount the whole
+  subtree instantly and skip Modal's ~150ms exit animation. Fixed with a
+  `useRef` remembering the last non-null value, used only while closing
+  (`PolicyDetailsModal`, `AlertDetailsModal`, `Agents.tsx`'s confirm
+  dialog).
+- `RuleModal.tsx` wrapped its entire dialog in one `<form>`, which can't
+  survive header/body/footer becoming DOM siblings. Fixed with the
+  HTML5 `form="rule-modal-form"` attribute so the footer's submit
+  button reaches the body's form by id instead of by DOM nesting.
+
+**Fixed for free along the way:** `rounded-cs-card` and `shadow-card`
+were referenced by `DataMatching.tsx`'s and `RiskScoring.tsx`'s local
+dialogs but never registered in `tailwind.config.cjs`, generating no CSS
+at all — an undocumented instance of the same "invisible" class bug the
+codebase's own `index.css` comment had only flagged for two other files.
+Both are now on the shared Modal, which doesn't use those classes.
+
+Verified via `tsc --noEmit` after every file, diffed against a captured
+pre-change baseline (23 pre-existing, unrelated type errors) to confirm
+each migration introduced zero new errors — no dev server or browser
+available in this environment to screenshot the result directly.
+
+---
+
 ## 🔵 SSO/SIEM hardening: RS256/JWKS, cert pinning, role/ABAC mapping (August 26, 2026)
 
 Gap-scan of CyberSentinel-DLP (commits ad46e71, 074266b, f41a9db) found

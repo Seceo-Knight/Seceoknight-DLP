@@ -22,6 +22,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useTableSort, usePagination } from '@/lib/hooks/useTableState'
 import { tone, surfaceBox, innerBox, labelCls, type Tone } from '@/lib/tone'
+import { useConfirm } from '@/components/ui/Modal'
 import toast from 'react-hot-toast'
 
 // Event Detail Modal Component
@@ -544,6 +545,7 @@ function EventDetailModal({
 }
 
 export default function Events() {
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const [searchParams, setSearchParams] = useSearchParams()
   const agentParam = searchParams.get('agent')
 
@@ -720,7 +722,11 @@ export default function Events() {
   }
 
   const handleClearLogs = async () => {
-    if (!confirm('Are you sure you want to clear all events? This action cannot be undone.')) return
+    if (!(await confirm({
+      title: 'Clear all events',
+      confirmLabel: 'Clear events',
+      children: 'Are you sure you want to clear all events? This action cannot be undone.',
+    }))) return
     try {
       const result = await clearAllEvents()
       toast.success(`Successfully cleared ${result.deleted_count} events`)
@@ -1117,6 +1123,8 @@ export default function Events() {
           getDriveLetter={getDriveLetter}
         />
       )}
+
+      {confirmDialog}
     </div>
   )
 }

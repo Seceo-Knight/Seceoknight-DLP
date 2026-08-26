@@ -1,8 +1,8 @@
-import { X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getEvent } from '@/lib/api'
 import LoadingSpinner from '../LoadingSpinner'
 import { cn, formatAgentLabel } from '@/lib/utils'
+import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
 
 interface AlertDetailsModalProps {
   alert: any
@@ -10,10 +10,20 @@ interface AlertDetailsModalProps {
   onClose: () => void
 }
 
-export default function AlertDetailsModal({ alert, isOpen, onClose }: AlertDetailsModalProps) {
+export default function AlertDetailsModal({ alert: rawAlert, isOpen, onClose }: AlertDetailsModalProps) {
   const [eventData, setEventData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Alerts.tsx clears its `selectedAlert` state in the same click handler
+  // that flips isOpen=false, so both land in the same React batch. Modal.tsx
+  // plays a ~150ms exit animation driven by its own `open` prop and expects
+  // to still have content while it fades out -- remembering the last real
+  // alert keeps the closing dialog showing what it was showing a moment ago
+  // instead of going blank mid-animation.
+  const lastAlertRef = useRef<any>(null)
+  if (rawAlert) lastAlertRef.current = rawAlert
+  const alert = rawAlert ?? lastAlertRef.current
 
   useEffect(() => {
     if (isOpen && alert) {
@@ -42,37 +52,35 @@ export default function AlertDetailsModal({ alert, isOpen, onClose }: AlertDetai
     }
   }
 
-  if (!isOpen) return null
+  if (!alert) return null
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-        onClick={onClose}
-      />
-
-      {/* Modal */}
-      <div className="flex min-h-full items-center justify-center p-4">
-        <div className="relative w-full max-w-4xl bg-card rounded-lg shadow-xl">
-          {/* Header */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">Alert Details</h2>
-              <p className="text-sm text-muted-foreground mt-1">
-                Alert ID: <code className="bg-secondary px-2 py-0.5 rounded">{alert.id}</code>
-              </p>
-            </div>
-            <button
-              onClick={onClose}
-              className="p-2 hover:bg-accent rounded-lg transition-colors"
-            >
-              <X className="h-5 w-5 text-muted-foreground" />
-            </button>
-          </div>
-
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      size="2xl"
+      label="Alert Details"
+      header={
+        <ModalHeader
+          title="Alert Details"
+          hint={
+            <>
+              Alert ID: <code className="bg-secondary px-2 py-0.5 rounded">{alert.id}</code>
+            </>
+          }
+          onClose={onClose}
+        />
+      }
+      footer={
+        <ModalFooter>
+          <button onClick={onClose} className="btn btn-secondary">
+            Close
+          </button>
+        </ModalFooter>
+      }
+    >
           {/* Content */}
-          <div className="px-6 py-4 max-h-[600px] overflow-y-auto">
+          <div>
             {/* Alert Summary */}
             <div className="mb-6">
               <h3 className="text-sm font-semibold text-foreground/90 mb-3">Alert Summary</h3>
@@ -226,18 +234,6 @@ export default function AlertDetailsModal({ alert, isOpen, onClose }: AlertDetai
               )}
             </div>
           </div>
-
-          {/* Footer */}
-          <div className="flex justify-end gap-3 px-6 py-4 border-t border-border">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-foreground/90 bg-card border border-border rounded-lg hover:bg-accent transition-colors"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

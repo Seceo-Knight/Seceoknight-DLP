@@ -209,6 +209,31 @@
     @apply btn bg-destructive text-destructive-foreground hover:bg-destructive/90 active:bg-destructive/80;
   }
 
+  /* The quiet weight (ported from CyberSentinel-DLP, commit 73f58ec —
+     gap-scan of August 26 2026). primary/secondary/danger all carry a
+     filled background, so a dialog footer with "Back", "Cancel" and
+     "Continue" rendered three competing blocks with nowhere for the eye
+     to land. Ghost is the same shape and press behaviour with none of the
+     weight — it belongs to the family, it just is not asking for the
+     click. Used by Modal.tsx's ConfirmDialog for Cancel. */
+  .btn-ghost {
+    @apply btn bg-transparent text-muted-foreground border border-transparent
+           hover:bg-accent hover:text-foreground hover:border-border
+           active:bg-secondary;
+  }
+
+  /* Disabled state for the whole button family — none of the four variants
+     had one before this. Without it a disabled control still looked
+     exactly as clickable as an enabled one, inviting the click it was
+     going to refuse. */
+  .btn:disabled,
+  .btn-primary:disabled,
+  .btn-secondary:disabled,
+  .btn-danger:disabled,
+  .btn-ghost:disabled {
+    @apply cursor-not-allowed opacity-50 pointer-events-none;
+  }
+
   /* Badge component */
   .badge {
     @apply px-2 py-1 text-xs font-medium rounded-full inline-flex items-center gap-1;

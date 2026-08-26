@@ -8,8 +8,10 @@ import {
   toggleIpAllowlist,
   type IPAllowlistEntry,
 } from '@/lib/api'
+import { useConfirm } from '@/components/ui/Modal'
 
 export default function IpAllowlistSection() {
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const [entries, setEntries] = useState<IPAllowlistEntry[]>([])
   const [yourIp, setYourIp] = useState('')
   const [enabled, setEnabled] = useState(true)   // master switch (on by default)
@@ -75,7 +77,11 @@ export default function IpAllowlistSection() {
   }
 
   const handleDelete = async (entry: IPAllowlistEntry) => {
-    if (!window.confirm(`Remove ${entry.cidr} from the allowlist?`)) return
+    if (!(await confirm({
+      title: 'Remove from allowlist',
+      confirmLabel: 'Remove',
+      children: `Remove ${entry.cidr} from the allowlist?`,
+    }))) return
     try {
       await deleteIpAllowlist(entry.id)
       toast.success(`Removed ${entry.cidr}`)
@@ -229,6 +235,8 @@ export default function IpAllowlistSection() {
           Your current IP: <span className="num text-cs-ink-2">{yourIp}</span>
         </p>
       )}
+
+      {confirmDialog}
     </div>
   )
 }

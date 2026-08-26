@@ -7,6 +7,7 @@ import PolicyTable from '@/components/policies/PolicyTable'
 import PolicyDetailsModal from '@/components/policies/PolicyDetailsModal'
 import ExportPoliciesModal from '@/components/policies/ExportPoliciesModal'
 import ImportPoliciesModal from '@/components/policies/ImportPoliciesModal'
+import { useConfirm } from '@/components/ui/Modal'
 import { Policy } from '@/types/policy'
 import {
   getPolicies,
@@ -32,6 +33,7 @@ type PolicyStats = {
 }
 
 export default function PoliciesPage() {
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const queryClient = useQueryClient()
   const [showModal, setShowModal] = useState(false)
   const [editingPolicy, setEditingPolicy] = useState<Policy | null>(null)
@@ -197,8 +199,12 @@ export default function PoliciesPage() {
     toggleStatusMutation.mutate({ id: policy.id, enabled: !policy.enabled })
   }
 
-  const handleDelete = (policy: Policy) => {
-    if (!confirm(`Are you sure you want to delete "${policy.name}"? This action cannot be undone.`)) {
+  const handleDelete = async (policy: Policy) => {
+    if (!(await confirm({
+      title: 'Delete policy',
+      confirmLabel: 'Delete',
+      children: `Are you sure you want to delete "${policy.name}"? This action cannot be undone.`,
+    }))) {
       return
     }
     if (!policy.id) return
@@ -408,6 +414,8 @@ export default function PoliciesPage() {
           queryClient.invalidateQueries({ queryKey: ['policy-stats'] })
         }}
       />
+
+      {confirmDialog}
     </div>
   )
 }

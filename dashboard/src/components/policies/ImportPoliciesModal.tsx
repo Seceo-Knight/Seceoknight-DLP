@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { X, Upload, FileJson, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
+import { Upload, FileJson, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
 import { importPolicies } from '@/lib/api'
 import toast from 'react-hot-toast'
+import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
 
 interface ImportPoliciesModalProps {
   isOpen: boolean
@@ -81,22 +82,36 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
     }
   }
 
-  if (!isOpen) return null
-
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={handleClose}>
-      <div
-        className="bg-gray-800 rounded-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto border border-gray-700"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between p-6 border-b border-gray-700 sticky top-0 bg-gray-800 z-10">
-          <h3 className="text-xl font-bold text-white">Import Policies</h3>
-          <button onClick={handleClose} className="text-muted-foreground/70 hover:text-white transition-colors">
-            <X className="w-5 h-5" />
+    <Modal
+      open={isOpen}
+      onClose={handleClose}
+      size="md"
+      className="!bg-gray-800 !border-gray-700"
+      label="Import Policies"
+      header={<ModalHeader title="Import Policies" onClose={handleClose} />}
+      footer={
+        <ModalFooter>
+          <button
+            onClick={handleClose}
+            className="px-4 py-2 text-muted-foreground/70 hover:text-white transition-colors"
+          >
+            {result ? 'Close' : 'Cancel'}
           </button>
-        </div>
-
-        <div className="p-6 space-y-4">
+          {!result && (
+            <button
+              onClick={handleImport}
+              disabled={!bundle || importing}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
+            >
+              <Upload className="w-4 h-4" />
+              {importing ? 'Importing...' : 'Import'}
+            </button>
+          )}
+        </ModalFooter>
+      }
+    >
+        <div className="space-y-4">
           {!result && (
             <>
               <p className="text-sm text-muted-foreground/70">
@@ -218,26 +233,6 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
             </div>
           )}
         </div>
-
-        <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-700">
-          <button
-            onClick={handleClose}
-            className="px-4 py-2 text-muted-foreground/70 hover:text-white transition-colors"
-          >
-            {result ? 'Close' : 'Cancel'}
-          </button>
-          {!result && (
-            <button
-              onClick={handleImport}
-              disabled={!bundle || importing}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
-            >
-              <Upload className="w-4 h-4" />
-              {importing ? 'Importing…' : 'Import'}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
+    </Modal>
   )
 }

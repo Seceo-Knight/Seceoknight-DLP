@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Fingerprint, Plus, Trash2, Power, PowerOff, FlaskConical, ShieldCheck, X } from 'lucide-react'
+import { Fingerprint, Plus, Trash2, Power, PowerOff, FlaskConical, ShieldCheck } from 'lucide-react'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
@@ -11,6 +11,7 @@ import {
 } from '@/lib/data-matching-api'
 import { usePagination } from '@/lib/hooks/useTableState'
 import { DataPagination } from '@/components/ui/pagination'
+import SharedModal, { ModalHeader, useConfirm } from '@/components/ui/Modal'
 
 // Ported from the CyberSentinel-DLP reference project. Closes task #123 --
 // the data-matching server API (server/app/api/v1/data_matching.py) was
@@ -22,6 +23,7 @@ const utf8ToB64 = (s: string) => btoa(unescape(encodeURIComponent(s)))
 
 export default function DataMatching() {
   const qc = useQueryClient()
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const [createOpen, setCreateOpen] = useState(false)
   const [testOpen, setTestOpen] = useState(false)
 
@@ -147,7 +149,13 @@ export default function DataMatching() {
                       <button
                         className="p-1.5 rounded-cs-sm hover:bg-cs-hair-2 text-cs-crit"
                         title="Delete"
-                        onClick={() => { if (confirm(`Delete "${s.name}"? Its index is removed.`)) remove.mutate(s.id) }}
+                        onClick={async () => {
+                          if (await confirm({
+                            title: 'Delete data-match source',
+                            confirmLabel: 'Delete',
+                            children: `Delete "${s.name}"? Its index is removed.`,
+                          })) remove.mutate(s.id)
+                        }}
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -173,6 +181,7 @@ export default function DataMatching() {
 
       {createOpen && <CreateModal onClose={() => setCreateOpen(false)} onSaved={() => { setCreateOpen(false); qc.invalidateQueries({ queryKey: ['data-match-sources'] }) }} />}
       {testOpen && <TestModal onClose={() => setTestOpen(false)} />}
+      {confirmDialog}
     </div>
   )
 }
@@ -323,17 +332,33 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+// Delegates to the shared Modal primitive (src/components/ui/Modal.tsx,
+// gap-scan port of CyberSentinel-DLP commit 73f58ec) while keeping this
+// file's existing {title, onClose, children} call sites unchanged. The
+// previous version here used rounded-cs-card / shadow-card, neither of
+// which were ever registered in tailwind.config.cjs -- those classes
+// generated no CSS at all, on top of the max-h-[90vh]-on-the-panel
+// scroll bug every hand-rolled dialog in the app shared.
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-cs-panel rounded-cs-card border border-cs-hair shadow-card w-full max-w-xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-cs-hair sticky top-0 bg-cs-panel">
-          <h2 className="text-lg font-semibold text-cs-ink flex items-center gap-2"><Fingerprint className="h-5 w-5 text-cs-indigo" />{title}</h2>
-          <button className="p-1 rounded-cs-sm hover:bg-cs-hair-2" onClick={onClose}><X className="h-4 w-4 text-cs-muted" /></button>
-        </div>
-        <div className="px-5 py-4">{children}</div>
-      </div>
-    </div>
+    <SharedModal
+      open
+      onClose={onClose}
+      size="lg"
+      label={title}
+      header={
+        <ModalHeader
+          title={
+            <span className="flex items-center gap-2">
+              <Fingerprint className="h-5 w-5 text-cs-indigo" />
+              {title}
+            </span>
+          }
+          onClose={onClose}
+        />
+      }
+    >
+      {children}
+    </SharedModal>
   )
 }

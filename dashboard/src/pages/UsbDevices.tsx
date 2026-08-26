@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Usb, ShieldCheck, ShieldAlert, Plus, Trash2, Check, Ban, History, X, Pencil, EyeOff, Undo2 } from 'lucide-react'
+import { Usb, ShieldCheck, ShieldAlert, Plus, Trash2, Check, Ban, History, Pencil, EyeOff, Undo2 } from 'lucide-react'
+import Modal, { ModalHeader } from '@/components/ui/Modal'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
@@ -450,19 +451,20 @@ function SeenRow({ s, onApproved, onHistory }: { s: SeenDevice; onApproved: () =
 function HistoryModal({ serial, onClose }: { serial: string; onClose: () => void }) {
   const q = useQuery({ queryKey: ['usb-device-activity', serial], queryFn: () => deviceActivity(serial) })
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="fixed inset-0 bg-black bg-opacity-50" onClick={onClose} />
-      <div className="relative bg-card rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <div>
-            <h2 className="text-lg font-semibold text-foreground">Insertion history</h2>
-            <p className="num text-xs text-cs-muted">{serial}</p>
-          </div>
-          <button onClick={onClose} className="p-1 hover:bg-accent rounded transition-colors">
-            <X className="h-4 w-4 text-muted-foreground" />
-          </button>
-        </div>
-        <div className="px-6 py-4 overflow-y-auto text-sm">
+    <Modal
+      open
+      onClose={onClose}
+      size="md"
+      label="Insertion history"
+      header={
+        <ModalHeader
+          title="Insertion history"
+          hint={<span className="num">{serial}</span>}
+          onClose={onClose}
+        />
+      }
+    >
+        <div className="text-sm">
           {q.isLoading ? (
             <LoadingSpinner />
           ) : (q.data?.events.length || 0) === 0 ? (
@@ -488,8 +490,7 @@ function HistoryModal({ serial, onClose }: { serial: string; onClose: () => void
             </ul>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   )
 }
 
