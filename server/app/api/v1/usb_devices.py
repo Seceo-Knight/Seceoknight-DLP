@@ -252,6 +252,7 @@ async def approve_device(
         await db.commit()
         await db.refresh(existing)
         await audit_log(current_user.id, audit_action, {"serial_number": serial, "decision": decision})
+        await _clear_dismissal(db, serial)
         return _device_out(existing)
 
     dev = SanctionedUsbDevice(
@@ -271,7 +272,24 @@ async def approve_device(
     await db.refresh(dev)
     audit_action = "security.usb_devices.approve" if decision == "allow" else "security.usb_devices.deny"
     await audit_log(current_user.id, audit_action, {"serial_number": serial, "decision": decision})
+    await _clear_dismissal(db, serial)
     return _device_out(dev)
+
+
+async def _clear_dismissal(db: AsyncSession, serial: Optional[str]) -> None:
+    """Drop any dismissal for this serial -- a real allow/deny decision
+    always supersedes a "not now". Without this, removing the resulting
+    SanctionedUsbDevice row later would drop the device back into hiding
+    instead of back into the triage queue where it belongs."""
+    serial = (serial or "").strip()
+    if not serial:
+        return
+    from app.models.dismissed_usb_device import DismissedUsbDevice
+
+    await db.execute(delete(DismissedUsbDevice).where(
+        DismissedUsbDevice.serial_number == serial
+    ))
+    await db.commit()
 
 
 @router.patch("/{device_id}")
@@ -327,13 +345,27 @@ async def revoke_device(
 @router.get("/seen")
 async def seen_devices(
     limit: int = 200,
+    include_dismissed: bool = False,
     current_user: User = Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
-    """USB devices observed on endpoints (from events) that are NOT yet
-    sanctioned — the enrolment candidates. Deduped by serial, most-recent first."""
+    """USB devices observed on endpoints (from events) with no registry rule --
+    the enrolment candidates. Deduped by serial, most-recent first.
+
+    Dismissed devices are hidden by default (ported from CyberSentinel-DLP
+    commit 7ae4671, gap-scan of August 26 2026) -- they're triage noise the
+    admin already looked at, not a decision. Pass ``include_dismissed=true``
+    to see them anyway, each flagged ``dismissed: true`` so they can be
+    restored to the active queue. ``dismissed_count`` is always returned so
+    the UI can offer that without a second call.
+    """
+    from app.models.dismissed_usb_device import DismissedUsbDevice
+
     approved = {
         s for (s,) in (await db.execute(select(SanctionedUsbDevice.serial_number))).all()
+    }
+    dismissed = {
+        s for (s,) in (await db.execute(select(DismissedUsbDevice.serial_number))).all()
     }
     # serial_number is populated by ExtractUsbSerialFromDeviceId() in agent.cpp
     # (agent versions before this feature only sent device_name/device_id/
@@ -357,11 +389,15 @@ async def seen_devices(
     ]
     out: List[dict] = []
     async for r in mongo.aggregate(pipeline):
-        if r.get("serial_number") in approved:
+        serial = r.get("serial_number")
+        if serial in approved:
+            continue
+        if serial in dismissed and not include_dismissed:
             continue
         ls = r.get("last_seen")
         out.append({
-            "serial_number": r.get("serial_number"),
+            "dismissed": serial in dismissed,
+            "serial_number": serial,
             "vendor_id": r.get("vendor_id"),
             "product_id": r.get("product_id"),
             "product_name": r.get("product_name"),
@@ -394,7 +430,83 @@ async def seen_devices(
 
     await _annotate_connection_state(out)
 
-    return {"devices": out, "count": len(out)}
+    return {
+        "devices": out,
+        "count": len(out),
+        "dismissed_count": len(dismissed),
+        "include_dismissed": include_dismissed,
+    }
+
+
+class DeviceDismiss(BaseModel):
+    serial_number: str = Field(..., min_length=1, max_length=255)
+    product_name: Optional[str] = Field(None, max_length=255)
+    manufacturer: Optional[str] = Field(None, max_length=255)
+    note: Optional[str] = Field(None, max_length=1000)
+
+
+@router.post("/seen/dismiss")
+async def dismiss_seen_device(
+    body: DeviceDismiss,
+    current_user: User = Depends(require_role("analyst")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear a "seen but not yet decided" device off the triage queue,
+    without approving or denying it (ported from CyberSentinel-DLP commit
+    7ae4671, gap-scan of August 26 2026). Reversible via the DELETE below;
+    superseded automatically the moment a real allow/deny is made for the
+    same serial (see _clear_dismissal()).
+
+    Idempotent -- dismissing an already-dismissed serial just refreshes who/
+    when, and reports ``already: true`` rather than erroring.
+    """
+    from app.models.dismissed_usb_device import DismissedUsbDevice
+
+    serial = body.serial_number.strip()
+    if not serial:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "serial_number is required")
+
+    existing = (await db.execute(
+        select(DismissedUsbDevice).where(DismissedUsbDevice.serial_number == serial)
+    )).scalar_one_or_none()
+    already = existing is not None
+    if existing:
+        existing.product_name = body.product_name or existing.product_name
+        existing.manufacturer = body.manufacturer or existing.manufacturer
+        existing.note = body.note if body.note is not None else existing.note
+        existing.dismissed_by = current_user.id
+        existing.dismissed_at = datetime.now(timezone.utc)
+    else:
+        db.add(DismissedUsbDevice(
+            serial_number=serial,
+            product_name=body.product_name,
+            manufacturer=body.manufacturer,
+            note=body.note,
+            dismissed_by=current_user.id,
+        ))
+    await db.commit()
+    await audit_log(current_user.id, "security.usb_devices.dismiss", {"serial_number": serial})
+    return {"serial_number": serial, "dismissed": True, "already": already}
+
+
+@router.delete("/seen/dismiss/{serial_number}")
+async def restore_seen_device(
+    serial_number: str,
+    current_user: User = Depends(require_role("analyst")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Undo a dismissal -- the device returns to the active triage queue.
+    Does not touch its event history or any SanctionedUsbDevice row."""
+    from app.models.dismissed_usb_device import DismissedUsbDevice
+
+    serial = (serial_number or "").strip()
+    res = await db.execute(delete(DismissedUsbDevice).where(
+        DismissedUsbDevice.serial_number == serial
+    ))
+    await db.commit()
+    if res.rowcount == 0:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no dismissal found for that serial")
+    await audit_log(current_user.id, "security.usb_devices.restore_dismissed", {"serial_number": serial})
 
 
 @router.get("/activity")

@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🟢 Gap-scan: CyberSentinel-DLP USB dismiss-seen-device feature (August 26, 2026)
+
+Ported the half of commit 7ae4671 left out of the earlier connection-state
+fix: dismissing a "seen but not yet decided" device off the triage queue.
+Devices observed connecting that aren't sanctioned or denied build up on
+the USB Devices page forever; most are one-off dongles/phones/printers an
+admin looks at once and has no intention of ever approving, but there was
+no way to clear them without either approving or denying (a "deny" for a
+device nobody actually cares about is misleading in an audit trail).
+
+New `dismissed_usb_devices` table (migration 041), POST
+`/usb-devices/seen/dismiss` and DELETE `/usb-devices/seen/dismiss/{serial}`.
+Dismissing is pure bookkeeping -- it does NOT authorize the device (the
+strict allowlist still blocks it if enforced), doesn't stop monitoring, and
+is fully reversible via Restore. A later real allow/deny always supersedes
+a dismissal automatically (new `_clear_dismissal()` helper, called from both
+the create and update branches of `approve_device()`). Dashboard: dismissed devices hide by default
+behind a "Show dismissed (N)" checkbox; each dismissed row gets a badge and
+a Restore button instead of Dismiss.
+
+---
+
 ## 🟢 Gap-scan: CyberSentinel-DLP USB fixes (August 26, 2026)
 
 Fresh gap-scan against effaaykhan/cybersentineldlp-prod (their commit
