@@ -48,6 +48,20 @@ class UserService:
         )
         return result.scalar_one_or_none()
 
+    async def get_user_by_siem_sub(self, siem_sub: str) -> Optional[User]:
+        """
+        Fetch the account belonging to a SIEM identity.
+
+        This is the preferred SSO lookup key (over email) — see the
+        siem_sub column comment in app/models/user.py. Email is a display
+        attribute people change; `sub` is the SIEM's own id for the human
+        and does not.
+        """
+        result = await self.db.execute(
+            select(User).where(User.siem_sub == siem_sub)
+        )
+        return result.scalar_one_or_none()
+
     async def get_all_users(
         self,
         skip: int = 0,
@@ -93,6 +107,9 @@ class UserService:
         department: Optional[str] = None,
         clearance_level: Optional[int] = None,
         username: Optional[str] = None,
+        sso_managed: bool = False,
+        sso_source_role: Optional[str] = None,
+        siem_sub: Optional[str] = None,
     ) -> User:
         """
         Create a new user
@@ -103,6 +120,13 @@ class UserService:
             full_name: User's full name
             role: User role (admin, analyst, viewer, agent)
             organization: Organization name
+            sso_managed: True when this account is owned by SSO role sync
+                (app/core/sso_roles.py) — role/department/clearance are
+                re-applied from the SIEM on every login until an admin
+                edits the role by hand and detaches it.
+            sso_source_role: Last SIEM "role:access" pair seen, for tracing.
+            siem_sub: The SIEM's immutable user id, if this account was
+                provisioned via SSO.
 
         Returns:
             Created User object
@@ -139,6 +163,10 @@ class UserService:
             clearance_level=clearance_level if clearance_level is not None else 1,
             is_active=True,
             is_verified=False,
+            # SSO provenance — see app/core/sso_roles.py.
+            sso_managed=sso_managed,
+            sso_source_role=sso_source_role,
+            siem_sub=siem_sub,
         )
 
         self.db.add(user)
@@ -156,6 +184,11 @@ class UserService:
         is_active: Optional[bool] = None,
         department: Optional[str] = None,
         clearance_level: Optional[int] = None,
+        sso_managed: Optional[bool] = None,
+        sso_source_role: Optional[str] = None,
+        siem_sub: Optional[str] = None,
+        email: Optional[str] = None,
+        username: Optional[str] = None,
     ) -> Optional[User]:
         """
         Update user details
@@ -166,6 +199,16 @@ class UserService:
             role: New role
             organization: New organization
             is_active: New active status
+            sso_managed: Set/clear SSO ownership of this account. See
+                app/core/sso_roles.py — the SSO exchange endpoint sets this
+                true on provisioning/sync; the admin UI's PUT /users sets
+                it false when an admin edits the role by hand (detach).
+            sso_source_role: Last SIEM "role:access" pair, for tracing.
+            siem_sub: Backfill/update the SIEM identity key.
+            email: Reconcile an email rename reported by the SIEM (only
+                trusted when the account was matched by siem_sub, not by
+                the email itself — see the SSO exchange endpoint).
+            username: Update the login alias.
 
         Returns:
             Updated User object or None if not found
@@ -193,6 +236,16 @@ class UserService:
             user.department = department
         if clearance_level is not None:
             user.clearance_level = clearance_level
+        if sso_managed is not None:
+            user.sso_managed = sso_managed
+        if sso_source_role is not None:
+            user.sso_source_role = sso_source_role
+        if siem_sub is not None:
+            user.siem_sub = siem_sub
+        if email is not None:
+            user.email = email
+        if username is not None:
+            user.username = username
 
         user.updated_at = datetime.utcnow()
 

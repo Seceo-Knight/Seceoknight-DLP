@@ -244,6 +244,24 @@ services:
 
       # SSO shared secret for SIEM integration (empty = SSO disabled)
       - DLP_SSO_SECRET=${DLP_SSO_SECRET:-}
+      # RS256/JWKS SSO verification + role/attribute propagation
+      # (server/app/core/sso_jwks.py, sso_verify.py, sso_roles.py). Ported
+      # from CyberSentinel-DLP, gap-scan of August 26 2026. Empty
+      # SIEM_JWKS_URL = unchanged HS256-only behaviour.
+      - SIEM_JWKS_URL=${SIEM_JWKS_URL:-}
+      - SIEM_JWKS_CA_BUNDLE=${SIEM_JWKS_CA_BUNDLE:-}
+      - SSO_JWKS_CACHE_SECONDS=${SSO_JWKS_CACHE_SECONDS:-600}
+      - SSO_AUDIENCE=${SSO_AUDIENCE:-seceoknight-dlp}
+      - SSO_CLOCK_LEEWAY_SECONDS=${SSO_CLOCK_LEEWAY_SECONDS:-60}
+      - SSO_REQUIRE_EXP=${SSO_REQUIRE_EXP:-true}
+      - SSO_NONCE_TTL_SECONDS=${SSO_NONCE_TTL_SECONDS:-300}
+      - SSO_MAX_TOKEN_AGE_SECONDS=${SSO_MAX_TOKEN_AGE_SECONDS:-600}
+      - SSO_ALLOWLIST_BYPASS=${SSO_ALLOWLIST_BYPASS:-true}
+      - SSO_MAX_ROLE=${SSO_MAX_ROLE:-ADMIN}
+      - SSO_DEFAULT_ROLE=${SSO_DEFAULT_ROLE:-VIEWER}
+      - SSO_JIT_PROVISION=${SSO_JIT_PROVISION:-false}
+      - SSO_SYNC_ON_LOGIN=${SSO_SYNC_ON_LOGIN:-true}
+      - SSO_ROLE_MAP=${SSO_ROLE_MAP:-}
 
       # OneDrive OAuth (optional)
       - ONEDRIVE_CLIENT_ID=${ONEDRIVE_CLIENT_ID:-}

@@ -8,6 +8,112 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔵 SSO/SIEM hardening: RS256/JWKS, cert pinning, role/ABAC mapping (August 26, 2026)
+
+Gap-scan of CyberSentinel-DLP (commits ad46e71, 074266b, f41a9db) found
+SeceoKnight's `/auth/sso/exchange` was still the pre-hardening design:
+HS256-only against a shared secret, no audience check, every SSO login
+landed on whatever role the account already had (or VIEWER on first
+provision), and the exchange session was still IP-gated like a password
+login. SeceoKnight already had the exact role vocabulary and ABAC columns
+(department/clearance_level, "NULL department denies everything") this
+hardening pass assumes, which made the port unusually direct.
+
+**RS256 via JWKS (`server/app/core/sso_jwks.py`, `sso_verify.py`, new).**
+The token's own signed `alg` header routes verification: RS/PS/ES → the
+SIEM's public key set fetched from `SIEM_JWKS_URL` and selected by `kid`;
+HS256 → `DLP_SSO_SECRET`, kept only as a migration fallback. With HS256 the
+DLP holds a secret that can *forge* SIEM tokens, not just verify them; with
+RS256 it holds only a public key. Routing is safe against the classic
+RS256→HS256 key-confusion downgrade attack because the two paths use
+disjoint key material — verified directly: forging an HS256 token signed
+with the RSA public key bytes is correctly rejected once `DLP_SSO_SECRET`
+is cleared. `alg:none` is unreachable by construction (verified). The JWKS
+cache fails **closed** (unlike every other cache in this codebase) since it
+backs an auth decision — an unfetchable key set refuses the login rather
+than accepting it unverified.
+
+**Certificate pinning (`SIEM_JWKS_CA_BUNDLE`).** The JWKS endpoint is the
+trust anchor for every RS256 login, so TLS verification is never disabled,
+only re-pointed at a pinned certificate — a SIEM on an internal network
+typically presents a self-signed cert, and a misconfigured/missing pinned
+path fails closed rather than silently falling back to the system store
+(verified).
+
+**Audience + clock hardening.** `aud` (`SSO_AUDIENCE`, default
+`seceoknight-dlp`) is enforced strictly on RS256, and on HS256 only when
+the token actually carries the claim — so an already-integrated SIEM isn't
+locked out by turning RS256 on. `SSO_CLOCK_LEEWAY_SECONDS` absorbs clock
+skew between boxes; the nonce-replay window is derived from the token's own
+`exp` (not a flat guess) so raising leeway can't silently reopen it.
+Verified: correct-aud accepted, wrong-aud rejected, expired token rejected,
+unknown-`kid` correctly refused with one rate-limited refetch for rotation.
+
+**Role/ABAC mapping (`server/app/core/sso_roles.py`, new, ported near-
+verbatim from CyberSentinel-DLP — SeceoKnight's `UserRole` enum already has
+all eight of the same values).** The SIEM's Administrator/L1/L2/L3 ×
+read-write/read-only vocabulary translates to SeceoKnight's existing roles
+via a table, overridable with `SSO_ROLE_MAP` (JSON) and capped by
+`SSO_MAX_ROLE` — set below ADMIN and no SSO login, forged or genuine, can
+exceed it. `department`/`clearance_level` sync alongside role, since a
+department-less account sees nothing under SeceoKnight's own ABAC rule.
+Verified against a real interpreter: all role/access combinations, the
+`SSO_MAX_ROLE` clamp, the `SSO_ROLE_MAP` JSON override, and its
+malformed-input fallback.
+
+**Ownership + ordering.** New `users.sso_managed` / `sso_source_role` /
+`siem_sub` columns (migration `042_sso_role_provenance`). SSO-provisioned
+accounts re-sync role/department/clearance on every login
+(`SSO_SYNC_ON_LOGIN`); an admin editing such a user's role by hand through
+`PUT /users` detaches it permanently instead of having the edit silently
+revert at the next login. `POST /users` and `PUT /users/{id}` both gained
+`siem_role`/`access` fields so the SIEM's seeding call and the exchange
+token agree by construction. `siem_sub` (the SIEM's immutable user id) is
+now the preferred match key over email — an email rename no longer orphans
+the account and silently double-provisions.
+
+**JIT provisioning** (`SSO_JIT_PROVISION`, off by default — unchanged from
+SeceoKnight's existing contract where the SIEM seeds accounts itself via
+`POST /users`) is available and bounded by `SSO_MAX_ROLE` + RS256 for
+anyone who wants the SIEM to provision purely from the exchange token.
+
+**SSO sessions bypass the IP allowlist** (`SSO_ALLOWLIST_BYPASS`, default
+on) — an off-network analyst arriving via the SIEM no longer gets a
+successful login attached to a console that 403s on every subsequent
+request. The bypass reads a `sso: true` claim inside a token signed with
+`SECRET_KEY`, so it cannot be added by the caller; password sessions carry
+no such claim and stay gated. `/auth/sso/exchange` itself is exempt too
+(it runs before there is a session at all).
+
+**Token-in-log fix (dashboard).** `SSOCallback.tsx` now reads the exchange
+token from the URL *fragment* first (never sent to a server) with the
+query string as a fallback, and scrubs the address bar before doing
+anything with the token. `dashboard/nginx.conf` gained a log-format
+override (`$dlp_logged_uri` map) that strips the query string specifically
+on `/auth/sso`, applied server-wide rather than per-location because this
+SPA's `try_files` fallback to `/index.html` means a per-location directive
+on `/auth/sso` itself never fires.
+
+**Deliberately not ported:** CyberSentinel's `csdlp sso-cert` CLI helper
+(a bash wrapper that automates setting `SIEM_JWKS_URL` and fetching/
+trusting a cert) — SeceoKnight has no equivalent management CLI to hang it
+off of, and the manual equivalent (drop a PEM under `./config/`, point
+`SIEM_JWKS_CA_BUNDLE` at `/etc/seceoknight/<file>.pem`) is now documented
+directly in `.env.example`. Can be added later if wanted.
+
+Verified end-to-end against a real Python interpreter (not just brace-
+balance/AST checks, since this is authentication code): HS256 with/without
+aud, RS256 against a generated RSA keypair and a mocked JWKS response,
+the downgrade-attack rejection, expiry, unknown-kid rotation handling, the
+missing-CA-bundle fail-closed path, and every role-mapping branch including
+the `SSO_MAX_ROLE` clamp and `SSO_ROLE_MAP` override. `tsc --noEmit` clean
+on `SSOCallback.tsx`. Not yet exercised against a live SIEM integration —
+new deployments turning SSO on for the first time should start on Alert-
+style low-privilege roles (`SSO_DEFAULT_ROLE`, `SSO_MAX_ROLE`) before
+trusting it for ADMIN-level access.
+
+---
+
 ## 🟢 Installer: 32-bit-on-64-bit guard + Diagnose subsystem (August 26, 2026)
 
 Gap-scan of CyberSentinel-DLP (commit `9e01900`, "report what the BROWSER
