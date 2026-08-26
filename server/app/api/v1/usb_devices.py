@@ -102,19 +102,29 @@ async def _device_control_status(db: AsyncSession) -> dict:
 
 
 async def _annotate_connection_state(devices: List[dict]) -> None:
-    """Mutates ``devices`` in place, adding a live ``connected`` bool and
-    ``last_activity_at`` timestamp per serial, computed from the most recent
+    """Mutates ``devices`` in place, adding a live ``connection_state``
+    ('connected' | 'disconnected' | 'unknown'), a legacy ``connected`` bool
+    (True only for 'connected', kept for callers/UI that haven't moved to
+    the 3-state field yet), ``reporting_agent_online``, and
+    ``last_activity_at``, computed from the most recent
     ``usb_device_authorization`` event (which carries a ``usb_event`` of
     'connect' or 'disconnect' — see agent.cpp's ReportUsbDeviceAuthorization()
     and agents.py's log_device_authorization()).
 
-    Devices report a connect independent of any classic USB policy being
-    configured, and — as of the agent.cpp fix that added this — a
-    disconnect too, so this works for allowlist-only deployments. Agents on
-    older builds (pre-fix) never sent a disconnect event at all; a serial
-    last seen on one of those will show as "connected" until it's
-    reconnected/disconnected again on a current agent build. That's a
-    known, disclosed limitation, not a bug in this computation.
+    Fix (ported from CyberSentinel-DLP commit 7ae4671, August 26 2026): a
+    connect with no matching disconnect does NOT mean the device is still
+    plugged in. Only a running agent emits a disconnect, so a machine that
+    was shut down, slept, lost power, or simply had its agent stopped leaves
+    its last connect standing forever — the serial renders as "connected"
+    months after it was actually pulled. The absence of a disconnect is not
+    evidence of presence.
+
+    So a connect is trusted only while the reporting agent is still beating
+    (the same freshness rule _compute_lifecycle_status() applies on the
+    Agents page: 'active' = heartbeat within AGENT_TIMEOUT_SECONDS). When
+    that agent has gone quiet, the honest answer is 'unknown', not a live
+    green dot. An explicit disconnect is trusted regardless -- it's a
+    positive fact, not an absence of one.
     """
     serials = [d["serial_number"] for d in devices if d.get("serial_number")]
     if not serials:
@@ -131,19 +141,51 @@ async def _annotate_connection_state(devices: List[dict]) -> None:
             "_id": "$serial_number",
             "usb_event": {"$first": "$usb_event"},
             "timestamp": {"$first": "$timestamp"},
+            "agent_id": {"$first": "$agent_id"},
         }},
     ]
     latest: Dict[str, dict] = {}
     async for r in mongo.aggregate(pipeline):
         latest[r["_id"]] = r
+
+    # Liveness of every agent that reported one of these events, by the same
+    # rule the Agents page uses. SeceoKnight's agent registry lives in Mongo
+    # (unlike CyberSentinel's Postgres Agent model), so this is a direct find
+    # rather than a SQL join.
+    from app.api.v1.agents import _compute_lifecycle_status
+
+    agent_ids = {r.get("agent_id") for r in latest.values() if r.get("agent_id")}
+    live: Dict[str, bool] = {}
+    if agent_ids:
+        agents_collection = get_mongodb()["agents"]
+        async for doc in agents_collection.find(
+            {"agent_id": {"$in": list(agent_ids)}},
+            {"_id": 0, "agent_id": 1, "last_seen": 1, "last_heartbeat": 1},
+        ):
+            last_seen = doc.get("last_heartbeat") or doc.get("last_seen")
+            live[doc["agent_id"]] = _compute_lifecycle_status(last_seen) == "active"
+
     for d in devices:
         entry = latest.get(d.get("serial_number"))
         if not entry:
             d["connected"] = False
+            d["connection_state"] = None
+            d["reporting_agent_online"] = None
             d["last_activity_at"] = None
             continue
         ts = entry.get("timestamp")
-        d["connected"] = (entry.get("usb_event") or "connect") == "connect"
+        is_connect = (entry.get("usb_event") or "connect") == "connect"
+        agent_id = entry.get("agent_id")
+        # None (not False) when we never resolved the reporting agent at
+        # all -- unknown-liveness, distinct from confirmed-offline.
+        agent_online = live.get(agent_id) if agent_id else None
+        if is_connect:
+            state = "connected" if agent_online else "unknown"
+        else:
+            state = "disconnected"
+        d["connection_state"] = state
+        d["connected"] = state == "connected"
+        d["reporting_agent_online"] = agent_online
         d["last_activity_at"] = ts.isoformat() if hasattr(ts, "isoformat") else ts
 
 
