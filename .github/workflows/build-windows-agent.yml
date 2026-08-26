@@ -8,6 +8,7 @@ on:
          - 'agents/endpoint/windows/network_exfil_monitor.cpp'
          - 'agents/endpoint/windows/print_monitor.cpp'
          - 'agents/endpoint/windows/screen_capture_monitor.cpp'
+         - 'agents/endpoint/windows/messaging_text_monitor.cpp'
          - 'agents/endpoint/windows/**.h'
          - 'agents/browser-extension/native-host/skdlp_host.py'
          - '.github/workflows/build-windows-agent.yml'
@@ -78,6 +79,7 @@ jobs:
             network_exfil_monitor.cpp \
             print_monitor.cpp \
             screen_capture_monitor.cpp \
+            messaging_text_monitor.cpp \
             -o seceoknight_agent.exe \
             -lwinhttp \
             -lwbemuuid \

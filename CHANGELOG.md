@@ -8,6 +8,81 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🟠 New capability: typed-message inspection in desktop chat apps (August 26, 2026)
+
+Gap-scan of CyberSentinel-DLP found their biggest remaining feature gap:
+Messaging App Attachment Control only ever watched the file picker. Typing
+or pasting sensitive data straight into WhatsApp/Teams/Telegram/etc opened
+no dialog, so nothing ran and nothing was logged -- a policy set to Block
+attachments gave no protection against the same data typed instead.
+
+**Higher risk than everything else ported this session, flagged explicitly
+to the user before starting:** the mechanism is a low-level Windows
+keyboard hook (`WH_KEYBOARD_LL`) that can hold the Enter/send keystroke
+system-wide while it inspects the message. A bug in a browser extension
+breaks one feature; a bug in a global keyboard hook can freeze keyboard
+input on the whole machine. User explicitly chose the full port (block
+capability included) after being shown this trade-off.
+
+**What was ported, and how:** CyberSentinel's CURRENT implementation
+(1355-line .cpp), not their original commit -- the module doubled in size
+through several real bugs found on real machines after shipping: a
+packaged/MSIX WhatsApp resolving to the wrong process
+(ApplicationFrameHost.exe instead of the app), the composer being located
+by size instead of focus (which blocked sends on last month's conversation,
+not the actual message), and a wedged UI Automation call holding Enter
+forever with no watchdog. Porting the original version would have
+reintroduced bugs already found and fixed upstream.
+
+`messaging_text_monitor.h`/`.cpp` were copied byte-for-byte from
+CyberSentinel's tested source into this repo (via direct file copy, not
+retyped through chat -- transcription risk in COM/threading/pointer code is
+exactly how new bugs get introduced) and adapted for SeceoKnight's own
+`NetworkExfilMonitor` plumbing:
+
+  - `MessagingVerdict` (network_exfil_monitor.h) gains `inspectMessages` and
+    `messageDataTypes` fields -- independent of `managed`/`block` above
+    (attachment control) so enabling one doesn't silently enable the other.
+  - New exported `NetworkExfilMonitor::TypeSeverity()` (was internal-only)
+    since the new module needs to rank an operator's chosen data-type list
+    without duplicating the severity table.
+  - agent.cpp: new `messagingInspectMessages`/`messagingDataTypes` state,
+    parsed from `GET /agents/{id}/messaging-app-policy`'s new
+    `inspect_messages`/`message_data_types` fields, wired into
+    `GetMessagingVerdict()`. `MessagingTextMonitor::Start()`/`Stop()` called
+    alongside the existing `NetworkExfilMonitor::Start()`/`Stop()`, reusing
+    every callback (classify/sendEvent/log/messagingPolicy) verbatim.
+  - Server: `inspect_messages` is server-resolved to `false` whenever the
+    operator's data-type selection is empty, so "picked nothing" can never
+    be misread as "everything" on the agent side -- ported exactly as
+    CyberSentinel designed it.
+  - Dashboard: MessagingAppControlPolicyForm gets a separate, clearly-marked
+    typed-message section -- checkbox defaults off, does not inherit from
+    the attachment settings above it, and shows an explicit warning with a
+    recommendation to validate in Alert mode before ever switching to Block
+    (Alert mode never touches the keyboard at all).
+
+**Safety rules preserved from the source, unchanged:** Alert mode never
+touches input. Every failure path releases the keystroke (UIA unreadable,
+worker slow, anything thrown) -- a watchdog independently releases anything
+held past `decisionTimeoutMs` in case the worker itself wedges. Injected
+keystrokes are ignored so the module's own replay can't re-enter the hook.
+The hook takes no locks and does no I/O, so it can't approach
+`LowLevelHooksTimeout`. Exactly one of {worker, watchdog} ever resolves a
+given keystroke, by atomic claim -- both releasing would send the message
+twice.
+
+**Not verified end-to-end on a real machine yet** (unlike everything else
+in this changelog) -- this sandbox has no Windows toolchain to compile or
+test a keyboard hook against. Verification will happen via SeceoKnight's
+own CI (real `windows-latest` + MSYS2 mingw-w64-x86_64-gcc, genuine Windows
+SDK headers -- notably BETTER coverage than CyberSentinel's own build host,
+which only has Debian mingw's UIAutomation stub headers) and then, strongly
+recommended, an Alert-mode rollout on the test PC before ever setting a
+policy's action to Block.
+
+---
+
 ## 🟢 Gap-scan: CyberSentinel-DLP USB dismiss-seen-device feature (August 26, 2026)
 
 Ported the half of commit 7ae4671 left out of the earlier connection-state
