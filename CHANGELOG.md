@@ -8,6 +8,58 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🟢 Installer: 32-bit-on-64-bit guard + Diagnose subsystem (August 26, 2026)
+
+Gap-scan of CyberSentinel-DLP (commit `9e01900`, "report what the BROWSER
+sees, and refuse to run where it cannot") ported into `manage-agent.ps1`.
+Pure PowerShell, no compilation involved.
+
+**The bug this defends against:** on 64-bit Windows, a 32-bit PowerShell
+process has every `HKLM:\SOFTWARE\Policies\...` registry access silently
+redirected into `HKLM:\SOFTWARE\WOW6432Node\Policies\...`, which no
+64-bit browser ever reads. A script running 32-bit can write its
+extension force-install policy, read it back successfully, report
+success -- and the browser sees none of it. CyberSentinel's own commit
+message says this cost them real days to track down. It's directly
+relevant here because `manage-agent.ps1` writes the exact same
+`ExtensionInstallForcelist` key, both from the Browser Extension Guard
+task and from this session's own `[3] Force extension reinstall` action
+added earlier today.
+
+**What changed:**
+- Added a startup guard at the very top of the script: refuses to run
+  and explains why if launched as 32-bit PowerShell on a 64-bit OS,
+  with the exact `sysnative` relaunch command to fix it.
+- Added `Get-PolicyValueInView`, a small helper reading a registry value
+  from an explicit 64-bit or 32-bit view regardless of the running
+  process's own bitness (`Microsoft.Win32.RegistryKey]::OpenBaseKey`).
+- Added `Show-ExtensionDiagnostics`, wired in as a new `[4] Diagnose`
+  option under `[4] Browser` (previously `[3] Force extension
+  reinstall` / `[4] Back`, now `[4] Diagnose` / `[5] Back`). Reports,
+  per browser: process/OS bitness, whether the force-install entry is
+  visible in the 64-bit registry view specifically (the one the browser
+  reads, not just whatever view this process defaults to), whether an
+  `ExtensionSettings` policy (if set) is valid JSON, the `wantVersion`
+  pin if present, an explicit WOW6432Node shadow-copy check (should
+  always be empty -- its mere presence, regardless of what the 64-bit
+  view says, is the bug), installed-vs-published version per browser
+  profile (reuses the existing `Get-ExtensionInstallSources` scan), and
+  a reachability check against this agent's own configured update-feed
+  URL.
+- `Show-BrowserControls` now takes `$s` (the already-computed
+  `Get-AgentStatus` result from the main menu loop) so Diagnose can
+  build the update-feed URL from `$s.ServerUrl` without a second
+  round-trip to re-detect it.
+
+Verified via brace-balance check across the whole file (312 open / 312
+close, unchanged shape) and manual review of every added block -- no
+PowerShell interpreter is available in this environment to actually run
+it, so this is first exercised for real the next time it's run on a
+managed endpoint. Read-only where it matters: Diagnose only reads the
+registry and probes an HTTP HEAD request; it makes no changes.
+
+---
+
 ## 🟠 New capability: typed-message inspection in desktop chat apps (August 26, 2026)
 
 Gap-scan of CyberSentinel-DLP found their biggest remaining feature gap:
