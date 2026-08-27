@@ -2254,6 +2254,28 @@ async def evaluate_web_activity(
                 app_category=None, action="allow", reason="destination not in app catalog",
             )
 
+        # The extension (web-activity.js) always sends activity="post" for
+        # every REQUEST-side call, genai or not — it only has a flat domain
+        # list from app_catalog, not per-domain categories, so it can't
+        # cheaply tell "prompt to a genai host" (post) apart from "composed
+        # message to a webmail/collaboration host" (send) before making the
+        # call. That's fine for genai (it's the correct label already), but
+        # for webmail/collaboration hosts it meant every request was looked
+        # up as (webmail/collaboration, "post") — not a MEANINGFUL_CELLS
+        # entry — so lookup_action() always fell through to DEFAULT_ACTION
+        # ("allow") no matter what an admin configured for "Webmail Send" /
+        # "Collaboration Send" in the matrix UI: those two cells were
+        # silently unreachable end to end (found during a Nov 2026 DLP
+        # quality audit). Re-derive the correct activity here from the
+        # CATEGORY this function just resolved authoritatively from the
+        # host — the one thing the server already doesn't trust the client
+        # to self-report — instead of changing the extension/client
+        # contract (which would need a new extension version rolled out
+        # fleet-wide before the fix took effect anywhere).
+        activity = request.activity
+        if activity == "post" and category in ("webmail", "collaboration"):
+            activity = "send"
+
         policy = (await db.execute(
             _select(_Policy).where(
                 _Policy.type == "web_activity_control",
@@ -2268,7 +2290,7 @@ async def evaluate_web_activity(
             )
 
         matrix = wa.normalize_matrix((policy.config or {}).get("matrix") or {})
-        cell_action = wa.lookup_action(matrix, category, request.activity)
+        cell_action = wa.lookup_action(matrix, category, activity)
 
         # Resolve content to classify — same extraction path as
         # evaluate_policy_realtime for file bytes, plain content otherwise.
@@ -2286,7 +2308,7 @@ async def evaluate_web_activity(
         if cell_action == "allow" or not content_to_classify:
             return WebActivityEvaluationResponse(
                 app_category=category, action="allow",
-                reason=f"cell ({category}.{request.activity}) = {cell_action}" + ("" if content_to_classify else ", no content to inspect"),
+                reason=f"cell ({category}.{activity}) = {cell_action}" + ("" if content_to_classify else ", no content to inspect"),
                 policy_id=str(policy.id), policy_name=policy.name,
             )
 
@@ -2314,11 +2336,11 @@ async def evaluate_web_activity(
             )
             final_action = "redact" if labels_redacted else "allow"
 
-        reason = f"cell ({category}.{request.activity}) = {cell_action}; classified {level} ({classification_result.confidence_score:.0%})"
+        reason = f"cell ({category}.{activity}) = {cell_action}; classified {level} ({classification_result.confidence_score:.0%})"
 
         logger.info(
             "Web activity evaluated",
-            agent_id=agent_id, host=request.host, category=category, activity=request.activity,
+            agent_id=agent_id, host=request.host, category=category, activity=activity,
             cell_action=cell_action, final_action=final_action, level=level,
         )
 

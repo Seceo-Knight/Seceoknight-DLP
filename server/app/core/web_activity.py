@@ -77,11 +77,17 @@ DEFAULT_ACTION = "allow"
 # downloads FROM monitored apps"): unlike upload, there's no older path
 # already covering this, so it's wired directly into evaluate_web_activity()
 # rather than routed around it. The browser extension's chrome.downloads
-# hook (background.js) cancels a download from a catalogued host, re-fetches
-# the bytes itself to actually classify them, and re-issues the download
-# only once a decision comes back -- see that file's own comment for the
-# cancel/re-fetch/re-download mechanics and their fail-open guarantees.
-# Scoped to the three categories where "pulling a file out of a managed
+# hook (background.js) NEVER cancels or re-issues the download -- an
+# earlier design did (cancel, shadow-fetch the same URL, re-issue), but was
+# revised the same day after it broke real downloads in the field: Drive,
+# SharePoint, and OneDrive all mint one-time, session-bound signed download
+# URLs, so cancelling Chrome's own request and trying to re-fetch/re-issue
+# the SAME url gets rejected outright once that link is spent. The real
+# download now always proceeds completely untouched; in parallel, the hook
+# makes a best-effort attempt to fetch the same URL itself purely to
+# classify the content for logging/alerting -- see that file's own comment
+# for the full mechanics and fail-open guarantees. Scoped to the three
+# categories where "pulling a file out of a managed
 # SaaS app onto local disk" is the well-understood risk this exists to
 # catch: file_sharing (Drive/OneDrive/Dropbox/Box), webmail (an email
 # attachment), collaboration (a file shared in Slack/Teams). "genai.download"
