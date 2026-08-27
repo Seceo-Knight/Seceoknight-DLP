@@ -57,6 +57,8 @@
 
   var MAX_TEXT_CHARS = 200000;      // cap for prompt/message/response text sent for classification
   var MIN_SEND_TEXT_LENGTH = 40;    // best-effort filter — see module docstring on "send"
+  var MIN_RESPONSE_TEXT_LENGTH = 40; // same reasoning as MIN_SEND_TEXT_LENGTH, applied to responses —
+                                      // see maybeRedactResponse for why this exists
   var DECISION_TIMEOUT_MS = 15000;  // generous: a genai reply can take longer to classify than a small upload
   var pending = new Map();
   var seq = 0;
@@ -163,7 +165,22 @@
     if (!/text|json|event-stream/i.test(ct)) return resp;
 
     return resp.clone().text().then(function (text) {
-      if (!text) return resp;
+      // Content-type alone (checked above) isn't a strong enough signal —
+      // real genai chat UIs fire plenty of small, unrelated JSON/text
+      // fetches to the same watched host alongside the actual completion
+      // call: conversation-list refreshes, model lists, telemetry beacons,
+      // moderation pre-checks, keep-alive pings, etc. Before this gate,
+      // EVERY one of those got buffered, classified, and logged as a
+      // distinct "ai_response" event — the same class of flooding bug fixed
+      // in inject.js's collectFiles() for cloud uploads, just on the
+      // response side instead of the request side. Mirror that fix's
+      // request-side MIN_SEND_TEXT_LENGTH gate here: skip the classify
+      // round trip (and the log entry it would produce) for anything too
+      // short to plausibly be a real completion payload. Same trade-off as
+      // the request side — a one-word AI reply under the threshold isn't
+      // inspected — accepted for the same reason: it's far outweighed by no
+      // longer drowning real signal in noise from background API chatter.
+      if (!text || text.length < MIN_RESPONSE_TEXT_LENGTH) return resp;
       return requestDecision({
         host: destHost, activity: "ai_response", content: text.slice(0, MAX_TEXT_CHARS),
       }).then(function (dec) {
@@ -204,12 +221,23 @@
           // data.
           reqDecisionPromise = Promise.resolve({ action: "allow" });
         } else {
-          // Server resolves the actual (category, activity) cell from the
-          // host alone — "post" is only a meaningful cell for genai hosts,
-          // "send" only for webmail/collaboration (see MEANINGFUL_CELLS in
-          // web_activity.py); sending "post" here for a non-genai host just
-          // means the server's lookup misses and returns allow, so this
-          // client never needs to know the category itself.
+          // This client only has a flat watched-domain list (appCatalogHosts
+          // above), not a per-domain category, so it can't cheaply tell "a
+          // prompt to a genai host" apart from "a composed message to a
+          // webmail/collaboration host" before making the call — "post" is
+          // sent unconditionally for every request-side hit here. The
+          // server resolves the AUTHORITATIVE (category, activity) cell
+          // itself from the host (see MEANINGFUL_CELLS in web_activity.py)
+          // and re-derives "send" from "post" for webmail/collaboration
+          // hosts server-side — see evaluate_web_activity() in agents.py.
+          // (An earlier version of this comment claimed a non-genai host
+          // sending "post" "just means the server's lookup misses and
+          // returns allow" — that was true, but it also meant the
+          // "Webmail Send"/"Collaboration Send" matrix cells could never be
+          // reached by anything this client ever sent, silently, no matter
+          // what an admin configured. Fixed server-side rather than by
+          // teaching this client per-domain categories, so the fix took
+          // effect immediately without an extension redeploy.)
           reqDecisionPromise = requestDecision({ host: destHost, url: String(url), activity: "post", content: text });
         }
 

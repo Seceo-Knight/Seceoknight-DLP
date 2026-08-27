@@ -8,6 +8,87 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🐛 Cloud Upload Guard event flood + Web Activity Control quality audit (August 27, 2026)
+
+Reported from a live deployment: the Events page showed 2,171+ "Cloud
+Upload Allowed" events, the same destination (`www.google.com`), filename
+`upload.bin`, classification Public, repeating every 7-15 seconds with
+confirmed zero real user activity on the source machine.
+
+**Root cause.** `inject.js`'s `collectFiles()` treated ANY binary body
+(Blob/ArrayBuffer/ArrayBufferView) sent via `fetch()`/XHR to a
+`CLOUD_HOSTS`-matched domain as a file upload, fabricating a generic File
+object named `upload.bin` for it when no real captured-file match existed.
+That's wrong: ordinary background web-platform traffic to these same
+domains can carry binary bodies that are not file uploads at all — this
+case was Google Docs/Sheets' client-side sync protocol periodically
+flushing small binary state deltas to `docs.google.com` via `fetch()`,
+with the document just sitting open, untouched, in the background. Each
+flush got fully classified and logged as its own event.
+
+**Fix.** A bare Blob/ArrayBuffer/TypedArray body is now only treated as a
+real file when it correlates to something the user actually selected,
+dropped, or pasted — tracked via the existing `capturedFiles` mechanism
+(`change`/`drop` listeners), now extended with a **`paste`** listener too
+(closing a real, separate pre-existing gap: pasting a screenshot into
+Gmail was never captured as a real file before this fix either). Bodies
+with no matching capture are now skipped entirely rather than logged as a
+phantom `upload.bin`. Accepted trade-off: this loses visibility into the
+narrow case of a page generating file-like bytes entirely in JS with no
+user selection/paste event (e.g. `canvas.toBlob()`) — judged reasonable
+since that scenario isn't an existing sensitive file being exfiltrated,
+and it's far outweighed by no longer drowning real signal in fabricated
+noise. The now-fully-dead `asFile()`/`guessFileNameFromUrl()`/
+`looksLikeFileName()` helpers were removed as part of the same change.
+
+**Follow-up audit** (same root-cause class, checked across the rest of the
+extension):
+
+- `web-activity.js`'s response-side interceptor (`maybeRedactResponse`)
+  had no minimum-length gate before classifying+logging an AI response —
+  unlike the request side's `MIN_SEND_TEXT_LENGTH`. Real genai SPAs fire
+  many small unrelated JSON calls (conversation lists, model lists,
+  telemetry) that matched the same content-type check and would have
+  logged an event for each. Added a matching `MIN_RESPONSE_TEXT_LENGTH`
+  gate.
+- `web-activity.js` always sent `activity: "post"` for every request-side
+  call — correct for genai hosts, but meant `("webmail", "send")` and
+  `("collaboration", "send")` were never reachable `MEANINGFUL_CELLS`
+  entries no matter what an admin configured in the Web Activity Control
+  matrix; those two policy cells silently defaulted to allow always.
+  Fixed server-side in `evaluate_web_activity()` (`agents.py`): the
+  activity is now re-derived from the CATEGORY the server already
+  resolves authoritatively from the host, rather than trusted verbatim
+  from the client — takes effect immediately with no extension redeploy
+  needed.
+- `inject.js`'s `recentDecisions` coalescing cache was keyed on
+  destination host alone. Two genuinely different files uploaded to the
+  same host within the 4-second coalesce window would have had the
+  second silently inherit the first file's decision — a false-negative
+  risk (a sensitive second file riding through on an earlier "allow"),
+  not just noise. Now keyed on body identity (captured file name+size, or
+  Blob/ArrayBuffer byte length) in addition to host.
+- Investigated the equivalent cache in `background.js`
+  (`waCoalesceKeyFor`, keyed on `host:activity` only) and deliberately
+  left it unchanged: its own comment documents that this coarser keying
+  was a considered fix for a real production flood (ChatGPT's SPA firing
+  several different-body requests per single user action, Aug 19 2026).
+  Making it content-aware would risk reintroducing that flood — an
+  accepted trade-off, not a bug.
+- `content.js` and `skdlp_host.py` reviewed — thin relay/plumbing layers,
+  no similar over-broad-matching issues found.
+
+**Also fixed:** `dashboard/src/pages/Agents.tsx` had a hooks-order bug
+introduced during the modal migration below — `useRef`/derived confirm
+state were declared after the component's `isLoading`/`error` early
+returns, violating the Rules of Hooks. This crashed the entire dashboard
+render tree (blank page, no error boundary exists) whenever the Agents
+tab loaded. Fixed by moving the hook declarations above both early
+returns; every other file touched during the modal migration was audited
+for the same pattern and none had it.
+
+---
+
 ## 🟣 Dashboard: shared overlay/modal design system (August 26, 2026)
 
 Gap-scan of CyberSentinel-DLP found 11 commits ("one overlay instead of
