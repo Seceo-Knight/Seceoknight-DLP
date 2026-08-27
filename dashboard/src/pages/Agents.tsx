@@ -183,6 +183,18 @@ export default function Agents() {
 
   const { page, pageSize, pageRows, setPage, setPageSize } = usePagination(filteredAgents, 25)
 
+  // The confirm dialog is driven by setConfirm(null) on close, which would
+  // otherwise blank the panel mid-exit-animation -- remember the last
+  // non-null value so Modal's ~150ms fade-out still has content to show.
+  // This has to run unconditionally, alongside the other hooks above --
+  // before the isLoading/error early returns below -- for the same reason
+  // usePagination does: calling a hook only on some renders (e.g. once
+  // loading finishes) changes the number of hooks React sees between
+  // renders and crashes the whole tree.
+  const lastConfirmRef = useRef<ConfirmState | null>(null)
+  if (confirm) lastConfirmRef.current = confirm
+  const displayConfirm = confirm ?? lastConfirmRef.current
+
   if (isLoading) {
     return <LoadingSpinner size="lg" />
   }
@@ -199,13 +211,6 @@ export default function Agents() {
   const handleAgentClick = (agentId: string) => {
     navigate(`/events?agent=${agentId}`)
   }
-
-  // The confirm dialog is driven by setConfirm(null) on close, which would
-  // otherwise blank the panel mid-exit-animation -- remember the last
-  // non-null value so Modal's ~150ms fade-out still has content to show.
-  const lastConfirmRef = useRef<ConfirmState | null>(null)
-  if (confirm) lastConfirmRef.current = confirm
-  const displayConfirm = confirm ?? lastConfirmRef.current
 
   const confirmTitle =
     displayConfirm?.action === 'delete' ? 'Remove Agent' : 'Mark as Decommissioned'
