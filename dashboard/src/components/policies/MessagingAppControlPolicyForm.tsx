@@ -11,7 +11,10 @@ interface MessagingAppControlPolicyFormProps {
 
 // Matches the server's own _DEFAULT_MESSAGING_APPS fallback (used when a
 // policy is active but names no apps) and the agent-side fallback list.
-const defaultApps = ['teams.exe', 'whatsapp.exe', 'telegram.exe', 'slack.exe', 'discord.exe', 'signal.exe']
+// whatsapp.root.exe: current WhatsApp for Windows is a WebView2 app whose
+// window belongs to WhatsApp.Root.exe -- a machine with it installed has no
+// whatsapp.exe at all (gap-scan of CyberSentinel-DLP commit 07ea6ba).
+const defaultApps = ['teams.exe', 'whatsapp.exe', 'whatsapp.root.exe', 'telegram.exe', 'slack.exe', 'discord.exe', 'signal.exe']
 
 function toList(text: string): string[] {
   return text.split(',').map((s) => s.trim()).filter(Boolean)

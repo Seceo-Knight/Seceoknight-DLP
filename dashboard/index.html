@@ -2,7 +2,21 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/logo.png" />
+    <!--
+      Was a single 500x500 PNG (/logo.png) doing double duty as the favicon --
+      it rendered, so this wasn't CyberSentinel's exact "empty globe" bug
+      (their icon pointed at a /vite.svg that never existed), but the same
+      underlying quality gap applies: browsers pick different sizes for
+      different contexts (16 for the tab, 32 for the bookmark bar, 48 for a
+      Windows shortcut), and a single full-frame image includes the logo's
+      thin circuit "wing" traces either side of the shield, which alias into
+      a smudge once downscaled that small. Ships a proper multi-size .ico
+      (16/32/48) plus a 180px apple-touch-icon instead, both cropped to the
+      shield's dense body alone -- gap-scan of CyberSentinel-DLP commit
+      9e33d32, August 27, 2026.
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
       Content-Security-Policy is also set by nginx in dashboard/nginx.conf,

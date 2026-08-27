@@ -1583,8 +1583,12 @@ async def get_printer_policy(
 # Built-in managed set used when a policy is active but names no apps of its
 # own, so the feature works out of the box. Mirrors the agent's own fallback
 # list in FetchMessagingAppPolicy() (agent.cpp).
+# whatsapp.root.exe: current WhatsApp for Windows is a WebView2 app whose
+# window belongs to WhatsApp.Root.exe -- such a machine has no whatsapp.exe
+# at all, so this fallback silently never matched real installs until this
+# was added (gap-scan of CyberSentinel-DLP commit 07ea6ba, August 21 2026).
 _DEFAULT_MESSAGING_APPS = [
-    "teams.exe", "ms-teams.exe", "msteams.exe", "whatsapp.exe",
+    "teams.exe", "ms-teams.exe", "msteams.exe", "whatsapp.exe", "whatsapp.root.exe",
     "telegram.exe", "slack.exe", "discord.exe", "signal.exe",
 ]
 

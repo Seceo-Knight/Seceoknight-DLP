@@ -1113,6 +1113,281 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Ok 'SeceoKnight DLP agent removed from this endpoint.'
   }
 
+  # ============================================================
+  #  Windows Security  (Defender / ASR / Controlled folder access)
+  # ============================================================
+  #
+  # Gap-scan of CyberSentinel-DLP commit 04f60be, August 25, 2026.
+  #
+  # The agent is an unsigned binary that installs a low-level keyboard hook,
+  # reads print spool files, and watches removable media -- exactly what a
+  # keylogger does, and without an Authenticode signature there is nothing to
+  # tell Defender the difference. A freshly built binary also has zero
+  # prevalence in Defender's cloud, so first-sight heuristics apply on the
+  # very build being rolled out. Windows has at least four separate ways to
+  # stop that (real-time protection, ASR rules, controlled folder access,
+  # Smart App Control / code integrity), they produce similar-sounding
+  # notifications, and each needs a different fix -- so before this, "Windows
+  # Security blocked it" was the end of the trail and the next move was
+  # guesswork.
+  #
+  # The real fix is code signing. Until there is a certificate, the
+  # supported answer is an explicit exclusion -- which is a deliberate,
+  # visible act by an administrator, so this is a menu entry and never
+  # something Install does quietly on your behalf.
+
+  function Get-SmartAppControlState {
+    # Smart App Control (Win11 22H2+) blocks unsigned binaries outright and
+    # ignores Defender exclusions entirely, so it has to be reported
+    # separately or the exclusions below look broken.
+    try {
+      $v = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' `
+              -Name 'VerifiedAndReputablePolicyState' -ErrorAction Stop).VerifiedAndReputablePolicyState
+      switch ($v) { 0 { 'off' } 1 { 'ON' } 2 { 'evaluation' } default { "unknown ($v)" } }
+    } catch { 'not present' }
+  }
+
+  function Get-AgentQuarantine {
+    # Threats whose resources name our install dir. Get-MpThreat lists what
+    # is currently held; Get-MpThreatDetection lists what has been acted on.
+    $hits = @()
+    foreach ($cmd in 'Get-MpThreat','Get-MpThreatDetection') {
+      if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) { continue }
+      try {
+        foreach ($t in @(& $cmd -ErrorAction Stop)) {
+          $res = @($t.Resources) -join ' '
+          if ($res -match [regex]::Escape($PROC_NAME) -or $res -match [regex]::Escape($INSTALL_DIR)) {
+            $hits += [PSCustomObject]@{
+              Name = $t.ThreatName; Detected = $t.InitialDetectionTime; Resources = $res
+            }
+          }
+        }
+      } catch {}
+    }
+    $hits
+  }
+
+  function Show-Defender($s) {
+    Write-Host ''
+    Write-Host '   ================================================' -ForegroundColor Cyan
+    Write-Host '   WINDOWS SECURITY' -ForegroundColor Cyan
+    Write-Host '   ================================================' -ForegroundColor Cyan
+    Write-Host ''
+
+    if (-not (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue)) {
+      Warn 'Microsoft Defender cmdlets are not available on this device.'
+      Info 'A third-party antivirus is probably managing protection instead --'
+      Info "exclude $INSTALL_DIR and $PROC_NAME.exe there by hand."
+      Write-Host ''
+      Read-Host '   Press Enter to return to the menu' | Out-Null
+      return
+    }
+
+    $mp = $null; try { $mp = Get-MpComputerStatus -ErrorAction Stop } catch {}
+    $pref = $null; try { $pref = Get-MpPreference -ErrorAction Stop } catch {}
+    if ($mp) {
+      Write-Host "   Real-time     : $(if ($mp.RealTimeProtectionEnabled) { 'on' } else { 'off' })"
+      Write-Host "   Tamper prot   : $(if ($mp.IsTamperProtected) { 'on' } else { 'off' })"
+    }
+    $sac = Get-SmartAppControlState
+    Write-Host "   Smart App Ctl : $sac" -ForegroundColor $(if ($sac -eq 'ON') { 'Red' } else { 'Gray' })
+
+    $exPath = @(); $exProc = @()
+    if ($pref) { $exPath = @($pref.ExclusionPath); $exProc = @($pref.ExclusionProcess) }
+    $hasPath = ($exPath | Where-Object { $_ -and $_.TrimEnd('\') -ieq $INSTALL_DIR.TrimEnd('\') }).Count -gt 0
+    $hasProc = ($exProc | Where-Object { $_ -and $_ -imatch [regex]::Escape($PROC_NAME) }).Count -gt 0
+    $exState = if ($hasPath -and $hasProc) { 'yes (path + process)' } elseif ($hasPath -or $hasProc) { 'PARTIAL' } else { 'no' }
+    Write-Host "   Excluded      : $exState" -ForegroundColor $(if ($hasPath -and $hasProc) { 'Green' } else { 'Yellow' })
+
+    $q = @(Get-AgentQuarantine)
+    if ($q.Count -gt 0) {
+      Write-Host ''
+      Err "Defender has acted on the agent $($q.Count) time(s):"
+      foreach ($h in ($q | Select-Object -First 5)) {
+        Info ("  {0}  {1}" -f $h.Detected, $h.Name)
+      }
+    } elseif (-not (Test-Path (Join-Path $INSTALL_DIR $EXE_NAME))) {
+      Write-Host ''
+      Err 'The agent binary is missing from disk and no detection is recorded.'
+      Info 'It may have been removed by something other than Defender.'
+    } else {
+      Write-Host ''
+      Ok 'No Defender detection recorded against the agent.'
+    }
+
+    if ($sac -eq 'ON') {
+      Write-Host ''
+      Err 'Smart App Control is ON. It blocks unsigned binaries and IGNORES exclusions.'
+      Info 'Nothing below will make the agent run while it is on. It can only be'
+      Info 'turned off (Windows Security -> App & browser control -> Smart App'
+      Info 'Control), and Windows makes that permanent until the OS is reinstalled.'
+    }
+
+    Write-Host ''
+    Write-Host '   [1] Allow the agent  ' -ForegroundColor Green -NoNewline
+    Write-Host '- restore it if quarantined, then exclude path + process'
+    Write-Host '   [2] Show recent blocks' -ForegroundColor Yellow -NoNewline
+    Write-Host ' - Defender / ASR / folder-access events naming the agent'
+    Write-Host '   [3] Back            ' -ForegroundColor Gray -NoNewline
+    Write-Host '- return without changing anything'
+    Write-Host ''
+    switch ((Read-Host '   Choose an option (1-3)').Trim()) {
+      '1' { Invoke-DefenderAllow }
+      '2' { Show-DefenderEvents }
+      default { return }
+    }
+    Write-Host ''
+    Read-Host '   Press Enter to return to the menu' | Out-Null
+  }
+
+  function Invoke-DefenderAllow {
+    Write-Host ''
+    Write-Host '   Allowing the agent in Microsoft Defender' -ForegroundColor Cyan
+    Write-Host '   ------------------------------------------------' -ForegroundColor DarkCyan
+    if (-not $isAdmin) { Err 'This needs Administrator. Re-run the script elevated.'; return }
+
+    # Restore first. Excluding a path Defender has already emptied looks
+    # like it worked and still leaves you with no binary.
+    $q = @(Get-AgentQuarantine)
+    if ($q.Count -gt 0) {
+      $mpcmd = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+      if (Test-Path $mpcmd) {
+        foreach ($name in ($q | Select-Object -ExpandProperty Name -Unique)) {
+          Info "Restoring from quarantine: $name"
+          & $mpcmd -Restore -Name $name 2>&1 | Out-Null
+        }
+      } else { Warn 'MpCmdRun.exe not found - cannot restore from quarantine automatically.' }
+    }
+
+    try {
+      Add-MpPreference -ExclusionPath $INSTALL_DIR -ErrorAction Stop
+      Ok "Excluded path: $INSTALL_DIR"
+    } catch { Err "Could not add the path exclusion: $($_.Exception.Message)" }
+    try {
+      Add-MpPreference -ExclusionProcess "$PROC_NAME.exe" -ErrorAction Stop
+      Ok "Excluded process: $PROC_NAME.exe"
+    } catch { Err "Could not add the process exclusion: $($_.Exception.Message)" }
+
+    # Read it back. Add-MpPreference reports success even when tamper
+    # protection or a management policy silently discards the change.
+    $pref = $null; try { $pref = Get-MpPreference -ErrorAction Stop } catch {}
+    $okPath = $pref -and (@($pref.ExclusionPath) | Where-Object { $_ -and $_.TrimEnd('\') -ieq $INSTALL_DIR.TrimEnd('\') }).Count -gt 0
+    $okProc = $pref -and (@($pref.ExclusionProcess) | Where-Object { $_ -and $_ -imatch [regex]::Escape($PROC_NAME) }).Count -gt 0
+    if ($okPath -and $okProc) { Ok 'Exclusions confirmed present.' }
+    else {
+      Err 'The exclusions did not stick.'
+      Info 'Usually tamper protection, or Defender settings managed by group policy'
+      Info 'or Intune. On a managed fleet the exclusion belongs in that policy, not here.'
+      return
+    }
+
+    $exe = Join-Path $INSTALL_DIR $EXE_NAME
+    if (-not (Test-Path $exe)) {
+      Write-Host ''
+      Warn 'The binary is still missing - Defender removed it before this ran.'
+      Info 'Use [2] Update from the main menu to fetch a fresh copy; it will not be'
+      Info 'quarantined again now that the exclusion is in place.'
+      return
+    }
+    Write-Host ''
+    Info 'Restarting the agent...'
+    Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
+    $proc = $null
+    for ($i = 0; $i -lt 6 -and -not $proc; $i++) {
+      Start-Sleep -Seconds 2
+      $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+    if ($proc) {
+      $v = $null; try { $v = (Get-Item $proc.Path).VersionInfo.ProductVersion } catch {}
+      if ($v) { Ok "Agent v$($v.Trim()) running (PID $($proc.Id))." } else { Ok "Agent running (PID $($proc.Id))." }
+    } else {
+      Warn 'Agent still not running. Check the log file for what it says on startup.'
+    }
+  }
+
+  function Show-DefenderEvents {
+    Write-Host ''
+    Write-Host '   Recent Windows Security events naming the agent' -ForegroundColor Cyan
+    Write-Host '   ------------------------------------------------' -ForegroundColor DarkCyan
+    # 1116/1117 malware detected/acted on, 1015 behaviour, 1121 ASR block,
+    # 1123 controlled folder access block. Each has a different fix, so they
+    # are reported as found rather than collapsed into "Defender blocked it".
+    $ids = 1006,1007,1015,1116,1117,1121,1123
+    try {
+      $ev = Get-WinEvent -FilterHashtable @{
+              LogName = 'Microsoft-Windows-Windows Defender/Operational'; Id = $ids
+            } -MaxEvents 200 -ErrorAction Stop |
+            Where-Object { $_.Message -imatch [regex]::Escape($PROC_NAME) -or
+                           $_.Message -imatch [regex]::Escape($INSTALL_DIR) } |
+            Select-Object -First 10
+      if (-not $ev) { Ok 'No Defender events mention the agent.'; return }
+      foreach ($e in $ev) {
+        Write-Host ''
+        Write-Host "   When  : $($e.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'))"
+        Write-Host ("   Event : {0} - {1}" -f $e.Id, $(switch ($e.Id) {
+          1121 { 'blocked by an Attack Surface Reduction rule' }
+          1123 { 'blocked by Controlled folder access' }
+          1015 { 'suspicious behaviour detected' }
+          1116 { 'malware detected' }
+          1117 { 'action taken on detected malware' }
+          default { 'Defender event' }
+        }))
+        $m = ($e.Message -split "`n" | Where-Object { $_ -match 'Name:|Path:|Detection|Rule' } |
+              Select-Object -First 3) -join '; '
+        if ($m) { Info ("  " + $m.Trim()) }
+      }
+      Write-Host ''
+      Info 'ASR (1121) and folder access (1123) are NOT fixed by an antivirus'
+      Info 'exclusion - they need their own allow entry in that feature.'
+    } catch {
+      Warn 'Could not read the Defender event log.'
+      Info "  $($_.Exception.Message)"
+    }
+    Show-CodeIntegrityEvents
+  }
+
+  # Code integrity is a different subsystem from the antivirus, with a
+  # different log and no relationship to exclusions. It is what produces
+  # "we can't confirm who published <exe> that the app tried to load" -- the
+  # app being svchost.exe, because Task Scheduler is what launches the
+  # agent. Missing this log is how a signing problem gets mistaken for a
+  # malware detection and chased with exclusions that could never have
+  # worked.
+  function Show-CodeIntegrityEvents {
+    Write-Host ''
+    Write-Host '   Code integrity (Smart App Control / WDAC)' -ForegroundColor Cyan
+    Write-Host '   ------------------------------------------------' -ForegroundColor DarkCyan
+    $sac = Get-SmartAppControlState
+    Write-Host "   Smart App Ctl : $sac" -ForegroundColor $(if ($sac -eq 'ON') { 'Red' } else { 'Gray' })
+    try {
+      $ci = Get-WinEvent -LogName 'Microsoft-Windows-CodeIntegrity/Operational' `
+              -MaxEvents 200 -ErrorAction Stop |
+            Where-Object { $_.Message -imatch [regex]::Escape($PROC_NAME) } |
+            Select-Object -First 5
+      if (-not $ci) {
+        Ok 'No code-integrity event mentions the agent.'
+      } else {
+        foreach ($e in $ci) {
+          Write-Host ''
+          Write-Host "   When  : $($e.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss'))"
+          Write-Host ("   Event : {0} - {1}" -f $e.Id, $(switch ($e.Id) {
+            3076 { 'would have been blocked (audit mode)' }
+            3077 { 'BLOCKED - the binary is not signed or not trusted' }
+            3033 { 'failed code-integrity checks' }
+            default { 'code-integrity event' }
+          })) -ForegroundColor $(if ($e.Id -eq 3077) { 'Red' } else { 'Yellow' })
+        }
+        Write-Host ''
+        Err 'This is NOT an antivirus detection and an exclusion cannot fix it.'
+        Info 'The agent is unsigned. Either sign the binary, or turn off Smart App'
+        Info 'Control (Windows Security -> App & browser control), which Windows'
+        Info 'makes permanent until the OS is reinstalled.'
+      }
+    } catch {
+      Info '  (no code-integrity log on this device - the feature is not active)'
+    }
+  }
+
   # ================= Main menu loop =================
 
   while ($true) {
@@ -1136,9 +1411,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Write-Host '   [2] Update     ' -ForegroundColor Cyan   -NoNewline; Write-Host '- replace the agent binary with the latest build'
     Write-Host '   [3] Uninstall  ' -ForegroundColor Red    -NoNewline; Write-Host '- stop and completely remove the agent + files'
     Write-Host '   [4] Browser    ' -ForegroundColor Magenta -NoNewline; Write-Host '- extension force-install status, disable Incognito/InPrivate'
-    Write-Host '   [5] Exit       ' -ForegroundColor Gray   -NoNewline; Write-Host '- do nothing and quit'
+    Write-Host '   [5] Security   ' -ForegroundColor Blue    -NoNewline; Write-Host '- Windows Defender blocked the agent? diagnose and allow it'
+    Write-Host '   [6] Exit       ' -ForegroundColor Gray   -NoNewline; Write-Host '- do nothing and quit'
     Write-Host ''
-    $choice = Read-Host '   Choose an option (1-5)'
+    $choice = Read-Host '   Choose an option (1-6)'
 
     switch ($choice.Trim()) {
       '1' {
@@ -1199,6 +1475,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       }
 
       '5' {
+        try { Show-Defender $s } catch { Err "Security step failed: $($_.Exception.Message)" }
+      }
+
+      '6' {
         Write-Host ''
         Info 'Exiting - no changes made.'
         return
@@ -1206,7 +1486,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
       default {
         Write-Host ''
-        Warn 'Invalid choice - please enter 1, 2, 3, 4, or 5.'
+        Warn 'Invalid choice - please enter a number from 1 to 6.'
         Start-Sleep -Milliseconds 900
       }
     }

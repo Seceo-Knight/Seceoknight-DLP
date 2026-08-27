@@ -8,6 +8,99 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🟢 Gap-scan: CyberSentinel-DLP, 26 commits since the last scan (August 27, 2026)
+
+CyberSentinel published 26 commits between the last gap-scan and this one
+(Aug 25-27, 2026). Reviewed all of them; ported the ones that apply here.
+
+**Typed-message inspection: a real 7-second stall on WhatsApp, fixed.**
+CyberSentinel found, on a live endpoint, that reading the composer through
+UI Automation while a keystroke was held could take up to **seven
+seconds** on WhatsApp for Windows (a WebView2 app) — ten times past the
+1.2s watchdog timeout, so every send on that app was released
+uninspected, silently, with no error anywhere. `messaging_text_monitor.cpp`
+/`.h` (already ported August 26) are now re-synced to CyberSentinel's
+current HEAD (1355 → 1762 lines), which restructures the module so a
+background sampler locates the composer **element** once — the expensive
+tree-walk, done only between keystrokes, never while one is held — and
+BLOCK mode decides primarily on the sampler's last snapshot instead of a
+live call made at the worst possible moment. Also folds in: a UI
+Automation acquisition retry loop (previously a COM failure at agent boot
+silently disabled the whole feature until a restart); definite-vs-guessed
+editability tracking, so an ambiguous focused-subtree read no longer
+picks whichever candidate sorted first (which could mean classifying and
+shipping the chat history instead of the message); a classifier self-test
+logged on every start, so "the classifier isn't wired up" and "we read
+the wrong box" stop producing the identical "every message is clean"
+symptom; and clean-verdict logging that explains WHAT was read (length +
+digit/letter profile, never the message itself) and WHY it didn't count.
+
+**WhatsApp app-name matching.** Current WhatsApp for Windows runs as
+`WhatsApp.Root.exe` (WebView2) — such a machine has no `whatsapp.exe` at
+all. Added `whatsapp.root.exe` to all three copies of the default
+managed-app list (`server/app/api/v1/agents.py`'s `_DEFAULT_MESSAGING_APPS`,
+`agent.cpp`'s fallback, the dashboard's `MessagingAppControlPolicyForm.tsx`
+chip list), extended `CanonicalMessagingAppName()` to alias the two names
+together (same pattern already used for the three Teams variants), and
+added a general stem-matching fallback (`MessagingAppNameStemMatches`,
+comparing the part of the image name before the first dot) behind the
+explicit alias table, so a future rename this codebase hasn't seen yet
+still matches instead of the feature silently doing nothing for it.
+
+**Non-breaking space is still a space.** `\s` in a narrow `std::regex`
+matches ASCII whitespace only, and a Chromium `contenteditable` — every
+modern chat composer — routinely encodes a typed space as U+00A0. A card
+number typed into WhatsApp was read correctly, classified Public, and
+released, with every stage reporting success — not a failed Luhn check,
+no match to check at all. `network_exfil_monitor.cpp` gained
+`NxNormalizeSeparators()`: visible-width Unicode spaces fold to ASCII
+space, Unicode dashes fold to `-`, zero-width characters (ZWSP, word
+joiner, BOM) are deleted outright, applied once in `NxDetectAll()` so
+every channel through the classifier gets the fix, not just the chat path.
+
+**`scripts/probe-foreground-app.ps1`** (new): the diagnostic that found
+the WhatsApp matching bug in the first place — prints exactly what the
+keyboard hook resolves the foreground window's process to, independent of
+the agent/log entirely, since the hook is deliberately silent (no I/O) for
+apps the policy doesn't cover.
+
+**Also fixed, smaller items from the same batch:**
+- `server/app/api/v1/events.py`: `EventCreate` never declared `channel`,
+  so it was silently stripped by Pydantic before `create_event()` saw it
+  — the `/events` `channel` filter (used by dashboard drill-downs) matched
+  nothing no matter what an agent sent, even though `agent.cpp` and the
+  Linux agent both already send it. Declared, stored uppercased to match
+  the case-insensitive filter (gap-scan of commit 51343a4).
+- `manage-agent.ps1`: new `[5] Security` menu — diagnoses which of
+  Windows Defender / an Attack Surface Reduction rule / Controlled Folder
+  Access / Smart App Control blocked the (unsigned) agent binary, and can
+  restore-from-quarantine + add exclusions in one step. Distinguishes a
+  genuine malware detection from a code-integrity/signing block (event
+  IDs 3076/3077), which is a different subsystem an antivirus exclusion
+  cannot fix (gap-scan of commit 04f60be).
+- `sso-cert.sh` (new, repo root): one command to point SIEM SSO at a JWKS
+  endpoint and pin its TLS certificate (`fetch`/`install`/`url`/`check`
+  subcommands), replacing manual `openssl s_client` + hand-editing `.env`
+  + remembering `up -d` re-reads the environment while `restart` doesn't.
+  `check` verifies from inside the manager container, the same way the
+  manager itself fetches the JWKS. Documented in `DEPLOYMENT.md`'s new
+  "SIEM single sign-on" section (gap-scan of commit c87c966).
+- `dashboard/index.html`: proper multi-size favicon (16/32/48 `.ico` +
+  180px apple-touch-icon), cropped to the shield's dense body so it stays
+  legible at 16px instead of the thin circuit-trace "wings" aliasing into
+  a smudge (gap-scan of commit 9e33d32; SeceoKnight didn't have the exact
+  "points at a file that never existed" bug, but had the same underlying
+  single-oversized-image quality gap).
+
+**Reviewed and deliberately NOT ported:** 5 `manage-windows-agent.ps1`
+commits (62bbe87/42c1698/de52597/d1fdd1b/848eb3f) adding further
+typed-message-inspection operator diagnostics — lower value than the core
+correctness fixes above and left as a follow-up rather than shipped
+without review time. One trivial 2-line docs commit specific to
+CyberSentinel's own `DEPLOYMENT.md` (cb8c4b0) — not applicable here.
+
+---
+
 ## 🐛 Cloud Upload Guard event flood + Web Activity Control quality audit (August 27, 2026)
 
 Reported from a live deployment: the Events page showed 2,171+ "Cloud
