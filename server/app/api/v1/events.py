@@ -934,8 +934,9 @@ async def get_events(
     module: Optional[str] = Query(None, description="Alias for event_type (USB/clipboard/screen_capture/network_exfil)"),
     event_type: Optional[str] = Query(None),
     action: Optional[str] = Query(None, description="Matches action_taken case-insensitively"),
-    classification: Optional[str] = Query(None, description="classification_level tier"),
+    classification: Optional[str] = Query(None, description="classification_level tier, or '*' for any"),
     channel: Optional[str] = Query(None),
+    blocked: Optional[bool] = Query(None, description="Filter to blocked (true) or not-blocked (false) events"),
     current_user=Depends(require_role("analyst")),
     pg_db: AsyncSession = Depends(get_db),
 ):
@@ -1016,10 +1017,19 @@ async def get_events(
         # addressable from a dashboard drill-down.
         query_filter["action_taken"] = _ci_exact(action)
     if classification:
-        # Mongo field matches the denormalized PG column name.
-        query_filter["classification_level"] = _ci_exact(classification)
+        if classification == "*":
+            # "Has any classification" (dashboard's "With Classifications"
+            # quick filter) -- not a literal tier, so _ci_exact would
+            # search for a field that equals the string "*" and match
+            # nothing, same class of bug as the quick filters below.
+            query_filter["classification_level"] = {"$exists": True, "$nin": [None, ""]}
+        else:
+            # Mongo field matches the denormalized PG column name.
+            query_filter["classification_level"] = _ci_exact(classification)
     if channel:
         query_filter["channel"] = _ci_exact(channel)
+    if blocked is not None:
+        query_filter["blocked"] = blocked
 
     # ── ABAC: merge viewer-specific visibility filter ─────────────────
     from app.services.abac_service import (
