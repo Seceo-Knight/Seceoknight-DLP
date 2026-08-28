@@ -13,6 +13,8 @@ It covers:
    — one-liner on each endpoint. Verifies the SHA-256 of the downloaded
    binary against the sidecar before running it.
 4. [Day-2 ops](#4-day-2-ops) — updates, backups, troubleshooting.
+5. [SIEM single sign-on](#5-siem-single-sign-on-optional) — optional. One
+   command to point SSO at a SIEM and pin its TLS certificate.
 
 > **Repo:** `Seceo-Knight/Seceoknight-DLP`
 > **GHCR images:**
@@ -476,6 +478,82 @@ curl -i $SERVER/api/v1/audit-logs/ -H "Authorization: Bearer VIEWER_TOKEN"
 nmap -p 5432,27017,6379,9200 $SERVER
 # all should report closed/filtered (or `host down` if firewalled)
 ```
+
+---
+
+## 5. SIEM single sign-on (optional)
+
+Skip this if you are not integrating with a SIEM. Nothing below is
+required for the DLP to run.
+
+SSO handoff tokens are signed **RS256**: the SIEM signs with its private
+key, the DLP verifies with the public key it fetches from the SIEM's JWKS
+endpoint (`SIEM_JWKS_URL`, `server/app/core/sso_jwks.py`). That fetch is
+the trust anchor for every SSO login — whoever can answer for that URL
+serves their own public key and mints tokens the DLP would believe — so
+it is verified TLS, always. There is deliberately no skip-verify option.
+
+On a fresh server, two things must be set. `sso-cert.sh` (repo root) does
+both and then proves it worked, gap-scanned from CyberSentinel-DLP's own
+`csdlp sso-cert` command (August 25, 2026):
+
+```bash
+# 1. where to fetch the SIEM's public keys
+sudo bash sso-cert.sh url https://<siem-host>:<port>/api/sso/jwks.json
+
+# 2. how to verify that host's TLS. Only needed when the SIEM's certificate
+#    is not chained to a public CA (i.e. almost every on-prem SIEM).
+sudo bash sso-cert.sh fetch <siem-host>:<port>   # takes it from the SIEM, prints
+                                                  # its fingerprint to confirm,
+                                                  # installs it
+# ...or, if you were handed the certificate:
+sudo bash sso-cert.sh install /path/to/siem.pem  # '-' reads it from stdin
+
+# 3. prove it works -- this fetches the JWKS exactly the way the manager
+#    does, from inside the manager container
+sudo bash sso-cert.sh check
+```
+
+A working check looks like this:
+
+```
+== SSO trust anchor ==
+  SIEM_JWKS_URL  https://10.200.10.23:3000/api/sso/jwks.json
+  CA bundle      /etc/seceoknight/siem-jwks.pem
+[+] bundle is present inside the manager container
+[+] 1 key(s): siem-sso-48fecc70/RS256
+[+] SSO can verify tokens from this SIEM
+```
+
+`install` writes the certificate to `./config/siem-jwks.pem` (the same
+`./config:/etc/seceoknight:ro` mount the manager already has — no new
+volume needed), sets `SIEM_JWKS_CA_BUNDLE` in `.env`, and recreates the
+manager with `docker compose up -d manager` — **not** a restart, which
+reuses the old environment and would never see the new value.
+
+**Which certificate to pin** matters more than how you install it:
+
+| The SIEM's certificate is… | What to do |
+|---|---|
+| issued by a public CA, real hostname | leave `SIEM_JWKS_CA_BUNDLE` empty — the system store already trusts it |
+| issued by an internal/corporate CA | pin the **CA**, not the server's certificate. A CA outlives what it issues, so the SIEM can renew without anyone touching the DLP |
+| self-signed | pin it, and reinstall it at **every** renewal |
+
+The certificate must carry the host from the JWKS URL in its **SAN**. An
+IP-based URL needs that IP as an `IP Address:` SAN entry — a matching CN
+is ignored by modern TLS stacks.
+
+> **Plan for expiry.** The JWKS fetch fails *closed*. The morning a pinned
+> certificate lapses, every SSO login stops with a TLS error while nothing
+> else on the dashboard looks wrong. `sso-cert.sh check` prints the expiry
+> date and warns inside 30 days.
+
+If the SIEM is still on the older symmetric scheme, set `DLP_SSO_SECRET`
+in `.env` instead and leave `SIEM_JWKS_URL` empty; the DLP picks the
+verifier from the token's own `alg`. Clear `DLP_SSO_SECRET` once the
+cutover to RS256 is done, so symmetric tokens stop being accepted at all.
+
+---
 
 ### Where to find more
 

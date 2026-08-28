@@ -5168,8 +5168,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              // the built-in managed set, so the feature works even with a bare
              // policy (mirrors the server's own _DEFAULT_MESSAGING_APPS fallback).
              if (enforced && apps.empty()) {
+                 // whatsapp.root.exe: current WhatsApp for Windows is a
+                 // WebView2 app whose window belongs to WhatsApp.Root.exe --
+                 // such a machine has no whatsapp.exe at all, so the
+                 // fallback list silently never matched real installs until
+                 // this was added (gap-scan of CyberSentinel-DLP commit
+                 // 07ea6ba, August 21 2026).
                  apps = {"teams.exe", "ms-teams.exe", "msteams.exe",
-                         "whatsapp.exe", "telegram.exe", "slack.exe",
+                         "whatsapp.exe", "whatsapp.root.exe",
+                         "telegram.exe", "slack.exe",
                          "discord.exe", "signal.exe"};
              }
 
@@ -5197,10 +5204,24 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              }
              messagingEnforced.store(enforced);
              messagingInspectMessages.store(inspectMessages);
+             // App list and data-type list logged by NAME, not count (gap-scan
+             // of CyberSentinel-DLP commits f4a4136/e7179d8, August 25-26
+             // 2026). "apps=9" or "message_data_types=10" cannot answer the
+             // only question this log line is ever read for -- is the exe/
+             // type I am testing with actually one of them -- and the exe
+             // name is rarely what an operator assumes (WhatsApp for Windows
+             // is whatsapp.root.exe; there is no whatsapp.exe on such a
+             // machine).
+             std::string appList;
+             for (const auto& a : apps) { if (!appList.empty()) appList += ","; appList += a; }
+             std::string typeList;
+             for (const auto& t : dataTypes) { if (!typeList.empty()) typeList += ","; typeList += t; }
              logger.Debug("Messaging app control: enforced=" + std::string(enforced ? "true" : "false") +
                          " action=" + action + " apps=" + std::to_string(apps.size()) +
+                         " [" + appList + "]" +
                          " inspect_messages=" + std::string(inspectMessages ? "true" : "false") +
-                         " message_data_types=" + std::to_string(dataTypes.size()));
+                         " message_data_types=" +
+                         (dataTypes.empty() ? std::string("all") : typeList));
          } catch (const std::exception& e) {
              logger.Debug(std::string("FetchMessagingAppPolicy failed: ") + e.what());
          } catch (...) {
@@ -5224,7 +5245,37 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          if (exeLower == "teams.exe" || exeLower == "ms-teams.exe" || exeLower == "msteams.exe") {
              return "teams.exe";   // canonical identity for "Microsoft Teams", any variant
          }
+         if (exeLower == "whatsapp.exe" || exeLower == "whatsapp.root.exe") {
+             // Same rename problem as Teams above, different product: current
+             // WhatsApp for Windows is a WebView2 app running as
+             // WhatsApp.Root.exe, and a machine with it installed has no
+             // whatsapp.exe at all. Gap-scan of CyberSentinel-DLP commit
+             // 07ea6ba, August 21 2026.
+             return "whatsapp.exe";
+         }
          return exeLower;
+     }
+
+     // General fallback for a same-product rename CanonicalMessagingAppName
+     // above does not yet know about by name: compare by STEM -- the part of
+     // the image name before the first dot -- so a future rename (or an app
+     // this list has never seen) still matches without needing its own alias
+     // entry first. Comparing whole stems, never prefixes, is what keeps this
+     // from over-matching: "slack" does not match "slackbot", and
+     // "msedgewebview2" -- the WebView2/Electron renderer that must never be
+     // managed on its own, since it hosts content for a dozen unrelated
+     // applications -- matches nothing in any real policy. Gap-scan of
+     // CyberSentinel-DLP commit fceb5eb, August 26 2026; kept as a fallback
+     // BEHIND the explicit alias table above rather than replacing it, since
+     // an explicit alias is a decision someone already made and verified,
+     // while a stem match is a heuristic.
+     static bool MessagingAppNameStemMatches(const std::string& a, const std::string& b) {
+         auto stem = [](const std::string& s) {
+             size_t dot = s.find('.');
+             return dot == std::string::npos ? s : s.substr(0, dot);
+         };
+         const std::string sa = stem(a), sb = stem(b);
+         return !sa.empty() && sa == sb;
      }
 
      // Local verdict for the messaging-app attachment detector. Given the
@@ -5253,6 +5304,15 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  CanonicalMessagingAppName(configured) == canonicalIncoming) {
                  matched = true;
                  break;
+             }
+         }
+         // Neither an exact match nor a known alias -- try a stem match before
+         // giving up, so an app whose exe name has drifted (a rename this
+         // codebase has not seen and added an alias for yet) still matches
+         // instead of the feature silently doing nothing for it.
+         if (!matched) {
+             for (const auto& configured : messagingApps) {
+                 if (MessagingAppNameStemMatches(configured, exeLower)) { matched = true; break; }
              }
          }
          if (matched) {

@@ -2628,8 +2628,65 @@ std::string NxTrim(const std::string& s, size_t n = 64) {
 // Run all detectors, return list of {type, sample} pairs.
 struct NxItem { std::string type; std::string sample; };
 
-std::vector<NxItem> NxDetectAll(const std::string& content) {
+// Fold the Unicode separators that look like a space or a hyphen onto the
+// ASCII ones the detectors below are written against.
+//
+// This is not cosmetic. \s in a narrow std::regex matches ASCII whitespace
+// and nothing else, so "4111<U+00A0>1111<U+00A0>1111<U+00A0>1111" does not
+// match the card pattern AT ALL -- and U+00A0 is exactly what a Chromium
+// contenteditable hands back, which is what every modern chat composer is
+// (messaging_text_monitor.cpp's typed-message inspection reads exactly this
+// kind of composer). A card number typed into WhatsApp was therefore read
+// correctly, classified as Public, and released, with every stage of the
+// pipeline reporting success. It is a card number; how the editor chose to
+// encode the gaps between the digits is not a property of the data.
+//
+// Zero-width characters are DELETED rather than turned into spaces, so the
+// text the detectors see is the text the user sees. Widths change, offsets
+// stay self-consistent because everything downstream works on the
+// normalised copy. Gap-scan of CyberSentinel-DLP commit 8128628, August 26
+// 2026.
+std::string NxNormalizeSeparators(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); ) {
+        const unsigned char c = (unsigned char)in[i];
+        // U+00A0 NO-BREAK SPACE  (C2 A0)
+        if (c == 0xC2 && i + 1 < in.size() && (unsigned char)in[i + 1] == 0xA0) {
+            out += ' '; i += 2; continue;
+        }
+        if (c == 0xE2 && i + 2 < in.size()) {
+            const unsigned char b = (unsigned char)in[i + 1];
+            const unsigned char d = (unsigned char)in[i + 2];
+            if (b == 0x80) {
+                // U+2000..U+200A: EN QUAD through HAIR SPACE
+                if (d >= 0x80 && d <= 0x8A) { out += ' '; i += 3; continue; }
+                // U+200B..U+200D zero-width space / non-joiner / joiner
+                if (d >= 0x8B && d <= 0x8D) { i += 3; continue; }
+                // U+2010 HYPHEN, U+2011 NON-BREAKING HYPHEN, U+2012..U+2015 dashes
+                if (d >= 0x90 && d <= 0x95) { out += '-'; i += 3; continue; }
+                // U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR
+                if (d == 0xA8 || d == 0xA9) { out += ' '; i += 3; continue; }
+                // U+202F NARROW NO-BREAK SPACE
+                if (d == 0xAF)              { out += ' '; i += 3; continue; }
+            }
+            // U+2060 WORD JOINER
+            if (b == 0x81 && d == 0xA0) { i += 3; continue; }
+        }
+        // U+FEFF ZERO WIDTH NO-BREAK SPACE / BOM  (EF BB BF)
+        if (c == 0xEF && i + 2 < in.size() &&
+            (unsigned char)in[i + 1] == 0xBB && (unsigned char)in[i + 2] == 0xBF) {
+            i += 3; continue;
+        }
+        out += in[i]; ++i;
+    }
+    return out;
+}
+
+std::vector<NxItem> NxDetectAll(const std::string& raw) {
     std::vector<NxItem> items;
+    if (raw.empty()) return items;
+    const std::string content = NxNormalizeSeparators(raw);
     if (content.empty()) return items;
 
     auto pushUnique = [&](const std::string& type, const std::string& sample) {

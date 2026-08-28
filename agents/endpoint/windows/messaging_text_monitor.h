@@ -1,19 +1,33 @@
 // messaging_text_monitor.h
 // Typed-message DLP for desktop messaging apps — SeceoKnight DLP Windows Agent
 //
-// Ported from CyberSentinel-DLP (gap-scan of August 26 2026), taken from
-// their current, iterated implementation rather than the original commit --
-// the module doubled in size (558 -> 1355 lines in the .cpp) through several
-// rounds of real bugs found on real Windows machines: a packaged/MSIX
-// WhatsApp resolving to the wrong process, the composer being picked by
-// size instead of focus (which blocked sends on last month's conversation
-// instead of the actual message), and a wedged UI Automation call holding
-// Enter forever with no watchdog. Porting the ORIGINAL version would have
-// reintroduced bugs CyberSentinel already found and fixed, so this is their
-// HEAD state, adapted for SeceoKnight's Config/wiring conventions --
-// deliberately not re-derived from scratch, since re-deriving low-level
-// keyboard-hook + UI Automation logic from a written description is exactly
-// how those bugs get reintroduced a second time.
+// Ported from CyberSentinel-DLP. First taken August 26 2026 (gap-scan of
+// their then-HEAD, 558 -> 1355 lines in the .cpp); re-synced August 27 2026
+// to their HEAD as of that date (1355 -> 1762 lines), after a real,
+// production-blocking bug they found and fixed on WhatsApp for Windows: the
+// original hold-and-read design called UI Automation's window-wide sweep
+// while the Enter keystroke was still held, and on WhatsApp's WebView2
+// composer that single call measured SEVEN SECONDS -- ten times past the
+// watchdog's timeout, so every send on that app was released uninspected,
+// silently, with no error. The fix restructures the module so a background
+// sampler locates the composer ELEMENT once (the expensive FindAll walk,
+// done between keystrokes, never while one is held) and BLOCK mode decides
+// primarily on the sampler's last snapshot -- the same architecture ALERT
+// mode always used, now shared by both. Also folds in: a UI Automation
+// acquisition retry loop (a COM failure at agent boot previously disabled
+// the whole feature until a restart, silently), definite-vs-guessed
+// editability tracking (so an ambiguous focused-subtree read no longer
+// picks whichever candidate happened to sort first, which could mean
+// reading and shipping the chat history instead of the message), a
+// classifier self-test logged on every Start() (so "the classifier is not
+// wired up" and "we read the wrong box" stop producing the identical
+// "every message is clean" symptom), and clean-verdict logging that
+// explains WHAT was read and WHY it did not count, not just that it did
+// not. Taken as their current, iterated implementation rather than
+// re-derived from the written description each time, deliberately --
+// re-deriving low-level keyboard-hook + UI Automation logic from a
+// description is exactly how bugs like the seven-second stall get
+// reintroduced a second time instead of staying fixed.
 //
 // THE GAP THIS CLOSES
 // -------------------
@@ -55,8 +69,9 @@
 // guarantee with a 500ms hole in it is not one. Alert mode is asked to tell an
 // operator what their fleet is doing before they turn enforcement on, and a
 // sampler answers that honestly. What alert mode must never do is silently
-// record NOTHING: an operator auditing first should not see an empty
-// dashboard and conclude the channel is quiet.
+// record NOTHING, which is what it did before this: the hook returned early
+// unless the action was Block, so an operator auditing first saw an empty
+// dashboard and concluded the channel was quiet.
 //
 // WHY HOLD-AND-RELEASE, AND NOT THE SCREENSHOT MODULE'S PRECOMPUTED FLAG
 // ----------------------------------------------------------------------
@@ -172,7 +187,7 @@ struct Config {
     // Alert mode only: how often the composer is snapshotted while a managed
     // app is in the foreground. Costs one UIA focused-element read per tick,
     // and only inside a managed app with alert-mode inspection on.
-    unsigned sampleIntervalMs = 500;
+    unsigned sampleIntervalMs = 250;
 
     // An app whose composer UI Automation cannot read at all is reported once,
     // then not again for this long — it is a deployment fact worth surfacing,

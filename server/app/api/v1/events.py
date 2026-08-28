@@ -99,6 +99,16 @@ class EventCreate(BaseModel):
     # 2026). See create_event()'s handling below.
     policy_id: Optional[str] = Field(None, description="Policy that already produced this event's action/severity, if resolved by the caller ahead of time")
     policy_name: Optional[str] = Field(None, description="Name of the above policy, for matched_policies display")
+    # The exfiltration channel this event belongs to (USB, PRINT, MESSAGING,
+    # WEB, ...). GET /events already filters on "channel" (dashboard drives
+    # the filter from a fixed vocabulary -- see drilldown.ts), and
+    # agent.cpp already sends it on outbound events -- but it was never
+    # declared here, so Pydantic silently stripped it before create_event()
+    # ever saw it, and the channel filter matched nothing no matter what an
+    # agent sent (same class of undeclared-field bug as file_hash/username/
+    # printer above; gap-scan of CyberSentinel-DLP commit 51343a4, August
+    # 26, 2026).
+    channel: Optional[str] = Field(None, description="Exfil channel, e.g. USB / PRINT / MESSAGING / WEB")
 
 
 class DLPEvent(BaseModel):
@@ -298,6 +308,10 @@ async def create_event(
         event_doc["block_reason"] = event.block_reason
     if event.content_inspection_status:
         event_doc["content_inspection_status"] = event.content_inspection_status
+    if event.channel:
+        # Uppercased so the /events channel filter (dashboard-driven from a
+        # fixed vocabulary) matches whatever casing an agent happens to send.
+        event_doc["channel"] = str(event.channel).strip().upper()
     if event.policy_id:
         # Web Activity Control (and anything else that resolves its own
         # policy ahead of time -- see EventCreate.policy_id's docstring)
