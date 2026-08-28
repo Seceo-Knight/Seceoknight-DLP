@@ -8,6 +8,40 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔴 Fix: every Events page Quick Filter returned "No events found" (August 28, 2026)
+
+Live production finding: clicking any of the six Quick Filters on the
+Events page (Critical Events, Blocked Events, File Events, USB Events,
+Clipboard Events, With Classifications) always showed "No events found",
+regardless of what was actually in the database. Root cause: each button
+wrote a fake KQL-style string (e.g. `event.severity:critical`,
+`classification:*`) into the free-text search box, but `GET /events`'
+`search` param never parsed `field:value` syntax — it only ever did a
+literal, escaped substring match across a fixed set of text fields
+(`event_type`, `description`, `file_path`, ...). No event's description
+literally contains the text "event.severity:critical", so every one of
+these buttons was guaranteed to match nothing, on every deployment, since
+the feature was first built — not a regression from anything ported today.
+The help text under the search box compounded this: it claimed full KQL
+support (wildcards, `OR`, comparisons, `NOT`) that the backend never
+implemented at all.
+
+Fixed both ends:
+- `dashboard/src/pages/Events.tsx`: Quick Filters now drive the same
+  structured query params the dashboard's own drill-down links already use
+  (`severity`, `event_type`, `classification`, `blocked` — see
+  `lib/drilldown.ts`) via the URL, instead of the free-text search box.
+  Rewrote the misleading "KQL Examples" help text to describe what search
+  actually does (plain substring match) instead of capabilities that never
+  existed.
+- `server/app/api/v1/events.py`: added a `blocked` query param (there
+  wasn't one at all — "Blocked Events" had no server-side counterpart to
+  even correctly wire up), and made `classification=*` mean "has any
+  classification" (`$exists` + not-empty) instead of literally searching
+  for the string `"*"`, which is what the exact-match path would have done.
+
+---
+
 ## 🔴 Fix: manage-agent.ps1 fully blocked by Defender/AMSI (August 28, 2026)
 
 Live production finding: `irm .../manage-agent.ps1 | iex` — including plain

@@ -558,6 +558,7 @@ export default function Events() {
       action: get('action'),
       severity: get('severity'),
       channel: get('channel'),
+      blocked: get('blocked'),
       start_date: get('start_date'),
       end_date: get('end_date'),
       time_range: get('time_range'),
@@ -812,13 +813,23 @@ export default function Events() {
     }
   }
 
-  const quickFilters = [
-    { label: 'Critical Events', query: 'event.severity:critical' },
-    { label: 'Blocked Events', query: 'blocked:true' },
-    { label: 'File Events', query: 'event.type:file' },
-    { label: 'USB Events', query: 'event.type:usb' },
-    { label: 'Clipboard Events', query: 'event.type:clipboard' },
-    { label: 'With Classifications', query: 'classification:*' },
+  // These used to encode a fake KQL string (e.g. "event.severity:critical")
+  // into the free-text search box. GET /events' `search` param only ever
+  // did a literal substring match across a fixed set of text fields (see
+  // server/app/api/v1/events.py) -- it never parsed field:value syntax --
+  // so every one of these buttons matched zero events, always. Confirmed
+  // live August 28 2026: clicking any quick filter showed "No events
+  // found". Fixed by driving the SAME structured query params the
+  // dashboard's own drill-down links already use (severity, event_type,
+  // classification, blocked -- see drilldown.ts), instead of the search
+  // box at all.
+  const quickFilters: { label: string; params: Record<string, string> }[] = [
+    { label: 'Critical Events', params: { severity: 'critical' } },
+    { label: 'Blocked Events', params: { blocked: 'true' } },
+    { label: 'File Events', params: { event_type: 'file' } },
+    { label: 'USB Events', params: { event_type: 'usb' } },
+    { label: 'Clipboard Events', params: { event_type: 'clipboard' } },
+    { label: 'With Classifications', params: { classification: '*' } },
   ]
 
   const sortOptions = [
@@ -886,8 +897,14 @@ export default function Events() {
                 <button
                   key={filter.label}
                   onClick={() => {
-                    setKqlQuery(filter.query)
-                    setActiveQuery(filter.query)
+                    // Structured filters, not the free-text search box --
+                    // clear any leftover keyword search so it's obvious
+                    // what's actually driving the results.
+                    setKqlQuery('')
+                    setActiveQuery('')
+                    const next = new URLSearchParams(searchParams)
+                    for (const [k, v] of Object.entries(filter.params)) next.set(k, v)
+                    setSearchParams(next, { replace: true })
                   }}
                   className="px-3 py-1 text-sm border border-border rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                 >
@@ -900,8 +917,17 @@ export default function Events() {
 
         <div className="mt-4 pt-4 border-t border-border">
           <p className="text-xs text-muted-foreground">
-            <strong className="text-foreground">KQL Examples:</strong> field:value, field:"exact value",
-            field:* (wildcard), field:(value1 OR value2), field &gt; 100, NOT field:value
+            {/* This used to claim full KQL syntax (field:value, wildcards, OR,
+                comparisons, NOT) -- the backend never implemented any of that,
+                it only does a plain case-insensitive substring match across
+                event type, description, file path, destination, user email,
+                etc. The old text was actively misleading; say what it
+                actually does instead. Use the Filters panel above for
+                structured filtering (severity, event type, classification). */}
+            <strong className="text-foreground">Search:</strong> matches a plain keyword or phrase
+            anywhere in the event type, description, file path, destination, user, or agent id
+            (e.g. "usb", "google drive", "blocked"). Not a structured query language — use{' '}
+            <strong className="text-foreground">Filters</strong> above for exact field matches.
           </p>
         </div>
       </Card>
