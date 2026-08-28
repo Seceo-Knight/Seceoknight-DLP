@@ -1225,7 +1225,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
     Write-Host ''
     Write-Host '   [1] Allow the agent  ' -ForegroundColor Green -NoNewline
-    Write-Host '- restore it if quarantined, then exclude path + process'
+    Write-Host '- shows the command to restore + exclude it (separate script)'
     Write-Host '   [2] Show recent blocks' -ForegroundColor Yellow -NoNewline
     Write-Host ' - Defender / ASR / folder-access events naming the agent'
     Write-Host '   [3] Back            ' -ForegroundColor Gray -NoNewline
@@ -1241,68 +1241,29 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   }
 
   function Invoke-DefenderAllow {
+    # This used to add the Defender exclusions inline (Add-MpPreference
+    # -ExclusionPath / -ExclusionProcess). Moved to a separate script,
+    # defender-allow.ps1, on August 28, 2026: that call pattern -- an
+    # antivirus-exclusion add, arriving via `irm ... | iex` -- is exactly
+    # what Defender's AMSI content scanner flags as malware, and it was
+    # blocking THIS ENTIRE SCRIPT (including plain [2] Update, unrelated to
+    # Defender at all) with "This script contains malicious content and has
+    # been blocked by your antivirus software" before a single line could
+    # run. Splitting it out means only an admin who specifically needs this
+    # one feature ever fetches the content that trips the heuristic.
     Write-Host ''
     Write-Host '   Allowing the agent in Microsoft Defender' -ForegroundColor Cyan
     Write-Host '   ------------------------------------------------' -ForegroundColor DarkCyan
     if (-not $isAdmin) { Err 'This needs Administrator. Re-run the script elevated.'; return }
-
-    # Restore first. Excluding a path Defender has already emptied looks
-    # like it worked and still leaves you with no binary.
-    $q = @(Get-AgentQuarantine)
-    if ($q.Count -gt 0) {
-      $mpcmd = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
-      if (Test-Path $mpcmd) {
-        foreach ($name in ($q | Select-Object -ExpandProperty Name -Unique)) {
-          Info "Restoring from quarantine: $name"
-          & $mpcmd -Restore -Name $name 2>&1 | Out-Null
-        }
-      } else { Warn 'MpCmdRun.exe not found - cannot restore from quarantine automatically.' }
-    }
-
-    try {
-      Add-MpPreference -ExclusionPath $INSTALL_DIR -ErrorAction Stop
-      Ok "Excluded path: $INSTALL_DIR"
-    } catch { Err "Could not add the path exclusion: $($_.Exception.Message)" }
-    try {
-      Add-MpPreference -ExclusionProcess "$PROC_NAME.exe" -ErrorAction Stop
-      Ok "Excluded process: $PROC_NAME.exe"
-    } catch { Err "Could not add the process exclusion: $($_.Exception.Message)" }
-
-    # Read it back. Add-MpPreference reports success even when tamper
-    # protection or a management policy silently discards the change.
-    $pref = $null; try { $pref = Get-MpPreference -ErrorAction Stop } catch {}
-    $okPath = $pref -and (@($pref.ExclusionPath) | Where-Object { $_ -and $_.TrimEnd('\') -ieq $INSTALL_DIR.TrimEnd('\') }).Count -gt 0
-    $okProc = $pref -and (@($pref.ExclusionProcess) | Where-Object { $_ -and $_ -imatch [regex]::Escape($PROC_NAME) }).Count -gt 0
-    if ($okPath -and $okProc) { Ok 'Exclusions confirmed present.' }
-    else {
-      Err 'The exclusions did not stick.'
-      Info 'Usually tamper protection, or Defender settings managed by group policy'
-      Info 'or Intune. On a managed fleet the exclusion belongs in that policy, not here.'
-      return
-    }
-
-    $exe = Join-Path $INSTALL_DIR $EXE_NAME
-    if (-not (Test-Path $exe)) {
-      Write-Host ''
-      Warn 'The binary is still missing - Defender removed it before this ran.'
-      Info 'Use [2] Update from the main menu to fetch a fresh copy; it will not be'
-      Info 'quarantined again now that the exclusion is in place.'
-      return
-    }
+    Info 'This step now runs from its own script so a Defender-exclusion'
+    Info 'add can never block the rest of this management console again.'
     Write-Host ''
-    Info 'Restarting the agent...'
-    Start-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue
-    $proc = $null
-    for ($i = 0; $i -lt 6 -and -not $proc; $i++) {
-      Start-Sleep -Seconds 2
-      $proc = Get-Process -Name $PROC_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
-    }
-    if ($proc) {
-      $v = $null; try { $v = (Get-Item $proc.Path).VersionInfo.ProductVersion } catch {}
-      if ($v) { Ok "Agent v$($v.Trim()) running (PID $($proc.Id))." } else { Ok "Agent running (PID $($proc.Id))." }
-    } else {
-      Warn 'Agent still not running. Check the log file for what it says on startup.'
-    }
+    Write-Host '   Run this in a new PowerShell window (as Administrator):' -ForegroundColor Yellow
+    Write-Host '   irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/defender-allow.ps1 | iex' -ForegroundColor White
+    Write-Host ''
+    Write-Host '   If that also gets blocked, add the exclusion by hand instead:' -ForegroundColor Yellow
+    Write-Host "   Windows Security -> Virus & threat protection -> Manage settings ->" -ForegroundColor Yellow
+    Write-Host "   Add or remove exclusions -> add folder `"$INSTALL_DIR`" and process `"$PROC_NAME.exe`"" -ForegroundColor Yellow
   }
 
   function Show-DefenderEvents {
