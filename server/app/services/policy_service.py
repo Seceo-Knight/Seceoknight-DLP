@@ -382,6 +382,18 @@ class PolicyService:
         "greater_than", "less_than",
         "greater_than_or_equal", "less_than_or_equal",
         "matches_any_prefix",
+        # not_in / not_equals: fully implemented in
+        # DatabasePolicyEvaluator._evaluate_rule (see the "what makes a
+        # policy exception expressible at all" comment there, added
+        # 2026-07-20) and produced by two real callers --
+        # ClassificationPolicyForm.tsx's operator dropdown, and
+        # policy_transformer.py's _transform_network_share_transfer_config
+        # for exception_paths/exception_file_types -- but never added to
+        # this whitelist. Every save of a policy using either operator was
+        # rejected with a 400, meaning the documented exception mechanism
+        # could not actually be used from the UI at all. Found in a
+        # policy-engine audit, August 28 2026.
+        "not_in", "not_equals",
     })
 
     def _validate_conditions(self, conditions: dict) -> None:

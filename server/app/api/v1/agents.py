@@ -151,6 +151,34 @@ async def verify_agent_key(request: Request) -> Optional[str]:
     return agent_doc["agent_id"]
 
 
+async def require_agent_key(request: Request) -> str:
+    """Like ``verify_agent_key``, but a missing key is also rejected.
+
+    Several endpoints (real-time policy evaluation, classification,
+    decision, policy bundle download, ...) carry a docstring reading
+    "SECURITY: Requires a valid X-Agent-Key header" — added specifically
+    because being anonymous let external callers use them as a
+    classification oracle to tune content until it scored "Public", or
+    flood/DoS the classification engine. Every one of those endpoints was
+    calling ``verify_agent_key(...)`` and discarding the return value:
+    ``verify_agent_key`` only raises 401 when a key is PRESENT but wrong —
+    a request with no key at all returns ``None`` and is let through, so
+    every "Requires a valid key" endpoint was still fully anonymous-
+    accessible despite the comment (found in a policy-engine audit,
+    August 28 2026). Callers that genuinely need the old backward-
+    compatible "key optional" behavior (plain event ingestion from an
+    agent build predating key support) should keep calling
+    ``verify_agent_key`` directly instead of this function.
+    """
+    agent_id = await verify_agent_key(request)
+    if agent_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="X-Agent-Key header is required for this endpoint",
+        )
+    return agent_id
+
+
 class AgentBase(BaseModel):
     """Base agent model"""
     name: str = Field(..., description="Agent name/hostname")
@@ -1394,11 +1422,18 @@ async def get_wireless_policy(
 
     cfg = policy.config or {}
     mode = str(cfg.get("mode") or "enforce").lower()
-    if mode not in ("enforce", "audit"):
+    # "off" is a real, documented, UI-selectable mode (see docstring above
+    # and WirelessTransferControlPolicyForm.tsx's "Disable wireless
+    # transfer control entirely" option) -- it was missing from this
+    # whitelist, so selecting it got silently rewritten to "enforce",
+    # meaning an admin choosing to DISABLE the control instead actively
+    # BLOCKED Bluetooth file transfer / Nearby Sharing: the opposite of
+    # what was selected. Found in a policy-engine audit, August 28 2026.
+    if mode not in ("enforce", "audit", "off"):
         mode = "enforce"
 
     return {
-        "enforced": True,
+        "enforced": mode != "off",
         "mode": mode,
         "block_bluetooth_file_transfer": bool(cfg.get("block_bluetooth_file_transfer", True)),
         "block_nearby_sharing": bool(cfg.get("block_nearby_sharing", True)),
@@ -1883,7 +1918,7 @@ async def evaluate_policy_realtime(
 
     This enables content-aware blocking based on sensitive data detection.
     """
-    await verify_agent_key(http_request)
+    await require_agent_key(http_request)
 
     try:
         # 0. Resolve the text to classify. When the caller sends raw bytes
@@ -2243,7 +2278,7 @@ async def evaluate_web_activity(
 
     Requires ``X-Agent-Key`` header, same as evaluate_policy_realtime.
     """
-    await verify_agent_key(http_request)
+    await require_agent_key(http_request)
 
     from sqlalchemy import select as _select
     from app.core import web_activity as wa

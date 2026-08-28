@@ -3376,7 +3376,49 @@ if (!shouldBlock) {
         
         return true;
     }
-     
+
+    // Read-only counterpart to BlockUSBStorageViaRegistry() above -- reports
+    // what's ACTUALLY in the registry right now (Start == 4, "Disabled"),
+    // instead of trusting in-memory state.
+    //
+    // Needed because usbBlockingActive (an in-memory std::atomic<bool>,
+    // declared {false}) starts false on EVERY process launch, including a
+    // cold boot where install-agent.ps1's "SeceoKnight DLP USB Block"
+    // scheduled task has ALREADY disabled USB storage via this same
+    // registry key, unconditionally, before this agent process even starts
+    // -- it doesn't check policy at all, just disables on every boot as a
+    // fail-closed-until-the-agent-confirms-otherwise measure. The
+    // reconciliation logic that's supposed to restore USB access when a
+    // policy says Alert/Log-only (or when no usb_device_monitoring policy
+    // exists at all) only fires on a `previousUsbBlocking == true` edge --
+    // and since the in-memory flag falsely starts at false every cold
+    // boot, that edge can never be observed there, so the restore path
+    // never ran: USB storage stayed disabled at the OS level regardless of
+    // what the policy said, on every fresh boot, fleet-wide. Fixed by
+    // seeding usbBlockingActive from this actual registry read once, right
+    // before the first policy reconciliation pass (see its call site).
+    // Found in a policy-engine audit, August 28 2026.
+    bool IsUSBStorageBlockedInRegistry() {
+        HKEY hKey;
+        LONG result = RegOpenKeyExA(HKEY_LOCAL_MACHINE, USB_STOR_REG_PATH, 0, KEY_QUERY_VALUE, &hKey);
+        if (result != ERROR_SUCCESS) {
+            // Can't read it -- don't claim it's blocked when we're not sure;
+            // that would make this fix itself capable of introducing a
+            // fail-open-by-omission, which is exactly the class of bug this
+            // whole audit was hunting for.
+            return false;
+        }
+        DWORD startValue = 3; // default: "Manual" (not blocked) if unreadable
+        DWORD dataSize = sizeof(DWORD);
+        DWORD valueType = 0;
+        result = RegQueryValueExA(hKey, "Start", NULL, &valueType, (BYTE*)&startValue, &dataSize);
+        RegCloseKey(hKey);
+        if (result != ERROR_SUCCESS || valueType != REG_DWORD) {
+            return false;
+        }
+        return startValue == 4; // 4 = Disabled, matches BlockUSBStorageViaRegistry(true)
+    }
+
      bool DisableDevice(HDEVINFO hDevInfo, PSP_DEVINFO_DATA pDevInfoData) {
          SP_PROPCHANGE_PARAMS propChangeParams;
          ZeroMemory(&propChangeParams, sizeof(SP_PROPCHANGE_PARAMS));
@@ -6170,6 +6212,23 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  
 // Parse usb_device_monitoring policies
 bool tempHasUsbDevicePolicies = hasUsbDevicePolicies.load();
+
+// usbBlockingActive starts false on every process launch, but
+// install-agent.ps1 registers an unconditional boot-time scheduled task
+// ("SeceoKnight DLP USB Block") that disables the USBSTOR registry key
+// BEFORE this agent process even starts -- regardless of what policy
+// actually says. Without this seeding, the very first policy-sync pass
+// after a cold boot always believes "previously not blocking", so if the
+// current policy says USB should be ALLOWED, the restore-to-allowed path
+// never fires and the registry is left disabled indefinitely. Seed the
+// in-memory tracker from actual registry state once per process so the
+// first pass can correctly detect a needed restore. Found in a
+// policy-engine audit, August 28 2026.
+static bool usbBlockingSeededFromRegistry = false;
+if (!usbBlockingSeededFromRegistry) {
+    usbBlockingActive.store(IsUSBStorageBlockedInRegistry());
+    usbBlockingSeededFromRegistry = true;
+}
 bool previousUsbBlocking = usbBlockingActive.load();  // Store previous state
 bool newUsbBlocking = false;  // Track if any policy requires blocking
 
@@ -6522,6 +6581,28 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
 
                 // Extract monitoredPaths for ALL policy types (file_system_monitoring, usb_file_transfer_monitoring, etc.)
                 rule.monitoredPaths = ExtractJsonArray(configObj, "monitoredPaths");
+
+                // file_transfer_monitoring's config never had a "monitoredPaths"
+                // key at all -- the dashboard form (FileTransferPolicyForm.tsx)
+                // and FileTransferConfig write "protectedPaths" (source paths to
+                // watch) and "monitoredDestinations" (where a transfer TO is
+                // watched) instead. The Linux agent already reads the right key
+                // (agent.py's transfer_protected_paths, key="protectedPaths").
+                // This Windows agent read the wrong key for this one policy
+                // type only, so rule.monitoredPaths was ALWAYS empty for it --
+                // ShouldMonitorFile()/HandleFileEvent() require a non-empty
+                // match against monitoredPaths, so file_transfer_monitoring
+                // silently never enforced anything on Windows, ever, on any
+                // path. Found in a policy-engine audit, August 28 2026.
+                // (monitoredDestinations / destination-specific matching isn't
+                // wired into PolicyRule at all yet -- that's a separate,
+                // larger gap; this restores the baseline "does this policy
+                // ever fire" behavior that Linux already had.)
+                if (policyType == "file_transfer_monitoring") {
+                    std::vector<std::string> protectedPaths = ExtractJsonArray(configObj, "protectedPaths");
+                    rule.monitoredPaths.insert(rule.monitoredPaths.end(),
+                                                protectedPaths.begin(), protectedPaths.end());
+                }
 
                 // ============================================================
                 // CRITICAL: USB POLICY MUST BE PARSED FIRST

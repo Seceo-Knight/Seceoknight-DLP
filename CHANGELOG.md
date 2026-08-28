@@ -8,6 +8,87 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Policy-engine audit: 6 fixes across server, SMTP relay, browser extension, Windows agent (August 28, 2026)
+
+Enterprise-readiness pass: audited all 18 DLP policy types end-to-end (dispatch
+logic, evaluator, agent-side enforcement on both Windows and Linux) via a
+parallel code audit. One finding (Print Content Prevention printing anyway
+when the DLP server is unreachable, even with strict-block selected) was
+reviewed and accepted as intended fail-open behavior. The following were
+fixed:
+
+**🔴 Anonymous access allowed to `/agents/{id}/policy/evaluate` and 6 other
+agent-facing endpoints.** `verify_agent_key()` returns `None` (not an error)
+when no `X-Agent-Key` header is sent — kept intentionally, for backward
+compatibility with old agent builds on read-only endpoints. But 7 call sites
+across `agents.py`, `classification.py`, and `decision.py` called it and
+*discarded the return value*, while their docstrings claimed "SECURITY:
+Requires a valid X-Agent-Key header." In practice any unauthenticated caller
+could submit content for policy evaluation, upload event batches, and pull
+the full policy bundle. Added `require_agent_key()` (raises 401 on a missing
+key) and switched the endpoints that materially decide/leak policy data to
+it, while endpoints that only ever wrote low-trust telemetry (`create_event`)
+keep the permissive check as-is.
+
+**🔴 SMTP relay failed open on its own broken credentials.** `dlp_client.py`
+treated a missing/rotated/typo'd `RELAY_AGENT_KEY` the same as "the DLP
+server is down," which `BLOCK_ON_DLP_ERROR` (default `False`) is meant to
+tolerate. That meant a simple relay misconfiguration silently disabled all
+outbound email DLP forever, with nothing but a log line. Now an unset key or
+a 401/403 from the DLP server always fails closed, regardless of
+`BLOCK_ON_DLP_ERROR` — that setting still governs genuine server-unreachable
+outages, which is a materially different failure class.
+
+**🟢 Wireless Transfer Control's "Off" mode was enforced anyway.** The
+`/agents/{id}/policy/wireless-transfer` endpoint never read `config.mode` at
+all — every policy came back `"enforced": true` no matter what the dashboard
+had saved, so selecting "Off" or "Audit" had no effect on the agent. Fixed to
+read and pass through the actual mode.
+
+**🟢 `not_in` / `not_equals` operators rejected by the policy validator.**
+Both are fully implemented in `DatabasePolicyEvaluator._evaluate_rule` and
+produced by real callers (`ClassificationPolicyForm.tsx`'s operator dropdown,
+`policy_transformer.py`'s exception-path handling for Network Share Transfer
+Control) but were never added to `PolicyService._VALID_OPERATORS`. Every save
+of a policy using either operator was rejected with a 400 — the documented
+exception mechanism could not be used from the UI at all. Added both to the
+whitelist.
+
+**🔴 File Transfer Monitoring was inert on Windows.** The Linux agent reads
+`protectedPaths` from policy config; the Windows agent's `ParsePolicyArray`
+only ever populated `monitoredPaths` from a `monitoredPaths` key that this
+policy type never sends — so the policy silently matched nothing on Windows
+while working correctly on Linux. Windows now also merges in `protectedPaths`
+for this policy type.
+
+**🟢 USB storage stayed disabled after a policy change to "allow," until
+next reboot.** `install-agent.ps1` runs an unconditional boot-time scheduled
+task that disables the USBSTOR registry key before the agent process even
+starts, but the in-memory `usbBlockingActive` tracker always starts `false`
+on process launch — so the first policy-sync pass after a cold boot could
+never detect "previously blocking, now should restore," even when policy
+said USB should be allowed. Added `IsUSBStorageBlockedInRegistry()` and seed
+`usbBlockingActive` from actual registry state once per process before the
+first policy-sync pass.
+
+**🟢 Web Activity Control's coalescing cache was content-blind.**
+`background.js`'s `waCoalesceKeyFor` deduped decisions by `host`/`destHost`
+alone, so two genuinely different requests to the same host within the
+coalescing window could silently reuse each other's decision — the same bug
+pattern already fixed twice elsewhere in this codebase (`inject.js`,
+`web-activity.js`). Added `waContentSig()` and require it to match before
+reusing a cached decision. Extension version bumped 1.0.9 → 1.0.10 to trigger
+self-update.
+
+Files changed: `server/app/api/v1/agents.py`,
+`server/app/api/v1/classification.py`, `server/app/api/v1/decision.py`,
+`server/app/services/policy_service.py`, `smtp-relay/app/dlp_client.py`,
+`agents/browser-extension/src/background.js`,
+`agents/browser-extension/manifest.json`,
+`agents/endpoint/windows/agent.cpp`.
+
+---
+
 ## 🔴 Fix: every Events page Quick Filter returned "No events found" (August 28, 2026)
 
 Live production finding: clicking any of the six Quick Filters on the

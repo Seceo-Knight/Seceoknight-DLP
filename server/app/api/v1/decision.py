@@ -123,8 +123,8 @@ async def make_decision(
 
     Target latency: <100ms
     """
-    from app.api.v1.agents import verify_agent_key
-    await verify_agent_key(http_request)
+    from app.api.v1.agents import require_agent_key
+    await require_agent_key(http_request)
     event = request.event
     content = event.get("content") or event.get("file_content", "")
 
@@ -195,8 +195,8 @@ async def ingest_batch_events(
     in MongoDB with minimal processing. Heavy processing (classification,
     policy eval) happens asynchronously.
     """
-    from app.api.v1.agents import verify_agent_key
-    await verify_agent_key(http_request)
+    from app.api.v1.agents import require_agent_key
+    await require_agent_key(http_request)
 
     db = get_mongodb()
     events_collection = db["dlp_events"]
@@ -300,8 +300,8 @@ async def sync_policies(
 
     Agents should call this periodically (e.g., every 60 seconds).
     """
-    from app.api.v1.agents import verify_agent_key
-    await verify_agent_key(http_request)
+    from app.api.v1.agents import require_agent_key
+    await require_agent_key(http_request)
 
     from app.services.policy_service import PolicyService
     from app.policies.agent_policy_transformer import AgentPolicyTransformer
@@ -430,8 +430,8 @@ async def get_policy_latest(
     Returns only version + checksum (no policy payload).
     Agent compares with its local version and downloads only if newer.
     """
-    from app.api.v1.agents import verify_agent_key
-    await verify_agent_key(http_request)
+    from app.api.v1.agents import require_agent_key
+    await require_agent_key(http_request)
 
     bundle = await _build_versioned_bundle(db, platform, agent_id)
 
@@ -466,8 +466,8 @@ async def download_policy_bundle(
     3. Load into memory
     4. Swap policy pointer atomically
     """
-    from app.api.v1.agents import verify_agent_key
-    await verify_agent_key(http_request)
+    from app.api.v1.agents import require_agent_key
+    await require_agent_key(http_request)
 
     bundle = await _build_versioned_bundle(db, platform, agent_id)
 
