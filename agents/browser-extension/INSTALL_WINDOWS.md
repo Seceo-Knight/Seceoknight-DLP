@@ -188,6 +188,43 @@ whole chain without any upload.
   driver.
 - **Uploads via a native desktop client** (Google Drive/Dropbox app) are **not**
   covered by the extension — that's the Phase B WFP driver.
+- **Extension stuck on an old version** (`chrome://extensions` won't move past
+  it no matter how many times you click **Update**, run `manage-agent.ps1` →
+  `[4] Browser` → force reinstall, or even delete
+  `...\User Data\Default\Extensions\<id>` and relaunch). Confirmed live,
+  August 28 2026: none of those cleared it, because Chrome tracks
+  per-extension update backoff/failure state separately from the extension's
+  own installed folder — deleting the folder doesn't touch it. Also, the
+  **Remove** button on a force-installed extension is always greyed out
+  ("installed by your administrator") — Chrome won't let you remove it while
+  `ExtensionInstallForcelist` still mandates it, so removal has to start by
+  clearing that policy, not by clicking anything in `chrome://extensions`.
+
+  To get unstuck without a full profile wipe:
+  1. Stop the Guard task so it doesn't fight you:
+     `Stop-ScheduledTask -TaskName "SeceoKnight DLP Browser Extension Guard"`
+  2. Clear the policy so Chrome frees up the extension ID (run elevated):
+     `Remove-Item "HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist" -Recurse -Force -ErrorAction SilentlyContinue`
+  3. Fully quit and reopen Chrome. **Remove** is now clickable on the
+     SeceoKnight entry — click it.
+  4. Load the current code directly instead of waiting on the CRX update
+     path: download
+     `https://github.com/Seceo-Knight/Seceoknight-DLP/archive/refs/heads/main.zip`,
+     extract it, `chrome://extensions` → **Developer mode** → **Load
+     unpacked** → the extracted `agents/browser-extension` folder. Because
+     the repo's `manifest.json` already has the signing public key pinned in
+     it, this shows the same Extension ID as the managed build, just loaded
+     unpacked.
+  5. Once confirmed working, re-enable proper management so this doesn't
+     stay in an easily user-removable dev-mode state:
+     `Start-ScheduledTask -TaskName "SeceoKnight DLP Browser Extension Guard"`
+     (re-adds the force-install policy within a couple of minutes).
+
+  If a fresh full Chrome profile is an option (rename
+  `...\User Data\Default` to `Default.old` while Chrome is closed, then
+  relaunch), that also clears the stuck backoff state and is less manual —
+  but costs that profile's bookmarks/history/other extensions, so it's
+  better suited to a test machine than someone's daily-driver browser.
 
 ## Scope (this build)
 - Windows, Chrome/Edge browser uploads. Blocks sensitive uploads to **all**
