@@ -8,6 +8,19 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🟢 Bump extension version to 1.0.9 (August 28, 2026)
+
+`scripts/pack-extension.py` refused to silently ship a stale build: repacking
+today's Cloud Upload Guard flood fix (`inject.js`/`web-activity.js`) under
+the unchanged `1.0.8` version number would have produced a CRX with
+different code but the same version, which Chrome/Edge's extension updater
+ignores — managed endpoints would have kept running the old, flood-prone
+code indefinitely. Bumped `agents/browser-extension/manifest.json` to
+`1.0.9` so the force-installed extension actually updates on its next
+policy check.
+
+---
+
 ## 🟢 Gap-scan: CyberSentinel-DLP, 26 commits since the last scan (August 27, 2026)
 
 CyberSentinel published 26 commits between the last gap-scan and this one
