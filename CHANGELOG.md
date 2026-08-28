@@ -8,6 +8,33 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## 🔴 Fix: manage-agent.ps1 fully blocked by Defender/AMSI (August 28, 2026)
+
+Live production finding: `irm .../manage-agent.ps1 | iex` — including plain
+**[2] Update**, unrelated to Defender at all — started failing outright with
+`ScriptContainedMaliciousContent` / "This script contains malicious content
+and has been blocked by your antivirus software." Root cause: the `[5]
+Security` menu added August 25 (gap-scan of CyberSentinel-DLP commit
+04f60be) calls `Add-MpPreference -ExclusionPath` / `-ExclusionProcess` to
+let an admin exclude the agent from Defender scanning — a legitimate
+feature, but also the literal malware-evasion pattern, and Defender's AMSI
+content scanner flags it hard when it arrives via the classic
+download-and-instantly-execute (`irm | iex`) shape. With that code inline,
+AMSI blocked the *entire* script before any of it could run — confirmed
+this wasn't just the pipe-to-iex shape either: downloading to a file first
+and running with `-File` still got blocked, since AMSI scans content, not
+just invocation style.
+
+Fix: moved the exclusion logic into a new standalone script,
+`defender-allow.ps1`, invoked separately only by an admin who specifically
+needs it. `manage-agent.ps1`'s `[5] Security` → `[1] Allow the agent` now
+just prints the command to run it (plus a manual GUI fallback if that
+script also gets flagged) instead of calling `Add-MpPreference` itself. The
+routine Install/Update/Uninstall/Browser/Status paths in `manage-agent.ps1`
+no longer contain the flagged call pattern at all.
+
+---
+
 ## 🟢 Bump extension version to 1.0.9 (August 28, 2026)
 
 `scripts/pack-extension.py` refused to silently ship a stale build: repacking
