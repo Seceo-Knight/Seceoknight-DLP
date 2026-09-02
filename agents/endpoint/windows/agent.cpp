@@ -12704,13 +12704,20 @@ PSID ResolveSidForAccountName(const std::string& name, Logger& logger) {
 // boilerplate pattern. Returns false (non-fatal to the caller) if this
 // process doesn't hold the privilege at all, e.g. if the scheduled task
 // somehow isn't actually running as SYSTEM.
-bool EnablePrivilege(LPCWSTR privilegeName) {
+// NOTE: LPCSTR/LookupPrivilegeValueA, not the W variant -- this whole file
+// builds without UNICODE defined (see the consistent explicit "A" suffix on
+// every other Win32 call throughout, e.g. LookupAccountNameA,
+// SetNamedSecurityInfoA), so TCHAR-generic macros like SE_SECURITY_NAME
+// expand to a narrow (const char*) string here, not wide. Passing that into
+// an LPCWSTR parameter was a real build break caught by CI (build-windows-
+// agent.yml), not just a style nit.
+bool EnablePrivilege(LPCSTR privilegeName) {
     HANDLE hToken = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) {
         return false;
     }
     LUID luid;
-    if (!LookupPrivilegeValueW(nullptr, privilegeName, &luid)) {
+    if (!LookupPrivilegeValueA(nullptr, privilegeName, &luid)) {
         CloseHandle(hToken);
         return false;
     }
