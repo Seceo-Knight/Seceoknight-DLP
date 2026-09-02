@@ -8,6 +8,63 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## New: File Access Control policy type (GDPR-style per-file access) (September 2, 2026)
+
+Every existing policy type governs content LEAVING the endpoint (clipboard, USB, print, network share, email,
+browser upload). None of them govern who may open a file at all -- a distinct GDPR Art. 32 "access control"
+requirement, and the specific gap raised in a security-team requirements conversation. Added as a new policy type,
+`file_access_control`, enforced as a real NTFS DACL on the Windows agent (Linux/macOS not covered by this pass).
+
+Targeting is two independent, combinable modes: by classification level (any file the agent's
+`file_system_monitoring` classify-on-write pipeline rates Confidential/Restricted/etc. gets restricted the moment
+it's written) or by an explicit admin-named path list (reconciled every policy-sync cycle regardless of
+classification). SYSTEM and local Administrators always retain full control so IT can never lock itself out; every
+other principal is denied unless named in the policy's authorized users/groups (local Windows accounts, or AD
+accounts/groups if the endpoint is domain-joined -- resolved via `LookupAccountNameA`).
+
+**Server**: `GET /agents/{id}/file-access-policy` in `agents.py` (mirrors the existing `wireless-policy` /
+`printer-policy` agent-polling pattern -- this policy type isn't expressed as conditions/actions rules, so it
+doesn't go through `policy_transformer.py`/`database_policy_evaluator.py` at all). Domain-mapped to the existing
+(previously unused) `ACCESS_CONTROL` RBAC domain in `domains.py`. Requires a valid `X-Agent-Key` (`require_agent_key`,
+not the permissive `verify_agent_key`) since the response contains the authorized-user list, which is itself
+sensitive.
+
+**Dashboard**: new "File Access Control (GDPR)" policy type -- `FileAccessControlPolicyForm.tsx`, registered in
+`types/policy.ts`, `PolicyTypeSelector.tsx`, `PolicyCreatorModal.tsx`, and `policyUtils.ts` (icon/label/summary/
+validation, matching every other policy type's registration surface).
+
+**Windows agent** (`agent.cpp`): confirmed live in this codebase (tasks #145/#147, Wireless Guard) that the main
+agent process runs unelevated and cannot reliably set `WRITE_DAC` on files it doesn't own -- so, same split as
+Wireless/Browser-Extension Guard, the main process only fetches policy and writes a desired-state cache
+(`file_access_targets.cache`); a new SYSTEM/Highest repeating scheduled task ("SeceoKnight DLP File Access Guard",
+registered by `install-agent.ps1`, `seceoknight_agent.exe --apply-file-access-guard`) does the actual
+`SetNamedSecurityInfoA` call every 2 minutes, self-healing against manual tampering and reverting any path that
+drops out of scope (policy removed/disabled, or a file no longer classified as targeted). Classification-matched
+individual files are tracked in a durable on-disk map (not just in memory) specifically to avoid the exact
+"in-memory tracker resets to empty on process restart" bug shape already found and fixed for USB storage blocking
+this same day (see `IsUSBStorageBlockedInRegistry()` above) -- losing that tracking on a service restart would have
+silently un-protected every previously-classified file until it was rewritten.
+
+Two things intentionally scoped OUT of this pass, both documented in-code and worth being explicit about with
+whoever asked for this:
+- **No audit trail of denied attempts yet.** This prevents access; it does not yet log who was denied and when.
+  That needs Windows Security auditing (a SACL alongside the DACL, plus forwarding event IDs 4656/4663 to a DLP
+  event) and is real, separate work -- tracked as a fast-follow, not built here.
+- **Classification level is a local approximation, not the full server-side score.** The `file_system_monitoring`
+  classify-on-write hook this reuses only ever computes a local severity (low/medium/high/critical) from regex/
+  pattern matching -- it does not call the server's confidence-score `classify_content()`
+  (Public/Internal/Confidential/Restricted) per file write, since doing so would mean POSTing full file content to
+  the server on every monitored save. `LevelFromLocalSeverity()` maps severity onto the same four-tier vocabulary
+  the rest of the product uses, mirroring (not reproducing) the score thresholds `classification_engine.py` uses
+  server-side.
+
+Files changed: `server/app/api/v1/agents.py`, `server/app/core/domains.py`, `dashboard/src/types/policy.ts`,
+`dashboard/src/components/policies/PolicyTypeSelector.tsx`, `PolicyCreatorModal.tsx`,
+`FileAccessControlPolicyForm.tsx` (new), `dashboard/src/utils/policyUtils.ts`,
+`agents/endpoint/windows/agent.cpp`, `install-agent.ps1`, `manage-agent.ps1`.
+
+---
+
 ## Policy-engine audit: 6 fixes across server, SMTP relay, browser extension, Windows agent (August 28, 2026)
 
 Enterprise-readiness pass: audited all 18 DLP policy types end-to-end (dispatch

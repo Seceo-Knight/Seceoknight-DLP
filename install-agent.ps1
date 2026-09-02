@@ -890,6 +890,56 @@ try {
         Write-ColorOutput "Could not create Wireless Guard task (non-fatal): $($_.Exception.Message)" -Type "Warning"
     }
 
+    # -- File Access Guard: repeating elevated task ----------------------------
+    # File Access Control (GDPR-style per-file/folder access, August 2026):
+    # restricts which named users/groups may open a classified file or
+    # explicitly-listed folder at all, via a real NTFS DACL -- distinct from
+    # every other guard here, which govern content LEAVING the endpoint, not
+    # who may read it locally. Same unelevated-process problem as Wireless
+    # Guard above (this process cannot reliably set WRITE_DAC on files it
+    # doesn't own), and likewise policy-driven (which files/folders and which
+    # users can change at any time), so this repeats every 2 minutes too,
+    # reading the state the main agent task caches to
+    # C:\ProgramData\SeceoKnight\logs\file_access_targets.cache and applying
+    # it via `seceoknight_agent.exe --apply-file-access-guard`.
+    $fileAccessGuardTaskName = "SeceoKnight DLP File Access Guard"
+    try {
+        $fileAccessGuardAction = New-ScheduledTaskAction `
+            -Execute $exePath `
+            -Argument "--apply-file-access-guard" `
+            -WorkingDirectory $INSTALL_DIR
+
+        $fileAccessGuardTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+            -RepetitionInterval (New-TimeSpan -Minutes 2) `
+            -RepetitionDuration (New-TimeSpan -Days 3650)
+
+        $fileAccessGuardPrincipal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+
+        $fileAccessGuardSettings = New-ScheduledTaskSettingsSet `
+            -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries `
+            -ExecutionTimeLimit (New-TimeSpan -Minutes 1)
+
+        $existingFileAccessGuard = Get-ScheduledTask -TaskName $fileAccessGuardTaskName -ErrorAction SilentlyContinue
+        if ($existingFileAccessGuard) { Unregister-ScheduledTask -TaskName $fileAccessGuardTaskName -Confirm:$false }
+
+        Register-ScheduledTask `
+            -TaskName $fileAccessGuardTaskName `
+            -Action $fileAccessGuardAction `
+            -Trigger $fileAccessGuardTrigger `
+            -Principal $fileAccessGuardPrincipal `
+            -Settings $fileAccessGuardSettings `
+            -Description "SeceoKnight DLP - Reconcile per-file/folder NTFS access-control permissions every 2 minutes (requires SYSTEM elevation)" `
+            -Force | Out-Null
+
+        Write-ColorOutput "File Access Guard task created: $fileAccessGuardTaskName" -Type "Success"
+
+        # Best-effort immediate run -- same reasoning as Wireless Guard above.
+        try { Start-ScheduledTask -TaskName $fileAccessGuardTaskName } catch {}
+    } catch {
+        Write-ColorOutput "Could not create File Access Guard task (non-fatal): $($_.Exception.Message)" -Type "Warning"
+    }
+
     # -- Browser Extension Guard: repeating elevated task ---------------------
     # Gap-scan of CyberSentinel-DLP (August 18, 2026): the DLP browser
     # extension was previously only a manual "Load unpacked" dev-mode install,

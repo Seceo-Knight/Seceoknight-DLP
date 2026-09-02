@@ -20,7 +20,8 @@ import {
   MessagingAppControlConfig,
   PrinterControlConfig,
   EmailConfig,
-  WebActivityControlConfig
+  WebActivityControlConfig,
+  FileAccessControlConfig
 } from '@/types/policy'
 import { validatePolicy } from '@/utils/policyUtils'
 import PolicyTypeSelector from './PolicyTypeSelector'
@@ -41,6 +42,7 @@ import MessagingAppControlPolicyForm from './MessagingAppControlPolicyForm'
 import PrinterControlPolicyForm from './PrinterControlPolicyForm'
 import EmailPolicyForm from './EmailPolicyForm'
 import WebActivityControlPolicyForm from './WebActivityControlPolicyForm'
+import FileAccessControlPolicyForm from './FileAccessControlPolicyForm'
 import ClassificationPolicyForm, { ClassificationPolicy } from './ClassificationPolicyForm'
 import { getAgents, Agent } from '@/lib/api'
 import { ChevronLeft, ChevronRight, Check } from 'lucide-react'
@@ -75,6 +77,7 @@ type TraditionalPolicyConfig =
   | PrinterControlConfig
   | EmailConfig
   | WebActivityControlConfig
+  | FileAccessControlConfig
 
 const getDefaultConfig = (type: PolicyType): TraditionalPolicyConfig | {} => {
   switch (type) {
@@ -224,6 +227,16 @@ const getDefaultConfig = (type: PolicyType): TraditionalPolicyConfig | {} => {
       return {
         matrix: {}
       } as WebActivityControlConfig
+
+    case 'file_access_control':
+      return {
+        mode: 'audit',
+        classification_levels: [],
+        explicit_paths: [],
+        authorized_users: [],
+        authorized_groups: [],
+        always_allow_admins: true
+      } as FileAccessControlConfig
   }
 }
 
@@ -788,6 +801,13 @@ export default function PolicyCreatorModal({
                 {policyType === 'web_activity_control' && (
                   <WebActivityControlPolicyForm
                     config={config as WebActivityControlConfig}
+                    onChange={(newConfig) => setConfig(newConfig)}
+                  />
+                )}
+
+                {policyType === 'file_access_control' && (
+                  <FileAccessControlPolicyForm
+                    config={config as FileAccessControlConfig}
                     onChange={(newConfig) => setConfig(newConfig)}
                   />
                 )}
