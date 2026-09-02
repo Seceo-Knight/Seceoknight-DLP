@@ -851,6 +851,66 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     }
   }
 
+  # Reconciles the policy-driven elevated guard tasks (Wireless Guard, File
+  # Access Guard) that install-agent.ps1 registers on a fresh Install, but
+  # which Update-Agent historically never touched -- a machine that was
+  # installed before one of these features shipped, and has only ever run
+  # [2] Update since, would silently never get the new guard task at all.
+  # Found September 2, 2026: File Access Control policy fetched fine, the
+  # desired-state cache populated fine, mode was correctly "enforce" -- but
+  # nothing ever applied the DACL, because "SeceoKnight DLP File Access
+  # Guard" simply didn't exist on the machine (Get-ScheduledTaskInfo:
+  # "The system cannot find the file specified."). Same class of bug as
+  # Repair-WatchdogTask above, just for tasks Update never created at all
+  # rather than one it created wrong -- so on every Update, not just every
+  # Install, make sure both exist.
+  function Repair-GuardTasks($s) {
+    $guardTasks = @(
+      @{ Name = 'SeceoKnight DLP Wireless Guard'
+         Arg  = '--apply-wireless-guard'
+         Desc = 'SeceoKnight DLP - Reconcile Bluetooth/Nearby Sharing IFEO and policy state every 2 minutes (requires SYSTEM elevation)' }
+      @{ Name = 'SeceoKnight DLP File Access Guard'
+         Arg  = '--apply-file-access-guard'
+         Desc = 'SeceoKnight DLP - Reconcile per-file/folder NTFS access-control permissions every 2 minutes (requires SYSTEM elevation)' }
+    )
+
+    foreach ($t in $guardTasks) {
+      $existing = Get-ScheduledTask -TaskName $t.Name -ErrorAction SilentlyContinue
+      if ($existing) { continue }
+
+      Warn "$($t.Name) task is missing (machine predates this feature or was never freshly Installed since) - creating it..."
+      try {
+        $action = New-ScheduledTaskAction -Execute $s.ExePath -Argument $t.Arg -WorkingDirectory $INSTALL_DIR
+        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+          -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 3650)
+        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+          -ExecutionTimeLimit (New-TimeSpan -Minutes 1)
+
+        Register-ScheduledTask -TaskName $t.Name -Action $action -Trigger $trigger `
+          -Principal $principal -Settings $settings -Description $t.Desc -Force -ErrorAction Stop | Out-Null
+        Ok "$($t.Name) task created."
+
+        try { Start-ScheduledTask -TaskName $t.Name } catch {}
+      } catch {
+        Err "Could not create $($t.Name) task: $($_.Exception.Message)"
+      }
+    }
+
+    # File Access Guard's audit-trail forwarding needs failure auditing on
+    # the "File System" object-access subcategory -- also install-only
+    # historically, same gap as the tasks above. Idempotent, failure-only
+    # (see install-agent.ps1 for why not success too).
+    try {
+      $auditResult = & auditpol.exe /set /subcategory:"File System" /failure:enable /success:disable 2>&1
+      if ($LASTEXITCODE -ne 0) {
+        Warn "Could not enable 'File System' failure auditing (non-fatal): $auditResult"
+      }
+    } catch {
+      Warn "Could not run auditpol.exe (non-fatal): $($_.Exception.Message)"
+    }
+  }
+
   function Update-Agent($s) {
     $tmpPath = Join-Path $env:TEMP "$EXE_NAME.new"
     try {
@@ -918,6 +978,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     # A fresh $s.ExePath now points at the just-replaced binary, which is
     # what the new watchdog task action (if it needs rewriting) must call.
     Repair-WatchdogTask $s
+    Repair-GuardTasks $s
 
     Update-NativeHost
   }
