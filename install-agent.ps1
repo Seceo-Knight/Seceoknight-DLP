@@ -890,6 +890,27 @@ try {
         Write-ColorOutput "Could not create Wireless Guard task (non-fatal): $($_.Exception.Message)" -Type "Warning"
     }
 
+    # -- File Access Control: enable Object Access failure auditing -----------
+    # Prerequisite for the File Access Guard's audit-trail forwarding
+    # (ForwardFileAccessAuditEvents() in agent.cpp): a denied file-open only
+    # produces a Windows Security-log event (ID 4663) if the "File System"
+    # object-access audit subcategory has failure auditing turned on --
+    # off by default on a stock Windows install. Deliberately FAILURE only,
+    # not success: this agent only cares about denied attempts, and turning
+    # on success auditing too would flood the Security log with an entry
+    # for every ordinary, authorized file open anywhere the SACL applies.
+    # Idempotent -- safe to run on every install/update.
+    try {
+        $auditResult = & auditpol.exe /set /subcategory:"File System" /failure:enable /success:disable 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-ColorOutput "Enabled 'File System' failure auditing (auditpol)" -Type "Success"
+        } else {
+            Write-ColorOutput "Could not enable 'File System' failure auditing (non-fatal -- File Access Control will still enforce permissions, just without the denied-attempt audit log): $auditResult" -Type "Warning"
+        }
+    } catch {
+        Write-ColorOutput "Could not run auditpol.exe (non-fatal): $($_.Exception.Message)" -Type "Warning"
+    }
+
     # -- File Access Guard: repeating elevated task ----------------------------
     # File Access Control (GDPR-style per-file/folder access, August 2026):
     # restricts which named users/groups may open a classified file or

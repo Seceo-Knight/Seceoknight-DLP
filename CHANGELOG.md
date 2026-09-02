@@ -45,11 +45,8 @@ individual files are tracked in a durable on-disk map (not just in memory) speci
 this same day (see `IsUSBStorageBlockedInRegistry()` above) -- losing that tracking on a service restart would have
 silently un-protected every previously-classified file until it was rewritten.
 
-Two things intentionally scoped OUT of this pass, both documented in-code and worth being explicit about with
-whoever asked for this:
-- **No audit trail of denied attempts yet.** This prevents access; it does not yet log who was denied and when.
-  That needs Windows Security auditing (a SACL alongside the DACL, plus forwarding event IDs 4656/4663 to a DLP
-  event) and is real, separate work -- tracked as a fast-follow, not built here.
+One thing intentionally scoped OUT of this pass, documented in-code and worth being explicit about with whoever
+asked for this:
 - **Classification level is a local approximation, not the full server-side score.** The `file_system_monitoring`
   classify-on-write hook this reuses only ever computes a local severity (low/medium/high/critical) from regex/
   pattern matching -- it does not call the server's confidence-score `classify_content()`
@@ -62,6 +59,39 @@ Files changed: `server/app/api/v1/agents.py`, `server/app/core/domains.py`, `das
 `dashboard/src/components/policies/PolicyTypeSelector.tsx`, `PolicyCreatorModal.tsx`,
 `FileAccessControlPolicyForm.tsx` (new), `dashboard/src/utils/policyUtils.ts`,
 `agents/endpoint/windows/agent.cpp`, `install-agent.ps1`, `manage-agent.ps1`.
+
+---
+
+## Follow-up: File Access Control now logs denied attempts, not just prevents them (September 2, 2026)
+
+Closes the one gap called out above as deferred. Prevention without an audit trail is a materially weaker
+GDPR/enterprise control than most reviewers would accept -- Article 30 (records of processing) and Article 5(2)
+(accountability) both expect a log of *who tried and was denied*, not just that they were denied. This wires that
+up end to end, entirely on the Windows agent, no server API changes needed (the existing generic `/events/`
+endpoint already accepts an arbitrary `event_type`).
+
+**How it works**: `ApplyFileAccessControl()` now sets a failure-audit SACL (Everyone, `FILE_GENERIC_READ`,
+audit-on-failure only) alongside the DACL it was already setting, requiring `SeSecurityPrivilege` enabled via a new
+`EnablePrivilege()` helper (standard `AdjustTokenPrivileges` pattern). If the SACL write fails for any reason
+(observed to happen on some network shares / third-party filter drivers even from SYSTEM), it retries DACL-only
+rather than leaving the file unprotected -- access control always wins over the audit trail, never the reverse.
+
+A denied open then produces a Windows Security-log event (ID 4663) -- but only because
+`install-agent.ps1` now also runs `auditpol /set /subcategory:"File System" /failure:enable` at install/update time
+(idempotent; deliberately failure-only, not success, so this doesn't flood the Security log with every ordinary
+authorized file open). The elevated File Access Guard (already running every 2 minutes to reconcile ACLs) now also
+queries that log via the Windows Event Log API (`EvtQuery`/`EvtNext`/`EvtRender`, new `-lwevtapi` link dependency)
+for 4663 records since its last check, matches `ObjectName` against the set of paths it's currently protecting
+(case-insensitive, with a suffix-match fallback for the `\Device\HarddiskVolumeN\`-style paths some Windows
+configurations report instead of a plain drive letter), and forwards each match as a DLP event -- `event_type`
+`file_access`, `event_subtype` `access_denied`, with the denied user and process name pulled straight out of the
+event's own XML (`SubjectUserName`/`SubjectDomainName`/`ProcessName`) via the same one-shot
+`HttpClient`/`AgentConfig`/`JsonBuilder` pattern `HandleBlockedLaunch()` already uses to post an event from a
+process with no `DLPAgent` instance available. First run after install starts its query window from "now," not the
+beginning of the Security log, so it doesn't flood the dashboard with pre-existing history on rollout.
+
+Files changed: `agents/endpoint/windows/agent.cpp`, `install-agent.ps1`, `.github/workflows/build-windows-agent.yml`
+(`-lwevtapi`).
 
 ---
 
