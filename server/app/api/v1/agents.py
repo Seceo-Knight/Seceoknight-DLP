@@ -151,6 +151,34 @@ async def verify_agent_key(request: Request) -> Optional[str]:
     return agent_doc["agent_id"]
 
 
+async def require_agent_key(request: Request) -> str:
+    """Like ``verify_agent_key``, but a missing key is also rejected.
+
+    Several endpoints (real-time policy evaluation, classification,
+    decision, policy bundle download, ...) carry a docstring reading
+    "SECURITY: Requires a valid X-Agent-Key header" — added specifically
+    because being anonymous let external callers use them as a
+    classification oracle to tune content until it scored "Public", or
+    flood/DoS the classification engine. Every one of those endpoints was
+    calling ``verify_agent_key(...)`` and discarding the return value:
+    ``verify_agent_key`` only raises 401 when a key is PRESENT but wrong —
+    a request with no key at all returns ``None`` and is let through, so
+    every "Requires a valid key" endpoint was still fully anonymous-
+    accessible despite the comment (found in a policy-engine audit,
+    August 28 2026). Callers that genuinely need the old backward-
+    compatible "key optional" behavior (plain event ingestion from an
+    agent build predating key support) should keep calling
+    ``verify_agent_key`` directly instead of this function.
+    """
+    agent_id = await verify_agent_key(request)
+    if agent_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="X-Agent-Key header is required for this endpoint",
+        )
+    return agent_id
+
+
 class AgentBase(BaseModel):
     """Base agent model"""
     name: str = Field(..., description="Agent name/hostname")
@@ -1394,14 +1422,118 @@ async def get_wireless_policy(
 
     cfg = policy.config or {}
     mode = str(cfg.get("mode") or "enforce").lower()
-    if mode not in ("enforce", "audit"):
+    # "off" is a real, documented, UI-selectable mode (see docstring above
+    # and WirelessTransferControlPolicyForm.tsx's "Disable wireless
+    # transfer control entirely" option) -- it was missing from this
+    # whitelist, so selecting it got silently rewritten to "enforce",
+    # meaning an admin choosing to DISABLE the control instead actively
+    # BLOCKED Bluetooth file transfer / Nearby Sharing: the opposite of
+    # what was selected. Found in a policy-engine audit, August 28 2026.
+    if mode not in ("enforce", "audit", "off"):
         mode = "enforce"
 
     return {
-        "enforced": True,
+        "enforced": mode != "off",
         "mode": mode,
         "block_bluetooth_file_transfer": bool(cfg.get("block_bluetooth_file_transfer", True)),
         "block_nearby_sharing": bool(cfg.get("block_nearby_sharing", True)),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/{agent_id}/file-access-policy")
+async def get_file_access_policy(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    _verified_agent: str = Depends(require_agent_key),
+):
+    """
+    Per-file/folder access control policies for this agent -- the GDPR
+    Art. 32 "access control" measure. Unlike every other policy type this
+    endpoint returns a LIST: a site typically wants one policy scoping
+    "any file classified Confidential/Restricted" and a second scoping an
+    explicit folder list, and both apply simultaneously.
+
+    Enforcement is native NTFS DACLs (see ApplyFileAccessControl() in
+    agent.cpp) -- SYSTEM and Administrators always keep full control so an
+    admin can never lock themselves out; everyone else is denied unless
+    named in authorized_users/authorized_groups (resolved as local Windows
+    accounts or, if the endpoint is domain-joined, AD accounts/groups, via
+    LookupAccountNameW).
+
+    Two independent targeting modes, usable together on separate policies:
+      - classification_levels: applied the moment the agent's existing
+        file_system_monitoring pipeline classifies a newly written/modified
+        file under a monitored path as one of these levels.
+      - explicit_paths: applied/reconciled every policy-sync cycle,
+        independent of classification, for admin-named files/folders.
+
+    mode: "enforce" (agent sets the DACL) | "audit" (agent evaluates and
+    logs what it WOULD restrict, no ACL changes) | "off".
+
+    Unlike the DACL enforcement above, this endpoint does not yet report
+    who was denied access after the fact -- that requires SACL-based
+    Windows Security auditing and event-log forwarding, tracked as a
+    separate follow-on, not built here. Requires a valid ``X-Agent-Key``
+    (this response contains the authorized-user list, which is itself
+    sensitive). Added August 2026.
+    """
+    from sqlalchemy import select as _select
+    from app.models.policy import Policy
+
+    policies = (await db.execute(
+        _select(Policy).where(
+            Policy.type == "file_access_control",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        ).order_by(Policy.priority.desc())
+    )).scalars().all()
+
+    out = []
+    for policy in policies:
+        cfg = policy.config or {}
+        mode = str(cfg.get("mode") or "enforce").lower()
+        if mode not in ("enforce", "audit", "off"):
+            mode = "enforce"
+        if mode == "off":
+            continue
+
+        classification_levels = [
+            str(lvl).lower() for lvl in (cfg.get("classification_levels") or [])
+            if str(lvl).strip()
+        ]
+        explicit_paths = [
+            str(p) for p in (cfg.get("explicit_paths") or []) if str(p).strip()
+        ]
+        authorized_users = [
+            str(u) for u in (cfg.get("authorized_users") or []) if str(u).strip()
+        ]
+        authorized_groups = [
+            str(g) for g in (cfg.get("authorized_groups") or []) if str(g).strip()
+        ]
+
+        # A policy with no targeting at all and no authorized principals is
+        # not actionable -- skip rather than have the agent silently lock
+        # every file it happens to touch out from under every user.
+        if not (classification_levels or explicit_paths):
+            continue
+        if not (authorized_users or authorized_groups):
+            continue
+
+        out.append({
+            "id": str(policy.id),
+            "name": policy.name,
+            "mode": mode,
+            "classification_levels": classification_levels,
+            "explicit_paths": explicit_paths,
+            "authorized_users": authorized_users,
+            "authorized_groups": authorized_groups,
+            "always_allow_admins": bool(cfg.get("always_allow_admins", True)),
+        })
+
+    return {
+        "enforced": any(p["mode"] == "enforce" for p in out),
+        "policies": out,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1883,7 +2015,7 @@ async def evaluate_policy_realtime(
 
     This enables content-aware blocking based on sensitive data detection.
     """
-    await verify_agent_key(http_request)
+    await require_agent_key(http_request)
 
     try:
         # 0. Resolve the text to classify. When the caller sends raw bytes
@@ -2243,7 +2375,7 @@ async def evaluate_web_activity(
 
     Requires ``X-Agent-Key`` header, same as evaluate_policy_realtime.
     """
-    await verify_agent_key(http_request)
+    await require_agent_key(http_request)
 
     from sqlalchemy import select as _select
     from app.core import web_activity as wa

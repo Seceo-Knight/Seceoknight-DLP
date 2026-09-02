@@ -49,12 +49,35 @@ const requestKeys = new Map(); // requestId -> coalesce key, ONLY set for reques
 // for the same logical user action, so a content-based key wouldn't
 // coalesce them.
 const waWaiters = new Map(); // requestId -> respond
-const waRequestKeys = new Map(); // requestId -> coalesce key, ONLY set for requests we're willing to cache
-const waRecentDecisions = new Map(); // "host:activity" -> { decision, expiresAt }
+const waRequestKeys = new Map(); // requestId -> { key, contentSig }, ONLY set for requests we're willing to cache
+const waRecentDecisions = new Map(); // "host:activity" -> { decision, expiresAt, contentSig }
 const WA_COALESCE_WINDOW_MS = 4000; // matches COALESCE_WINDOW_MS's own reasoning below
 
 function waCoalesceKeyFor(meta) {
   return ((meta && meta.host) || "") + ":" + ((meta && meta.activity) || "");
+}
+
+// Cheap content-identity signature for the two activities that actually
+// carry user-visible text (web-activity.js sends `content` only for
+// "post" and "ai_response" — genuine prompts/replies; internal metadata/
+// moderation pre-check calls this cache was built to coalesce have no
+// `content` at all). Found in a policy-engine audit, August 28 2026: the
+// host+activity-only key above was reused as-is for TWO DIFFERENT real
+// prompts, or a prompt followed by a genuinely different AI reply, sent
+// seconds apart to the same host — a real detection bypass, not just
+// noise, since ai_response inspection is the headline capability this
+// feature exists for. Fixed the same way inject.js's bodyIdentityKey()
+// fixed the equivalent bug in the upload path: a cheap length+prefix
+// signature, not a full hash, cheap enough to compute on every call and
+// good enough to tell "same text, re-fired" apart from "different text."
+// When `content` is absent (the original internal-call case this cache
+// was built for), this returns "" on both sides and behaves exactly as
+// before — host+activity coalescing across those calls' differing bodies
+// is still intentional and preserved.
+function waContentSig(meta) {
+  var c = meta && typeof meta.content === "string" ? meta.content : "";
+  if (!c) return "";
+  return c.length + ":" + c.slice(0, 40);
 }
 
 // In-flight requests, keyed the same way as recentDecisions. A completed
@@ -169,7 +192,9 @@ function connect() {
           level: msg.level, reason: msg.reason, redactedContent: msg.redactedContent,
         };
         log("web-activity decision", msg.requestId, "->", decision.action, decision.appCategory || "");
-        const waKey = waRequestKeys.get(msg.requestId);
+        const waTracked = waRequestKeys.get(msg.requestId);
+        const waKey = waTracked && waTracked.key;
+        const waSig = (waTracked && waTracked.contentSig) || "";
         waRequestKeys.delete(msg.requestId);
         // Cache for coalescing (see waRecentDecisions' own comment) — EXCEPT
         // "redact", whose redactedContent is specific to THIS request's own
@@ -180,7 +205,7 @@ function connect() {
         // problem: the action itself doesn't depend on which exact
         // background request triggered it.
         if (waKey && decision.action !== "redact") {
-          waRecentDecisions.set(waKey, { decision, expiresAt: Date.now() + WA_COALESCE_WINDOW_MS });
+          waRecentDecisions.set(waKey, { decision, expiresAt: Date.now() + WA_COALESCE_WINDOW_MS, contentSig: waSig });
         }
         respond(decision);
         return;
@@ -393,8 +418,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // event) for every qualifying background request a genai SPA fires
     // within the same burst of real user activity.
     const waKey = waCoalesceKeyFor(message.meta);
+    const waSig = waContentSig(message.meta);
     const waCached = waRecentDecisions.get(waKey);
-    if (waCached && waCached.expiresAt > Date.now()) {
+    // Require the content signature to match too (see waContentSig's own
+    // comment) -- host+activity alone isn't enough to trust a cached
+    // decision for a content-bearing request.
+    if (waCached && waCached.expiresAt > Date.now() && waCached.contentSig === waSig) {
       log("reusing cached web-activity decision for", waKey, "->", waCached.decision.action);
       sendResponse(waCached.decision);
       return false;
@@ -407,7 +436,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
     }
     waWaiters.set(message.requestId, sendResponse);
-    waRequestKeys.set(message.requestId, waKey);
+    waRequestKeys.set(message.requestId, { key: waKey, contentSig: waSig });
     try {
       port.postMessage(Object.assign({ type: "web_activity", requestId: message.requestId }, message.meta));
     } catch (e) {

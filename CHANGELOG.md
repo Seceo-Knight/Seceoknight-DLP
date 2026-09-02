@@ -8,6 +8,174 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## New: File Access Control policy type (GDPR-style per-file access) (September 2, 2026)
+
+Every existing policy type governs content LEAVING the endpoint (clipboard, USB, print, network share, email,
+browser upload). None of them govern who may open a file at all -- a distinct GDPR Art. 32 "access control"
+requirement, and the specific gap raised in a security-team requirements conversation. Added as a new policy type,
+`file_access_control`, enforced as a real NTFS DACL on the Windows agent (Linux/macOS not covered by this pass).
+
+Targeting is two independent, combinable modes: by classification level (any file the agent's
+`file_system_monitoring` classify-on-write pipeline rates Confidential/Restricted/etc. gets restricted the moment
+it's written) or by an explicit admin-named path list (reconciled every policy-sync cycle regardless of
+classification). SYSTEM and local Administrators always retain full control so IT can never lock itself out; every
+other principal is denied unless named in the policy's authorized users/groups (local Windows accounts, or AD
+accounts/groups if the endpoint is domain-joined -- resolved via `LookupAccountNameA`).
+
+**Server**: `GET /agents/{id}/file-access-policy` in `agents.py` (mirrors the existing `wireless-policy` /
+`printer-policy` agent-polling pattern -- this policy type isn't expressed as conditions/actions rules, so it
+doesn't go through `policy_transformer.py`/`database_policy_evaluator.py` at all). Domain-mapped to the existing
+(previously unused) `ACCESS_CONTROL` RBAC domain in `domains.py`. Requires a valid `X-Agent-Key` (`require_agent_key`,
+not the permissive `verify_agent_key`) since the response contains the authorized-user list, which is itself
+sensitive.
+
+**Dashboard**: new "File Access Control (GDPR)" policy type -- `FileAccessControlPolicyForm.tsx`, registered in
+`types/policy.ts`, `PolicyTypeSelector.tsx`, `PolicyCreatorModal.tsx`, and `policyUtils.ts` (icon/label/summary/
+validation, matching every other policy type's registration surface).
+
+**Windows agent** (`agent.cpp`): confirmed live in this codebase (tasks #145/#147, Wireless Guard) that the main
+agent process runs unelevated and cannot reliably set `WRITE_DAC` on files it doesn't own -- so, same split as
+Wireless/Browser-Extension Guard, the main process only fetches policy and writes a desired-state cache
+(`file_access_targets.cache`); a new SYSTEM/Highest repeating scheduled task ("SeceoKnight DLP File Access Guard",
+registered by `install-agent.ps1`, `seceoknight_agent.exe --apply-file-access-guard`) does the actual
+`SetNamedSecurityInfoA` call every 2 minutes, self-healing against manual tampering and reverting any path that
+drops out of scope (policy removed/disabled, or a file no longer classified as targeted). Classification-matched
+individual files are tracked in a durable on-disk map (not just in memory) specifically to avoid the exact
+"in-memory tracker resets to empty on process restart" bug shape already found and fixed for USB storage blocking
+this same day (see `IsUSBStorageBlockedInRegistry()` above) -- losing that tracking on a service restart would have
+silently un-protected every previously-classified file until it was rewritten.
+
+One thing intentionally scoped OUT of this pass, documented in-code and worth being explicit about with whoever
+asked for this:
+- **Classification level is a local approximation, not the full server-side score.** The `file_system_monitoring`
+  classify-on-write hook this reuses only ever computes a local severity (low/medium/high/critical) from regex/
+  pattern matching -- it does not call the server's confidence-score `classify_content()`
+  (Public/Internal/Confidential/Restricted) per file write, since doing so would mean POSTing full file content to
+  the server on every monitored save. `LevelFromLocalSeverity()` maps severity onto the same four-tier vocabulary
+  the rest of the product uses, mirroring (not reproducing) the score thresholds `classification_engine.py` uses
+  server-side.
+
+Files changed: `server/app/api/v1/agents.py`, `server/app/core/domains.py`, `dashboard/src/types/policy.ts`,
+`dashboard/src/components/policies/PolicyTypeSelector.tsx`, `PolicyCreatorModal.tsx`,
+`FileAccessControlPolicyForm.tsx` (new), `dashboard/src/utils/policyUtils.ts`,
+`agents/endpoint/windows/agent.cpp`, `install-agent.ps1`, `manage-agent.ps1`.
+
+---
+
+## Follow-up: File Access Control now logs denied attempts, not just prevents them (September 2, 2026)
+
+Closes the one gap called out above as deferred. Prevention without an audit trail is a materially weaker
+GDPR/enterprise control than most reviewers would accept -- Article 30 (records of processing) and Article 5(2)
+(accountability) both expect a log of *who tried and was denied*, not just that they were denied. This wires that
+up end to end, entirely on the Windows agent, no server API changes needed (the existing generic `/events/`
+endpoint already accepts an arbitrary `event_type`).
+
+**How it works**: `ApplyFileAccessControl()` now sets a failure-audit SACL (Everyone, `FILE_GENERIC_READ`,
+audit-on-failure only) alongside the DACL it was already setting, requiring `SeSecurityPrivilege` enabled via a new
+`EnablePrivilege()` helper (standard `AdjustTokenPrivileges` pattern). If the SACL write fails for any reason
+(observed to happen on some network shares / third-party filter drivers even from SYSTEM), it retries DACL-only
+rather than leaving the file unprotected -- access control always wins over the audit trail, never the reverse.
+
+A denied open then produces a Windows Security-log event (ID 4663) -- but only because
+`install-agent.ps1` now also runs `auditpol /set /subcategory:"File System" /failure:enable` at install/update time
+(idempotent; deliberately failure-only, not success, so this doesn't flood the Security log with every ordinary
+authorized file open). The elevated File Access Guard (already running every 2 minutes to reconcile ACLs) now also
+queries that log via the Windows Event Log API (`EvtQuery`/`EvtNext`/`EvtRender`, new `-lwevtapi` link dependency)
+for 4663 records since its last check, matches `ObjectName` against the set of paths it's currently protecting
+(case-insensitive, with a suffix-match fallback for the `\Device\HarddiskVolumeN\`-style paths some Windows
+configurations report instead of a plain drive letter), and forwards each match as a DLP event -- `event_type`
+`file_access`, `event_subtype` `access_denied`, with the denied user and process name pulled straight out of the
+event's own XML (`SubjectUserName`/`SubjectDomainName`/`ProcessName`) via the same one-shot
+`HttpClient`/`AgentConfig`/`JsonBuilder` pattern `HandleBlockedLaunch()` already uses to post an event from a
+process with no `DLPAgent` instance available. First run after install starts its query window from "now," not the
+beginning of the Security log, so it doesn't flood the dashboard with pre-existing history on rollout.
+
+Files changed: `agents/endpoint/windows/agent.cpp`, `install-agent.ps1`, `.github/workflows/build-windows-agent.yml`
+(`-lwevtapi`).
+
+---
+
+## Policy-engine audit: 6 fixes across server, SMTP relay, browser extension, Windows agent (August 28, 2026)
+
+Enterprise-readiness pass: audited all 18 DLP policy types end-to-end (dispatch
+logic, evaluator, agent-side enforcement on both Windows and Linux) via a
+parallel code audit. One finding (Print Content Prevention printing anyway
+when the DLP server is unreachable, even with strict-block selected) was
+reviewed and accepted as intended fail-open behavior. The following were
+fixed:
+
+**🔴 Anonymous access allowed to `/agents/{id}/policy/evaluate` and 6 other
+agent-facing endpoints.** `verify_agent_key()` returns `None` (not an error)
+when no `X-Agent-Key` header is sent — kept intentionally, for backward
+compatibility with old agent builds on read-only endpoints. But 7 call sites
+across `agents.py`, `classification.py`, and `decision.py` called it and
+*discarded the return value*, while their docstrings claimed "SECURITY:
+Requires a valid X-Agent-Key header." In practice any unauthenticated caller
+could submit content for policy evaluation, upload event batches, and pull
+the full policy bundle. Added `require_agent_key()` (raises 401 on a missing
+key) and switched the endpoints that materially decide/leak policy data to
+it, while endpoints that only ever wrote low-trust telemetry (`create_event`)
+keep the permissive check as-is.
+
+**🔴 SMTP relay failed open on its own broken credentials.** `dlp_client.py`
+treated a missing/rotated/typo'd `RELAY_AGENT_KEY` the same as "the DLP
+server is down," which `BLOCK_ON_DLP_ERROR` (default `False`) is meant to
+tolerate. That meant a simple relay misconfiguration silently disabled all
+outbound email DLP forever, with nothing but a log line. Now an unset key or
+a 401/403 from the DLP server always fails closed, regardless of
+`BLOCK_ON_DLP_ERROR` — that setting still governs genuine server-unreachable
+outages, which is a materially different failure class.
+
+**🟢 Wireless Transfer Control's "Off" mode was enforced anyway.** The
+`/agents/{id}/policy/wireless-transfer` endpoint never read `config.mode` at
+all — every policy came back `"enforced": true` no matter what the dashboard
+had saved, so selecting "Off" or "Audit" had no effect on the agent. Fixed to
+read and pass through the actual mode.
+
+**🟢 `not_in` / `not_equals` operators rejected by the policy validator.**
+Both are fully implemented in `DatabasePolicyEvaluator._evaluate_rule` and
+produced by real callers (`ClassificationPolicyForm.tsx`'s operator dropdown,
+`policy_transformer.py`'s exception-path handling for Network Share Transfer
+Control) but were never added to `PolicyService._VALID_OPERATORS`. Every save
+of a policy using either operator was rejected with a 400 — the documented
+exception mechanism could not be used from the UI at all. Added both to the
+whitelist.
+
+**🔴 File Transfer Monitoring was inert on Windows.** The Linux agent reads
+`protectedPaths` from policy config; the Windows agent's `ParsePolicyArray`
+only ever populated `monitoredPaths` from a `monitoredPaths` key that this
+policy type never sends — so the policy silently matched nothing on Windows
+while working correctly on Linux. Windows now also merges in `protectedPaths`
+for this policy type.
+
+**🟢 USB storage stayed disabled after a policy change to "allow," until
+next reboot.** `install-agent.ps1` runs an unconditional boot-time scheduled
+task that disables the USBSTOR registry key before the agent process even
+starts, but the in-memory `usbBlockingActive` tracker always starts `false`
+on process launch — so the first policy-sync pass after a cold boot could
+never detect "previously blocking, now should restore," even when policy
+said USB should be allowed. Added `IsUSBStorageBlockedInRegistry()` and seed
+`usbBlockingActive` from actual registry state once per process before the
+first policy-sync pass.
+
+**🟢 Web Activity Control's coalescing cache was content-blind.**
+`background.js`'s `waCoalesceKeyFor` deduped decisions by `host`/`destHost`
+alone, so two genuinely different requests to the same host within the
+coalescing window could silently reuse each other's decision — the same bug
+pattern already fixed twice elsewhere in this codebase (`inject.js`,
+`web-activity.js`). Added `waContentSig()` and require it to match before
+reusing a cached decision. Extension version bumped 1.0.9 → 1.0.10 to trigger
+self-update.
+
+Files changed: `server/app/api/v1/agents.py`,
+`server/app/api/v1/classification.py`, `server/app/api/v1/decision.py`,
+`server/app/services/policy_service.py`, `smtp-relay/app/dlp_client.py`,
+`agents/browser-extension/src/background.js`,
+`agents/browser-extension/manifest.json`,
+`agents/endpoint/windows/agent.cpp`.
+
+---
+
 ## 🔴 Fix: every Events page Quick Filter returned "No events found" (August 28, 2026)
 
 Live production finding: clicking any of the six Quick Filters on the

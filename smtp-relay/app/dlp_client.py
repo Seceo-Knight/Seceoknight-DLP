@@ -33,9 +33,22 @@ async def evaluate(file_name: str, text: str, recipients: str,
     keeping email consistent with USB/cloud instead of each channel inventing
     its own answer for content it can't see.
     """
+    # SECURITY: a MISSING or WRONG relay credential is the relay's own
+    # misconfiguration, not "the DLP backend is down" -- conflating the two
+    # under BLOCK_ON_DLP_ERROR (which defaults to False, per the documented
+    # "genuine outage" fail-open design) meant a simple unset/rotated/typo'd
+    # RELAY_AGENT_KEY silently disabled ALL outbound email DLP, forever,
+    # with nothing but a log line -- no bounce, no alert. Both cases below
+    # fail CLOSED unconditionally, regardless of BLOCK_ON_DLP_ERROR: this
+    # is a "our own credentials are broken" problem, never mistake it for
+    # the server being unreachable. Found in a policy-engine audit, August
+    # 28 2026.
     if not config.DLP_AGENT_KEY:
-        log.warning("no DLP_AGENT_KEY configured — cannot evaluate")
-        return ("block" if config.BLOCK_ON_DLP_ERROR else "allow"), None, "relay-unconfigured"
+        log.error(
+            "no DLP_AGENT_KEY configured -- outbound email DLP is BLOCKED "
+            "(fail-closed; this is a relay misconfiguration, not a DLP outage)"
+        )
+        return "block", None, "relay-unconfigured"
     url = f"{config.DLP_SERVER_URL.rstrip('/')}/agents/{config.DLP_AGENT_ID}/policy/evaluate"
     try:
         async with httpx.AsyncClient(timeout=config.DLP_TIMEOUT, follow_redirects=True) as c:
@@ -51,6 +64,14 @@ async def evaluate(file_name: str, text: str, recipients: str,
                     **({"inspection_skipped": skipped} if skipped else {}),
                 },
             )
+            if r.status_code in (401, 403):
+                log.error(
+                    "DLP server rejected our own X-Agent-Key (HTTP %s) -- outbound "
+                    "email DLP is BLOCKED (fail-closed; rotate RELAY_AGENT_KEY, this "
+                    "is a relay misconfiguration, not a DLP outage)",
+                    r.status_code,
+                )
+                return "block", None, f"relay-credential-rejected: HTTP {r.status_code}"
             r.raise_for_status()
             body = r.json()
         level = (body.get("classification") or {}).get("level")
@@ -59,7 +80,7 @@ async def evaluate(file_name: str, text: str, recipients: str,
         if body.get("alert_severity"):
             return "alert", level, body.get("reason") or ""
         return "allow", level, body.get("reason") or ""
-    except Exception as e:  # noqa: BLE001 — a DLP outage must not silently mangle mail
+    except Exception as e:  # noqa: BLE001 — a genuine DLP outage, per BLOCK_ON_DLP_ERROR
         log.error("evaluate failed for %s: %s", file_name, e)
         return ("block" if config.BLOCK_ON_DLP_ERROR else "allow"), None, f"evaluate-error: {e}"
 

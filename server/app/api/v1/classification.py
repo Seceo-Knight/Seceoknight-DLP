@@ -117,8 +117,8 @@ async def classify_content(
     "Public" and (b) DoS the server via arbitrarily large `content`
     against expensive regex rules.
     """
-    from app.api.v1.agents import verify_agent_key
-    await verify_agent_key(http_request)
+    from app.api.v1.agents import require_agent_key
+    await require_agent_key(http_request)
 
     engine = ClassificationEngine(session)
     result = await engine.classify_content(request.content, request.context)

@@ -4,7 +4,7 @@
  * Monitors file operations, clipboard, and USB devices for data loss prevention
  * 
  * Build Instructions (MinGW):
- * g++ -std=c++17 -O2 agent.cpp -o seceoknight_agent.exe -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lws2_32 -lmpr -static
+ * g++ -std=c++17 -O2 agent.cpp -o seceoknight_agent.exe -lwinhttp -lwbemuuid -lole32 -loleaut32 -luser32 -lws2_32 -lmpr -lwevtapi -static
  * 
  * Build Instructions (MSVC):
  * cl.exe /EHsc /std:c++17 /O2 agent.cpp /link winhttp.lib wbemuuid.lib ole32.lib oleaut32.lib user32.lib ws2_32.lib
@@ -28,7 +28,23 @@
  // #pragma comment(lib,...) is a silent no-op -- the real link dependency is
  // the explicit -lmpr flag in .github/workflows/build-windows-agent.yml.
  #include <winnetwk.h>
- 
+ // SetNamedSecurityInfoA/GetNamedSecurityInfoA/SetEntriesInAclA (File Access
+ // Control -- explicit NTFS DACL enforcement, see ApplyFileAccessControl()
+ // below) and LookupAccountNameA (local + AD account/group -> SID
+ // resolution) live in Advapi32 -- already linked (-ladvapi32 in
+ // build-windows-agent.yml) for the registry/service-control APIs used
+ // throughout this file, so no new link dependency.
+ #include <accctrl.h>
+ #include <aclapi.h>
+ #include <sddl.h>
+ // Windows Event Log query API (EvtQuery/EvtNext/EvtRender/EvtClose) --
+ // used by ForwardFileAccessAuditEvents() below to read back the Security-
+ // log entries the SACL set in ApplyFileAccessControl() produces, so a
+ // denied file-open attempt shows up as a dashboard event, not just a
+ // silent OS-level block. Lives in Wevtapi.lib -- new link dependency,
+ // added as -lwevtapi in build-windows-agent.yml.
+ #include <winevt.h>
+
  #include <cstdio>
  #include <iostream>
  #include <fstream>
@@ -2723,6 +2739,57 @@ static ClassificationResult Classify(const std::string& content,
      // changed, not on every sync tick.
      std::string lastWirelessSig;
 
+     // ── File Access Control (GDPR-style per-file/folder access) ─────────────
+     // Synced from GET /agents/{id}/file-access-policy. Unlike every other
+     // policy type in this file (which govern content LEAVING the endpoint --
+     // clipboard/USB/print/network/email), this one governs who may OPEN a
+     // file at all, enforced as a real NTFS DACL. Same unelevated-process
+     // problem as wireless control above (confirmed live in tasks #145/#147):
+     // this process cannot reliably grant itself WRITE_DAC on files it
+     // doesn't own, so -- same split -- this only fetches policy and writes a
+     // desired-state cache (FileAccessTargetsCachePath()); a separate
+     // SYSTEM/Highest scheduled task ("SeceoKnight DLP File Access Guard",
+     // registered by install-agent.ps1) runs
+     // `seceoknight_agent.exe --apply-file-access-guard` on a repeating timer
+     // and does the actual SetNamedSecurityInfoA call (HandleApplyFileAccessGuard).
+     struct FileAccessPolicyEntry {
+         std::string id;
+         std::string mode;                              // enforce | audit
+         std::vector<std::string> classificationLevels;  // lowercased: public/internal/confidential/restricted
+         std::vector<std::string> explicitPaths;
+         std::vector<std::string> authorizedUsers;
+         std::vector<std::string> authorizedGroups;
+         bool alwaysAllowAdmins = true;
+     };
+     // One entry per file the classify-on-write hook has matched against a
+     // classification_levels target. Keyed by path so re-classifying the same
+     // file (e.g. re-saved) just refreshes its entry instead of duplicating
+     // it. This is the DURABLE record of "which specific files are currently
+     // protected by classification" -- deliberately NOT just held in memory
+     // and reconstructed from fileAccessPolicies each cycle, because unlike
+     // explicit_paths (which the server can always re-tell us in full), the
+     // server has no record of which individual files on THIS endpoint were
+     // ever classified. Losing this on a process restart would silently
+     // un-protect every file the classify-on-write hook had previously
+     // caught, the exact same "in-memory tracker starts false/empty on
+     // launch" bug shape already found and fixed for USB storage blocking
+     // (see IsUSBStorageBlockedInRegistry(), added August 28 2026) -- so this
+     // map is loaded from FileAccessTargetsCachePath() once at first use and
+     // kept in sync with the cache file from then on, never reset blind.
+     struct FileAccessCacheEntry {
+         std::string source;          // "classification" | "explicit"
+         std::string mode;
+         bool alwaysAllowAdmins = true;
+         std::string policyId;
+         std::string classificationLevel;  // only set for source == "classification"
+         std::vector<std::string> authorizedUsers;
+         std::vector<std::string> authorizedGroups;
+     };
+     std::mutex fileAccessMutex;
+     std::vector<FileAccessPolicyEntry> fileAccessPolicies;         // last fetched from the server
+     std::map<std::string, FileAccessCacheEntry> fileAccessClassificationTargets;  // path -> entry
+     bool fileAccessTargetsLoaded = false;
+
      // ── Browser extension force-install (gap-scan of CyberSentinel-DLP,
      // August 18, 2026) ───────────────────────────────────────────────────
      // Synced from GET /extension/info every policy-sync cycle. Same
@@ -3376,7 +3443,49 @@ if (!shouldBlock) {
         
         return true;
     }
-     
+
+    // Read-only counterpart to BlockUSBStorageViaRegistry() above -- reports
+    // what's ACTUALLY in the registry right now (Start == 4, "Disabled"),
+    // instead of trusting in-memory state.
+    //
+    // Needed because usbBlockingActive (an in-memory std::atomic<bool>,
+    // declared {false}) starts false on EVERY process launch, including a
+    // cold boot where install-agent.ps1's "SeceoKnight DLP USB Block"
+    // scheduled task has ALREADY disabled USB storage via this same
+    // registry key, unconditionally, before this agent process even starts
+    // -- it doesn't check policy at all, just disables on every boot as a
+    // fail-closed-until-the-agent-confirms-otherwise measure. The
+    // reconciliation logic that's supposed to restore USB access when a
+    // policy says Alert/Log-only (or when no usb_device_monitoring policy
+    // exists at all) only fires on a `previousUsbBlocking == true` edge --
+    // and since the in-memory flag falsely starts at false every cold
+    // boot, that edge can never be observed there, so the restore path
+    // never ran: USB storage stayed disabled at the OS level regardless of
+    // what the policy said, on every fresh boot, fleet-wide. Fixed by
+    // seeding usbBlockingActive from this actual registry read once, right
+    // before the first policy reconciliation pass (see its call site).
+    // Found in a policy-engine audit, August 28 2026.
+    bool IsUSBStorageBlockedInRegistry() {
+        HKEY hKey;
+        LONG result = RegOpenKeyExA(HKEY_LOCAL_MACHINE, USB_STOR_REG_PATH, 0, KEY_QUERY_VALUE, &hKey);
+        if (result != ERROR_SUCCESS) {
+            // Can't read it -- don't claim it's blocked when we're not sure;
+            // that would make this fix itself capable of introducing a
+            // fail-open-by-omission, which is exactly the class of bug this
+            // whole audit was hunting for.
+            return false;
+        }
+        DWORD startValue = 3; // default: "Manual" (not blocked) if unreadable
+        DWORD dataSize = sizeof(DWORD);
+        DWORD valueType = 0;
+        result = RegQueryValueExA(hKey, "Start", NULL, &valueType, (BYTE*)&startValue, &dataSize);
+        RegCloseKey(hKey);
+        if (result != ERROR_SUCCESS || valueType != REG_DWORD) {
+            return false;
+        }
+        return startValue == 4; // 4 = Disabled, matches BlockUSBStorageViaRegistry(true)
+    }
+
      bool DisableDevice(HDEVINFO hDevInfo, PSP_DEVINFO_DATA pDevInfoData) {
          SP_PROPCHANGE_PARAMS propChangeParams;
          ZeroMemory(&propChangeParams, sizeof(SP_PROPCHANGE_PARAMS));
@@ -4866,6 +4975,8 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          FetchWirelessPolicy();
          // Printer device control + print content inspection -- same reasoning, own endpoint.
          FetchPrinterPolicy();
+         // File Access Control (GDPR-style per-file/folder access) -- same reasoning, own endpoint.
+         FetchFileAccessPolicy();
          // File Identity Denylist (task #152) -- same reasoning, own endpoint.
          FetchFileIdentityDenylist();
          // Browser extension force-install (gap-scan of CyberSentinel-DLP,
@@ -5531,6 +5642,280 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          }
      }
 
+     // ── File Access Control support ──────────────────────────────────────
+
+     // Same directory-resolution rule as WirelessStateCachePath() above --
+     // must be somewhere a STANDARD USER can write (this process's real
+     // privilege level); the elevated guard reads from the same path.
+     std::string FileAccessTargetsCachePath() const {
+         const char* envLogDir = std::getenv("SECEOKNIGHT_LOG_DIR");
+         std::string dir = envLogDir ? envLogDir : "C:\\ProgramData\\SeceoKnight\\logs";
+         try { fs::create_directories(dir); } catch (...) {}
+         return dir + "\\file_access_targets.cache";
+     }
+
+     // Cache lines are tab-delimited; a stray tab/newline inside a path or
+     // account name would desync every field after it for the elevated
+     // guard reading this back, so scrub them out (rare on Windows, cheap
+     // to guard against).
+     static std::string SanitizeCacheField(const std::string& s) {
+         std::string out = s;
+         for (char& c : out) {
+             if (c == '\t' || c == '\n' || c == '\r') c = ' ';
+         }
+         return out;
+     }
+
+     static std::string JoinCsv(const std::vector<std::string>& items) {
+         std::string out;
+         for (size_t i = 0; i < items.size(); i++) {
+             if (i) out += ",";
+             out += SanitizeCacheField(items[i]);
+         }
+         return out;
+     }
+
+     static std::vector<std::string> SplitCsv(const std::string& s) {
+         std::vector<std::string> out;
+         std::stringstream ss(s);
+         std::string item;
+         while (std::getline(ss, item, ',')) {
+             size_t a = item.find_first_not_of(" \t");
+             if (a == std::string::npos) continue;
+             size_t b = item.find_last_not_of(" \t");
+             out.push_back(item.substr(a, b - a + 1));
+         }
+         return out;
+     }
+
+     // The local file_system_monitoring classifier (ContentClassifier::Classify,
+     // which the classify-on-write hook below already calls for every
+     // monitored file write) only ever produces a severity rating
+     // (low/medium/high/critical) from local regex/pattern matching -- it does
+     // NOT call the server's confidence-score classify_content()
+     // (Public/Internal/Confidential/Restricted, see
+     // ClassificationEngine._determine_classification in
+     // classification_engine.py) per file write. That's deliberate: doing so
+     // would mean POSTing full file content to the server on every single
+     // monitored save, a real latency/load cost on a hot local path this
+     // codebase has otherwise kept purely local. This maps the local severity
+     // signal onto the same four-tier vocabulary the rest of the product (and
+     // the File Access Control policy form) uses -- mirroring, not
+     // reproducing, the score thresholds classification_engine.py uses
+     // server-side (>=0.8 Restricted, >=0.6 Confidential, >=0.3 Internal,
+     // else Public). Documented as an intentional v1 scoping decision, not a
+     // hidden approximation -- see CHANGELOG.md. Added August 2026.
+     static std::string LevelFromLocalSeverity(const std::string& severity) {
+         std::string s = ToLower(severity);
+         if (s == "critical") return "restricted";
+         if (s == "high") return "confidential";
+         if (s == "medium") return "internal";
+         return "public";
+     }
+
+     // Loads previously-cached "classification" sourced entries (this
+     // process's own prior output) back into memory once, so a restart of
+     // the agent service doesn't silently drop protection for files it
+     // classified before the restart -- see the fileAccessClassificationTargets
+     // member declaration above for the full reasoning (same bug shape as
+     // the USB cold-boot fix, task #12, August 28 2026).
+     void EnsureFileAccessTargetsLoaded() {
+         if (fileAccessTargetsLoaded) return;
+         fileAccessTargetsLoaded = true;
+         try {
+             std::ifstream f(FileAccessTargetsCachePath(), std::ios::binary);
+             if (!f.is_open()) return;
+             std::string line;
+             while (std::getline(f, line)) {
+                 std::vector<std::string> fields;
+                 std::stringstream ss(line);
+                 std::string field;
+                 while (std::getline(ss, field, '\t')) fields.push_back(field);
+                 if (fields.size() < 8 || fields[0] != "classification") continue;
+                 FileAccessCacheEntry e;
+                 e.source = fields[0];
+                 const std::string& path = fields[1];
+                 e.mode = fields[2];
+                 e.alwaysAllowAdmins = fields[3] == "1";
+                 e.policyId = fields[4];
+                 e.classificationLevel = fields[5];
+                 e.authorizedUsers = SplitCsv(fields[6]);
+                 e.authorizedGroups = SplitCsv(fields[7]);
+                 if (!path.empty()) fileAccessClassificationTargets[path] = e;
+             }
+             logger.Debug("Loaded " + std::to_string(fileAccessClassificationTargets.size()) +
+                          " previously-classified file access targets from cache");
+         } catch (const std::exception& e) {
+             logger.Debug(std::string("EnsureFileAccessTargetsLoaded failed: ") + e.what());
+         } catch (...) {
+             logger.Debug("EnsureFileAccessTargetsLoaded failed");
+         }
+     }
+
+     // Rewrites the desired-state cache the elevated File Access Guard reads.
+     // Called (a) on every successful policy fetch, same "written on EVERY
+     // successful fetch, not just on change" reasoning as
+     // SaveWirelessStateToCache() -- the guard's own independent wake-up
+     // schedule must always see current state regardless of exact timing --
+     // and (b) immediately from the classify-on-write hook, for lower
+     // latency than waiting for the next policy-sync cycle. Must be called
+     // with fileAccessMutex already held.
+     void WriteFileAccessTargetsCacheLocked() {
+         try {
+             std::ofstream f(FileAccessTargetsCachePath(), std::ios::trunc | std::ios::binary);
+             if (!f.is_open()) {
+                 logger.Warning("Could not write file access targets cache: " + FileAccessTargetsCachePath());
+                 return;
+             }
+             for (const auto& kv : fileAccessClassificationTargets) {
+                 const auto& e = kv.second;
+                 f << "classification\t" << SanitizeCacheField(kv.first) << "\t" << e.mode << "\t"
+                   << (e.alwaysAllowAdmins ? "1" : "0") << "\t" << e.policyId << "\t"
+                   << e.classificationLevel << "\t" << JoinCsv(e.authorizedUsers) << "\t"
+                   << JoinCsv(e.authorizedGroups) << "\n";
+             }
+             for (const auto& policy : fileAccessPolicies) {
+                 if (policy.mode == "off") continue;
+                 for (const auto& path : policy.explicitPaths) {
+                     f << "explicit\t" << SanitizeCacheField(path) << "\t" << policy.mode << "\t"
+                       << (policy.alwaysAllowAdmins ? "1" : "0") << "\t" << policy.id << "\t" << "" << "\t"
+                       << JoinCsv(policy.authorizedUsers) << "\t" << JoinCsv(policy.authorizedGroups) << "\n";
+                 }
+             }
+         } catch (const std::exception& e) {
+             logger.Warning(std::string("Failed to write file access targets cache: ") + e.what());
+         } catch (...) {
+             logger.Warning("Failed to write file access targets cache");
+         }
+     }
+
+     std::vector<FileAccessPolicyEntry> ParseFileAccessPolicies(const std::string& response) {
+         std::vector<FileAccessPolicyEntry> out;
+         size_t arrPos = response.find("\"policies\"");
+         if (arrPos == std::string::npos) return out;
+         size_t arrStart = response.find("[", arrPos);
+         size_t arrEnd = FindMatchingBracket(response, arrStart, '[', ']');
+         if (arrStart == std::string::npos || arrEnd == std::string::npos) return out;
+         std::string arrContent = response.substr(arrStart + 1, arrEnd - arrStart - 1);
+
+         size_t pos = 0;
+         while (pos < arrContent.length()) {
+             size_t objStart = arrContent.find("{", pos);
+             if (objStart == std::string::npos) break;
+             size_t objEnd = FindMatchingBracket(arrContent, objStart, '{', '}');
+             if (objEnd == std::string::npos) break;
+             std::string obj = arrContent.substr(objStart, objEnd - objStart + 1);
+
+             FileAccessPolicyEntry e;
+             e.id = ExtractJsonString(obj, "id");
+             e.mode = ToLower(ExtractJsonString(obj, "mode"));
+             e.classificationLevels = ExtractJsonArray(obj, "classification_levels");
+             for (auto& lvl : e.classificationLevels) lvl = ToLower(lvl);
+             e.explicitPaths = ExtractJsonArray(obj, "explicit_paths");
+             e.authorizedUsers = ExtractJsonArray(obj, "authorized_users");
+             e.authorizedGroups = ExtractJsonArray(obj, "authorized_groups");
+             e.alwaysAllowAdmins = obj.find("\"always_allow_admins\"") == std::string::npos
+                                        ? true
+                                        : ExtractJsonBool(obj, "always_allow_admins");
+             out.push_back(e);
+
+             pos = objEnd + 1;
+         }
+         return out;
+     }
+
+     // Pulls GET /agents/{id}/file-access-policy and reconciles the desired-
+     // state cache the elevated File Access Guard task applies. See the
+     // fileAccessPolicies member declaration above for the full unelevated-
+     // process reasoning (same split as wireless control).
+     void FetchFileAccessPolicy() {
+         try {
+             std::pair<int, std::string> resp = GetHttpClient()->Get(
+                 "/agents/" + config.agentId + "/file-access-policy");
+             auto& [status, response] = resp;
+             if (status != 200) return;   // keep last-known-good on error/outage
+
+             auto fetched = ParseFileAccessPolicies(response);
+
+             std::lock_guard<std::mutex> lock(fileAccessMutex);
+             EnsureFileAccessTargetsLoaded();
+             fileAccessPolicies = fetched;
+
+             // Prune classification-sourced targets whose originating policy
+             // disappeared, turned off, or no longer targets the level that
+             // triggered them -- otherwise a file classified under a policy
+             // that was since relaxed/deleted would stay locked down forever.
+             for (auto it = fileAccessClassificationTargets.begin(); it != fileAccessClassificationTargets.end(); ) {
+                 bool stillValid = false;
+                 for (const auto& policy : fileAccessPolicies) {
+                     if (policy.id == it->second.policyId && policy.mode != "off" &&
+                         std::find(policy.classificationLevels.begin(), policy.classificationLevels.end(),
+                                   it->second.classificationLevel) != policy.classificationLevels.end()) {
+                         stillValid = true;
+                         break;
+                     }
+                 }
+                 if (stillValid) {
+                     ++it;
+                 } else {
+                     logger.Debug("File access target no longer covered by an active policy, "
+                                  "will be reverted: " + it->first);
+                     it = fileAccessClassificationTargets.erase(it);
+                 }
+             }
+
+             WriteFileAccessTargetsCacheLocked();
+
+             size_t explicitCount = 0;
+             for (const auto& p : fileAccessPolicies) explicitCount += p.explicitPaths.size();
+             logger.Debug("File access control: " + std::to_string(fileAccessPolicies.size()) +
+                          " active polic" + (fileAccessPolicies.size() == 1 ? "y" : "ies") +
+                          ", " + std::to_string(explicitCount) + " explicit path(s), " +
+                          std::to_string(fileAccessClassificationTargets.size()) + " classification-matched file(s)");
+         } catch (const std::exception& e) {
+             logger.Debug(std::string("FetchFileAccessPolicy failed: ") + e.what());
+         } catch (...) {
+             logger.Debug("FetchFileAccessPolicy failed");
+         }
+     }
+
+     // Called from the file_system_monitoring classify-on-write hook (see
+     // Classify() call sites above) for every file that was just classified.
+     // If any active file_access_control policy targets the resulting level,
+     // upserts a durable entry so the elevated guard restricts that specific
+     // file on its next run. Cheap no-op when no such policy exists (the
+     // common case on a site that hasn't configured this feature).
+     void UpsertFileAccessClassificationTarget(const std::string& filePath, const std::string& localSeverity) {
+         std::string level = LevelFromLocalSeverity(localSeverity);
+         std::lock_guard<std::mutex> lock(fileAccessMutex);
+         if (fileAccessPolicies.empty()) return;
+         EnsureFileAccessTargetsLoaded();
+
+         for (const auto& policy : fileAccessPolicies) {
+             if (policy.mode == "off") continue;
+             if (std::find(policy.classificationLevels.begin(), policy.classificationLevels.end(), level) ==
+                 policy.classificationLevels.end()) {
+                 continue;
+             }
+             FileAccessCacheEntry e;
+             e.source = "classification";
+             e.mode = policy.mode;
+             e.alwaysAllowAdmins = policy.alwaysAllowAdmins;
+             e.policyId = policy.id;
+             e.classificationLevel = level;
+             e.authorizedUsers = policy.authorizedUsers;
+             e.authorizedGroups = policy.authorizedGroups;
+             fileAccessClassificationTargets[filePath] = e;
+
+             logger.Info("File Access Control: " + filePath + " classified '" + level +
+                        "' -- " + (policy.mode == "enforce" ? "restricting" : "would restrict (audit mode)") +
+                        " to configured users/groups on next File Access Guard cycle");
+
+             WriteFileAccessTargetsCacheLocked();
+             return;  // first matching policy wins, same "priority order" the server already applied
+         }
+     }
+
      // Same directory-resolution rule as WirelessStateCachePath() above --
      // must be somewhere a STANDARD USER can write.
      std::string BrowserExtensionStateCachePath() const {
@@ -6170,6 +6555,23 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                  
 // Parse usb_device_monitoring policies
 bool tempHasUsbDevicePolicies = hasUsbDevicePolicies.load();
+
+// usbBlockingActive starts false on every process launch, but
+// install-agent.ps1 registers an unconditional boot-time scheduled task
+// ("SeceoKnight DLP USB Block") that disables the USBSTOR registry key
+// BEFORE this agent process even starts -- regardless of what policy
+// actually says. Without this seeding, the very first policy-sync pass
+// after a cold boot always believes "previously not blocking", so if the
+// current policy says USB should be ALLOWED, the restore-to-allowed path
+// never fires and the registry is left disabled indefinitely. Seed the
+// in-memory tracker from actual registry state once per process so the
+// first pass can correctly detect a needed restore. Found in a
+// policy-engine audit, August 28 2026.
+static bool usbBlockingSeededFromRegistry = false;
+if (!usbBlockingSeededFromRegistry) {
+    usbBlockingActive.store(IsUSBStorageBlockedInRegistry());
+    usbBlockingSeededFromRegistry = true;
+}
 bool previousUsbBlocking = usbBlockingActive.load();  // Store previous state
 bool newUsbBlocking = false;  // Track if any policy requires blocking
 
@@ -6522,6 +6924,28 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
 
                 // Extract monitoredPaths for ALL policy types (file_system_monitoring, usb_file_transfer_monitoring, etc.)
                 rule.monitoredPaths = ExtractJsonArray(configObj, "monitoredPaths");
+
+                // file_transfer_monitoring's config never had a "monitoredPaths"
+                // key at all -- the dashboard form (FileTransferPolicyForm.tsx)
+                // and FileTransferConfig write "protectedPaths" (source paths to
+                // watch) and "monitoredDestinations" (where a transfer TO is
+                // watched) instead. The Linux agent already reads the right key
+                // (agent.py's transfer_protected_paths, key="protectedPaths").
+                // This Windows agent read the wrong key for this one policy
+                // type only, so rule.monitoredPaths was ALWAYS empty for it --
+                // ShouldMonitorFile()/HandleFileEvent() require a non-empty
+                // match against monitoredPaths, so file_transfer_monitoring
+                // silently never enforced anything on Windows, ever, on any
+                // path. Found in a policy-engine audit, August 28 2026.
+                // (monitoredDestinations / destination-specific matching isn't
+                // wired into PolicyRule at all yet -- that's a separate,
+                // larger gap; this restores the baseline "does this policy
+                // ever fire" behavior that Linux already had.)
+                if (policyType == "file_transfer_monitoring") {
+                    std::vector<std::string> protectedPaths = ExtractJsonArray(configObj, "protectedPaths");
+                    rule.monitoredPaths.insert(rule.monitoredPaths.end(),
+                                                protectedPaths.begin(), protectedPaths.end());
+                }
 
                 // ============================================================
                 // CRITICAL: USB POLICY MUST BE PARSED FIRST
@@ -8821,6 +9245,15 @@ if (shouldMonitor) {
                         
                         // Pass eventSubtype to classification so it can filter policies by event type
                         classification = ContentClassifier::Classify(content, relevantPolicies, eventSubtype);
+
+                        // File Access Control (GDPR-style per-file access) hook -- cheap
+                        // no-op unless a file_access_control policy is actually configured
+                        // (fileAccessPolicies empty check happens first thing inside).
+                        // Deliberately NOT gated on classification.labels being non-empty:
+                        // a "low" severity file with no labels still maps to the "public"
+                        // level, which a policy could legitimately target (unusual, but
+                        // not this function's place to second-guess an admin's config).
+                        UpsertFileAccessClassificationTarget(filePath, classification.severity);
                     } else {
                         classification.severity = "low";
                         classification.labels.push_back("LARGE_FILE");
@@ -12231,6 +12664,577 @@ int HandleApplyWirelessGuard(int /*argc*/, char* /*argv*/[]) {
     return 0;
 }
 
+// ── File Access Control: elevated ACL enforcement ──────────────────────
+// Standalone functions (not DLPAgent members) -- same reasoning as
+// HandleApplyWirelessGuard above: this runs as a one-shot invocation from
+// a separate SYSTEM/Highest scheduled task, with its own Logger, no
+// DLPAgent instance available.
+
+// Resolves a local or (if this machine is domain-joined and can reach a
+// DC) Active Directory account/group name to its SID via LookupAccountNameA
+// -- "jdoe" and "DOMAIN\jdoe" both work, Windows itself resolves the scope.
+// Returns an allocated SID the caller must LocalFree(), or nullptr if the
+// name doesn't resolve (logged, not fatal -- one bad name in a list must
+// not block applying the rest of it).
+PSID ResolveSidForAccountName(const std::string& name, Logger& logger) {
+    DWORD sidSize = 0, domainSize = 0;
+    SID_NAME_USE use;
+    LookupAccountNameA(nullptr, name.c_str(), nullptr, &sidSize, nullptr, &domainSize, &use);
+    if (sidSize == 0) {
+        logger.Warning("apply-file-access-guard: could not resolve account '" + name +
+                       "' (not found locally, or unreachable if this is an AD name and the "
+                       "machine can't reach a domain controller right now)");
+        return nullptr;
+    }
+    PSID sid = (PSID)LocalAlloc(LPTR, sidSize);
+    std::vector<char> domainBuf(domainSize > 0 ? domainSize : 1);
+    if (!sid || !LookupAccountNameA(nullptr, name.c_str(), sid, &sidSize, domainBuf.data(), &domainSize, &use)) {
+        logger.Warning("apply-file-access-guard: LookupAccountNameA failed for '" + name + "'");
+        if (sid) { LocalFree(sid); }
+        return nullptr;
+    }
+    return sid;
+}
+
+// Enables a privilege (by name, e.g. SE_SECURITY_NAME) in the CURRENT
+// process's token, if that account holds it but it isn't active yet --
+// SYSTEM holds SeSecurityPrivilege by default but tokens don't run with
+// every held privilege enabled, and writing a SACL (unlike a DACL, which
+// only needs WRITE_DAC) specifically requires it enabled. Standard MSDN
+// boilerplate pattern. Returns false (non-fatal to the caller) if this
+// process doesn't hold the privilege at all, e.g. if the scheduled task
+// somehow isn't actually running as SYSTEM.
+bool EnablePrivilege(LPCWSTR privilegeName) {
+    HANDLE hToken = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) {
+        return false;
+    }
+    LUID luid;
+    if (!LookupPrivilegeValueW(nullptr, privilegeName, &luid)) {
+        CloseHandle(hToken);
+        return false;
+    }
+    TOKEN_PRIVILEGES tp;
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Luid = luid;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    BOOL adjusted = AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(tp), nullptr, nullptr);
+    DWORD err = GetLastError();
+    CloseHandle(hToken);
+    return adjusted && err == ERROR_SUCCESS;
+}
+
+// Sets an explicit, inheritance-broken NTFS DACL on `path`: SYSTEM always
+// gets Full Control (the agent/OS itself, backup/AV tooling running as
+// SYSTEM, is never locked out by this), local Administrators gets Full
+// Control if alwaysAllowAdmins, and each resolved name in allowedNames
+// gets Read+Execute -- enough to open the file, not modify/delete it.
+// Everyone else, including whatever the file's PREVIOUS permissions
+// granted, loses access: PROTECTED_DACL_SECURITY_INFORMATION replaces the
+// DACL wholesale and breaks inheritance from the parent folder. Idempotent
+// -- safe (and expected) to call every guard cycle even when nothing
+// changed, which is also what makes this self-healing against any manual
+// tampering with the file's permissions between runs.
+//
+// ALSO sets a failure-audit SACL (Everyone, read access) alongside the
+// DACL -- this is what makes a denied open attempt show up as a Windows
+// Security event (ID 4663), which ForwardFileAccessAuditEvents() then
+// reads back and forwards to the dashboard as a DLP event. Without this,
+// the DACL above would silently block access with no record of who tried.
+// Requires SeSecurityPrivilege enabled (see EnablePrivilege() above) --
+// best-effort: if it can't be enabled or the SACL write fails, the DACL
+// (actual access control) still applies; only the audit trail is
+// affected, logged as a warning, not a hard failure of this function.
+bool ApplyFileAccessControl(const std::string& path, const std::vector<std::string>& allowedNames,
+                            bool alwaysAllowAdmins, Logger& logger) {
+    std::error_code ec;
+    if (!fs::exists(path, ec) || ec) {
+        logger.Debug("apply-file-access-guard: path does not exist, skipping: " + path);
+        return false;
+    }
+
+    std::vector<PSID> ownedSids;
+    std::vector<EXPLICIT_ACCESSA> ea;
+    auto addAce = [&](PSID sid, DWORD perms) {
+        EXPLICIT_ACCESSA e;
+        ZeroMemory(&e, sizeof(e));
+        e.grfAccessPermissions = perms;
+        e.grfAccessMode = SET_ACCESS;
+        e.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+        BuildTrusteeWithSidA(&e.Trustee, sid);
+        ea.push_back(e);
+    };
+
+    BYTE sysBuf[SECURITY_MAX_SID_SIZE];
+    DWORD sysSz = sizeof(sysBuf);
+    if (CreateWellKnownSid(WinLocalSystemSid, nullptr, sysBuf, &sysSz)) {
+        PSID s = (PSID)LocalAlloc(LPTR, sysSz);
+        if (s) { CopyMemory(s, sysBuf, sysSz); ownedSids.push_back(s); addAce(s, GENERIC_ALL); }
+    }
+
+    if (alwaysAllowAdmins) {
+        BYTE admBuf[SECURITY_MAX_SID_SIZE];
+        DWORD admSz = sizeof(admBuf);
+        if (CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, admBuf, &admSz)) {
+            PSID s = (PSID)LocalAlloc(LPTR, admSz);
+            if (s) { CopyMemory(s, admBuf, admSz); ownedSids.push_back(s); addAce(s, GENERIC_ALL); }
+        }
+    }
+
+    int resolvedCount = 0;
+    for (const auto& name : allowedNames) {
+        PSID sid = ResolveSidForAccountName(name, logger);
+        if (!sid) continue;
+        ownedSids.push_back(sid);
+        addAce(sid, GENERIC_READ | GENERIC_EXECUTE);
+        resolvedCount++;
+    }
+
+    if (resolvedCount == 0 && !allowedNames.empty()) {
+        logger.Warning("apply-file-access-guard: none of the configured authorized users/groups "
+                       "resolved for " + path + " -- refusing to apply an ACL that would lock "
+                       "out everyone except SYSTEM/Administrators (check for a typo'd name)");
+        for (PSID s : ownedSids) LocalFree(s);
+        return false;
+    }
+
+    // Failure-audit SACL: Everyone, so any account (not just the specific
+    // ones above) that gets denied is logged -- the point is to see WHO
+    // was denied, which by definition includes names we didn't expect.
+    PSID everyoneSid = nullptr;
+    BYTE everyoneBuf[SECURITY_MAX_SID_SIZE];
+    DWORD everyoneSz = sizeof(everyoneBuf);
+    std::vector<EXPLICIT_ACCESSA> auditEa;
+    if (CreateWellKnownSid(WinWorldSid, nullptr, everyoneBuf, &everyoneSz)) {
+        everyoneSid = (PSID)LocalAlloc(LPTR, everyoneSz);
+        if (everyoneSid) {
+            CopyMemory(everyoneSid, everyoneBuf, everyoneSz);
+            EXPLICIT_ACCESSA auditAce;
+            ZeroMemory(&auditAce, sizeof(auditAce));
+            auditAce.grfAccessPermissions = FILE_GENERIC_READ;
+            auditAce.grfAccessMode = SET_AUDIT_FAILURE;
+            auditAce.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+            BuildTrusteeWithSidA(&auditAce.Trustee, everyoneSid);
+            auditEa.push_back(auditAce);
+        }
+    }
+
+    PACL newAcl = nullptr;
+    DWORD result = SetEntriesInAclA((ULONG)ea.size(), ea.data(), nullptr, &newAcl);
+    bool ok = false;
+    if (result == ERROR_SUCCESS && newAcl) {
+        PACL auditAcl = nullptr;
+        bool haveAuditAcl = false;
+        if (!auditEa.empty()) {
+            if (EnablePrivilege(SE_SECURITY_NAME)) {
+                DWORD auditResult = SetEntriesInAclA((ULONG)auditEa.size(), auditEa.data(), nullptr, &auditAcl);
+                haveAuditAcl = (auditResult == ERROR_SUCCESS && auditAcl != nullptr);
+                if (!haveAuditAcl) {
+                    logger.Warning("apply-file-access-guard: SetEntriesInAclA (audit SACL) failed rc=" +
+                                   std::to_string(auditResult) + " for " + path +
+                                   " -- access control still applies, but denied attempts won't be logged");
+                }
+            } else {
+                logger.Warning("apply-file-access-guard: could not enable SeSecurityPrivilege -- "
+                               "access control still applies to " + path +
+                               ", but denied attempts won't be logged (check the scheduled task's principal)");
+            }
+        }
+
+        DWORD infoFlags = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION;
+        if (haveAuditAcl) infoFlags |= SACL_SECURITY_INFORMATION;
+
+        DWORD setResult = SetNamedSecurityInfoA(
+            const_cast<char*>(path.c_str()), SE_FILE_OBJECT, infoFlags,
+            nullptr, nullptr, newAcl, haveAuditAcl ? auditAcl : nullptr);
+        if (setResult == ERROR_SUCCESS) {
+            ok = true;
+            logger.Info("apply-file-access-guard: restricted " + path + " to " +
+                       std::to_string(resolvedCount) + " authorized user/group(s)" +
+                       (alwaysAllowAdmins ? " + Administrators" : "") + " + SYSTEM" +
+                       (haveAuditAcl ? " (with denied-access auditing)" : ""));
+        } else if (haveAuditAcl) {
+            // Retry without the SACL -- some filesystems/paths (network
+            // shares, certain third-party filter drivers) reject SACL
+            // writes even from SYSTEM with SeSecurityPrivilege enabled.
+            // Access control (the DACL) matters more than the audit trail
+            // -- don't let a SACL failure leave the file unprotected.
+            logger.Warning("apply-file-access-guard: SetNamedSecurityInfoA with SACL failed for " + path +
+                           " rc=" + std::to_string(setResult) + " -- retrying DACL-only (no audit log for this file)");
+            DWORD retryResult = SetNamedSecurityInfoA(
+                const_cast<char*>(path.c_str()), SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                nullptr, nullptr, newAcl, nullptr);
+            if (retryResult == ERROR_SUCCESS) {
+                ok = true;
+                logger.Info("apply-file-access-guard: restricted " + path + " to " +
+                           std::to_string(resolvedCount) + " authorized user/group(s)" +
+                           (alwaysAllowAdmins ? " + Administrators" : "") + " + SYSTEM (no audit log)");
+            } else {
+                logger.Error("apply-file-access-guard: SetNamedSecurityInfoA (DACL-only retry) failed for " +
+                            path + " rc=" + std::to_string(retryResult));
+            }
+        } else {
+            logger.Error("apply-file-access-guard: SetNamedSecurityInfoA failed for " + path +
+                        " rc=" + std::to_string(setResult) + " (this task should be running as "
+                        "SYSTEM/Highest -- check the scheduled task's principal if this persists)");
+        }
+        if (auditAcl) LocalFree(auditAcl);
+        LocalFree(newAcl);
+    } else {
+        logger.Error("apply-file-access-guard: SetEntriesInAclA failed rc=" + std::to_string(result));
+    }
+
+    if (everyoneSid) LocalFree(everyoneSid);
+    for (PSID s : ownedSids) LocalFree(s);
+    return ok;
+}
+
+// Reverts a file/folder this guard previously restricted back to inheriting
+// its DACL from the parent folder -- "stop managing this object's
+// permissions", not "restore some exact prior snapshot" (Windows doesn't
+// let you cheaply save/restore an arbitrary prior DACL, and re-enabling
+// inheritance is the same "give it back to whatever the folder normally
+// grants" behavior a right-click > Properties > Security >
+// "Enable inheritance" click would produce). Called once a path drops out
+// of every active policy's scope.
+bool RevertFileAccessControl(const std::string& path, Logger& logger) {
+    std::error_code ec;
+    if (!fs::exists(path, ec) || ec) return true;  // already gone, nothing to revert
+
+    DWORD result = SetNamedSecurityInfoA(
+        const_cast<char*>(path.c_str()), SE_FILE_OBJECT,
+        UNPROTECTED_DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, nullptr, nullptr);
+    if (result == ERROR_SUCCESS) {
+        logger.Info("apply-file-access-guard: reverted " + path + " to inherited permissions "
+                    "(no longer covered by an active File Access Control policy)");
+        return true;
+    }
+    logger.Error("apply-file-access-guard: failed to revert " + path + " rc=" + std::to_string(result));
+    return false;
+}
+
+// ── File Access Control: audit-trail event forwarding ──────────────────
+// Reads back the Security-log entries the SACL in ApplyFileAccessControl()
+// produces and forwards each denied-open attempt as a DLP event, using the
+// same HttpClient/AgentConfig/JsonBuilder pattern HandleBlockedLaunch()
+// above already uses to post an event from a one-shot process with no
+// DLPAgent instance available. Closes the "prevents access but doesn't log
+// who was denied" gap documented when File Access Control first shipped.
+
+std::wstring Utf8ToWide(const std::string& s) {
+    if (s.empty()) return std::wstring();
+    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    if (len <= 0) return std::wstring();
+    std::wstring out(len, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], len);
+    return out;
+}
+
+std::string WideToUtf8(const std::wstring& s) {
+    if (s.empty()) return std::string();
+    int len = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0, nullptr, nullptr);
+    if (len <= 0) return std::string();
+    std::string out(len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], len, nullptr, nullptr);
+    return out;
+}
+
+// Extracts the text of <Data Name="fieldName">VALUE</Data> from a rendered
+// event-XML fragment. Deliberately a plain substring search, not a real
+// XML parser -- same homegrown-parsing style this file already uses for
+// JSON (see ExtractJsonString() etc.). Reasonable here because the shape
+// of Windows Event Log XML for a fixed event ID is well-known and not
+// attacker-influenced in a way that matters -- it's the local OS's own
+// audit log, not untrusted network input.
+std::string ExtractEventXmlField(const std::wstring& xml, const std::string& fieldName) {
+    std::wstring needle = L"Name='" + Utf8ToWide(fieldName) + L"'";
+    size_t pos = xml.find(needle);
+    if (pos == std::wstring::npos) {
+        needle = L"Name=\"" + Utf8ToWide(fieldName) + L"\"";
+        pos = xml.find(needle);
+        if (pos == std::wstring::npos) return "";
+    }
+    size_t gt = xml.find(L'>', pos);
+    if (gt == std::wstring::npos) return "";
+    size_t close = xml.find(L"</Data>", gt);
+    if (close == std::wstring::npos) return "";
+    return WideToUtf8(xml.substr(gt + 1, close - gt - 1));
+}
+
+std::string NowIso8601Utc() {
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    char buf[64];
+    sprintf_s(buf, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    return std::string(buf);
+}
+
+std::string FileAccessAuditLastCheckPath() {
+    const char* envLogDir = std::getenv("SECEOKNIGHT_LOG_DIR");
+    std::string dir = envLogDir ? envLogDir : "C:\\ProgramData\\SeceoKnight\\logs";
+    return dir + "\\file_access_audit_lastcheck.cache";
+}
+
+// Case-insensitive match, with a suffix fallback: a 4663 event's
+// ObjectName has been observed to carry a \Device\HarddiskVolumeN\ or
+// \??\ prefix instead of a plain drive letter on some Windows
+// builds/configurations, instead of the C:\... form the rest of this
+// feature stores paths as. An exact match still fires first; the suffix
+// check means a volume-prefix difference alone doesn't cause a real match
+// to be silently dropped.
+bool MatchesProtectedPath(const std::string& objectName, const std::set<std::string>& protectedPaths) {
+    std::string objLower = ToLower(objectName);
+    for (const auto& p : protectedPaths) {
+        std::string pLower = ToLower(p);
+        if (objLower == pLower) return true;
+        if (objLower.size() > pLower.size() &&
+            objLower.compare(objLower.size() - pLower.size(), pLower.size(), pLower) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Queries the Security event log for EventID=4663 records ("An attempt
+// was made to access an object") created since the last run, and forwards
+// any whose ObjectName matches a currently-protected path as a DLP event.
+// Only FAILURE auditing is enabled (see install-agent.ps1's `auditpol
+// /set /subcategory:"File System" /failure:enable`) -- success auditing
+// was deliberately left off, so the mere presence of a 4663 record here
+// already means the attempt was denied; no separate outcome/keyword check
+// needed. Best-effort throughout: a query failure, a malformed record, or
+// an unresolvable field must never crash the guard or affect the ACL
+// enforcement this runs alongside -- worst case, an audit event is missed
+// this cycle and simply isn't seen (the cutoff still advances).
+void ForwardFileAccessAuditEvents(const std::set<std::string>& protectedPaths, Logger& logger) {
+    if (protectedPaths.empty()) return;   // nothing is currently protected -- nothing to look for
+
+    std::string cutoff;
+    try {
+        std::ifstream f(FileAccessAuditLastCheckPath(), std::ios::binary);
+        if (f.is_open()) std::getline(f, cutoff);
+    } catch (...) {}
+
+    std::string runStart = NowIso8601Utc();
+    // First run ever (no cache file yet) -- start the window from now, not
+    // from the beginning of the Security log, so this doesn't flood the
+    // dashboard with every historical denied-access record already in it.
+    if (cutoff.empty()) {
+        try {
+            std::ofstream f(FileAccessAuditLastCheckPath(), std::ios::trunc | std::ios::binary);
+            f << runStart;
+        } catch (...) {}
+        return;
+    }
+
+    try {
+        std::wstring queryXml = L"<QueryList><Query Id='0' Path='Security'>"
+                                L"<Select Path='Security'>*[System[(EventID=4663) and "
+                                L"TimeCreated[@SystemTime&gt;='" + Utf8ToWide(cutoff) + L"']]]</Select>"
+                                L"</Query></QueryList>";
+
+        EVT_HANDLE hResults = EvtQuery(nullptr, L"Security", queryXml.c_str(), EvtQueryChannelPath);
+        if (!hResults) {
+            DWORD err = GetLastError();
+            // Expected (not actionable) on a machine where auditpol hasn't
+            // run yet -- e.g. an agent upgraded before install-agent.ps1's
+            // audit-policy step landed. Debug, not Warning/Error.
+            logger.Debug("apply-file-access-guard: audit event query failed, err=" + std::to_string(err) +
+                         " (expected if 'File System' failure auditing isn't enabled yet)");
+        } else {
+            int forwardedCount = 0;
+            EVT_HANDLE hEvents[16];
+            DWORD returned = 0;
+            while (EvtNext(hResults, 16, hEvents, 1000, 0, &returned)) {
+                for (DWORD i = 0; i < returned; i++) {
+                    DWORD bufUsed = 0, propCount = 0;
+                    EvtRender(nullptr, hEvents[i], EvtRenderEventXml, 0, nullptr, &bufUsed, &propCount);
+                    if (bufUsed > 0) {
+                        std::vector<wchar_t> buf(bufUsed / sizeof(wchar_t) + 1, L'\0');
+                        if (EvtRender(nullptr, hEvents[i], EvtRenderEventXml, bufUsed, buf.data(), &bufUsed, &propCount)) {
+                            std::wstring xml(buf.data());
+                            std::string objectName = ExtractEventXmlField(xml, "ObjectName");
+                            if (!objectName.empty() && MatchesProtectedPath(objectName, protectedPaths)) {
+                                std::string user = ExtractEventXmlField(xml, "SubjectUserName");
+                                std::string domain = ExtractEventXmlField(xml, "SubjectDomainName");
+                                std::string processName = ExtractEventXmlField(xml, "ProcessName");
+                                std::string fullUser = (!domain.empty() && domain != "-") ? (domain + "\\" + user) : user;
+                                if (fullUser.empty()) fullUser = "unknown";
+
+                                try {
+                                    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+                                    AgentConfig cfg(ExeRelativePath("agent_config.json"));
+                                    JsonBuilder json;
+                                    json.AddString("event_id", GenerateUUID());
+                                    json.AddString("event_type", "file_access");
+                                    json.AddString("event_subtype", "access_denied");
+                                    json.AddString("severity", "high");
+                                    json.AddString("agent_id", cfg.agentId);
+                                    json.AddString("source_type", "endpoint");
+                                    json.AddString("action", "blocked");
+                                    json.AddBool("blocked", true);
+                                    json.AddString("file_path", objectName);
+                                    json.AddString("user_email", fullUser);
+                                    json.AddString("description",
+                                                   "File Access Control denied " + fullUser +
+                                                   " read access to " + objectName +
+                                                   (processName.empty() ? "" : " (process: " + processName + ")"));
+                                    HttpClient client(cfg.serverUrl);
+                                    client.Post("/events", json.Build());
+                                    CoUninitialize();
+                                    forwardedCount++;
+                                } catch (...) {}
+                            }
+                        }
+                    }
+                    EvtClose(hEvents[i]);
+                }
+                if (returned < 16) break;
+            }
+            EvtClose(hResults);
+
+            if (forwardedCount > 0) {
+                logger.Info("apply-file-access-guard: forwarded " + std::to_string(forwardedCount) +
+                            " denied-access event(s) to the dashboard");
+            }
+        }
+    } catch (const std::exception& e) {
+        logger.Debug(std::string("ForwardFileAccessAuditEvents failed: ") + e.what());
+    } catch (...) {
+        logger.Debug("ForwardFileAccessAuditEvents failed");
+    }
+
+    try {
+        std::ofstream f(FileAccessAuditLastCheckPath(), std::ios::trunc | std::ios::binary);
+        f << runStart;
+    } catch (...) {}
+}
+
+// Elevated File Access Guard hook: applies/reverts NTFS DACLs from the
+// desired-state cache the main (unelevated) process writes in
+// FetchFileAccessPolicy()/UpsertFileAccessClassificationTarget(). Same
+// unelevated-process reasoning as HandleApplyWirelessGuard above -- this
+// needs its own SYSTEM/Highest repeating scheduled task ("SeceoKnight DLP
+// File Access Guard", registered by install-agent.ps1).
+//
+// Self-healing and idempotent: every run re-applies every "enforce" entry
+// currently in the cache (cheap, and undoes any manual tampering with the
+// ACL between runs) and reverts anything that was applied on a PREVIOUS
+// run but is no longer in the current desired set -- tracked via its own
+// manifest file (file_access_applied.cache), not in-memory state, because
+// this is a fresh process invocation every time the scheduled task fires.
+// Unlike the main process's classification-targets cache (see
+// EnsureFileAccessTargetsLoaded()), there's no "cold start" bug to guard
+// against here -- just a normal file read every run.
+int HandleApplyFileAccessGuard(int /*argc*/, char* /*argv*/[]) {
+    Logger logger;
+    try {
+        const char* envLogDir = std::getenv("SECEOKNIGHT_LOG_DIR");
+        std::string dir = envLogDir ? envLogDir : "C:\\ProgramData\\SeceoKnight\\logs";
+        std::string targetsPath = dir + "\\file_access_targets.cache";
+        std::string appliedPath = dir + "\\file_access_applied.cache";
+
+        std::error_code ec;
+        if (!fs::exists(targetsPath, ec) || ec) {
+            logger.Info("apply-file-access-guard: no state cache yet (agent hasn't synced "
+                        "with the server since install) -- nothing to apply this run");
+            return 0;
+        }
+
+        auto splitCsv = [](const std::string& s) {
+            std::vector<std::string> out;
+            std::stringstream ss(s);
+            std::string item;
+            while (std::getline(ss, item, ',')) {
+                size_t a = item.find_first_not_of(" \t");
+                if (a == std::string::npos) continue;
+                size_t b = item.find_last_not_of(" \t");
+                out.push_back(item.substr(a, b - a + 1));
+            }
+            return out;
+        };
+
+        struct Desired { std::string mode; bool alwaysAllowAdmins; std::vector<std::string> users, groups; };
+        std::map<std::string, Desired> desired;
+        {
+            std::ifstream tf(targetsPath, std::ios::binary);
+            std::string line;
+            while (std::getline(tf, line)) {
+                std::vector<std::string> fields;
+                std::stringstream ss(line);
+                std::string field;
+                while (std::getline(ss, field, '\t')) fields.push_back(field);
+                if (fields.size() < 8) continue;
+                const std::string& path = fields[1];
+                if (path.empty()) continue;
+                Desired d;
+                d.mode = fields[2];
+                d.alwaysAllowAdmins = fields[3] == "1";
+                d.users = splitCsv(fields[6]);
+                d.groups = splitCsv(fields[7]);
+                desired[path] = d;
+            }
+        }
+
+        std::set<std::string> previouslyApplied;
+        {
+            std::ifstream af(appliedPath, std::ios::binary);
+            std::string l;
+            while (std::getline(af, l)) {
+                if (!l.empty()) previouslyApplied.insert(l);
+            }
+        }
+
+        std::set<std::string> nowApplied;
+        int appliedCount = 0, revertedCount = 0, auditCount = 0;
+
+        for (const auto& kv : desired) {
+            const std::string& path = kv.first;
+            const Desired& d = kv.second;
+            if (d.mode != "enforce") {
+                if (d.mode == "audit") auditCount++;
+                continue;  // not applied -- diffed against previouslyApplied below
+            }
+            std::vector<std::string> allowed = d.users;
+            allowed.insert(allowed.end(), d.groups.begin(), d.groups.end());
+            if (ApplyFileAccessControl(path, allowed, d.alwaysAllowAdmins, logger)) {
+                nowApplied.insert(path);
+                appliedCount++;
+            }
+        }
+
+        // Anything applied last run but not this run -- policy removed,
+        // turned off, switched to audit, or this run's apply failed -- gets
+        // reverted. Covers all of those cases with one check.
+        for (const auto& path : previouslyApplied) {
+            if (nowApplied.count(path) == 0) {
+                if (RevertFileAccessControl(path, logger)) revertedCount++;
+            }
+        }
+
+        std::ofstream af(appliedPath, std::ios::trunc | std::ios::binary);
+        for (const auto& path : nowApplied) af << path << "\n";
+
+        // Only paths in nowApplied actually have a live SACL right now (set
+        // alongside the DACL in ApplyFileAccessControl() above) -- audit
+        // entries can only exist for those.
+        ForwardFileAccessAuditEvents(nowApplied, logger);
+
+        logger.Debug("apply-file-access-guard: complete -- applied=" + std::to_string(appliedCount) +
+                    " reverted=" + std::to_string(revertedCount) + " audit-only=" + std::to_string(auditCount));
+    } catch (const std::exception& e) {
+        try { logger.Error(std::string("apply-file-access-guard: exception: ") + e.what()); } catch (...) {}
+        return 1;
+    } catch (...) {
+        try { logger.Error("apply-file-access-guard: unknown exception"); } catch (...) {}
+        return 1;
+    }
+    return 0;
+}
+
 // Elevated watchdog hook (ported from CyberSentinel-DLP gap-scan, Aug 18
 // 2026): the repeating SYSTEM/Highest "SeceoKnight DLP Watchdog" scheduled
 // task install-agent.ps1 registers now invokes THIS EXE with this flag,
@@ -12784,6 +13788,18 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         if (std::string(argv[i]) == "--apply-wireless-guard") {
             return HandleApplyWirelessGuard(argc, argv);
+        }
+    }
+
+    // Elevated File Access Guard hook: the repeating SYSTEM/Highest
+    // scheduled task install-agent.ps1 registers invokes us with this flag
+    // purely to reconcile NTFS DACLs from the cache file the main process
+    // writes, then exits -- this is not a normal agent run. See
+    // HandleApplyFileAccessGuard() for the full reasoning (same
+    // unelevated-process split as Wireless Guard above).
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--apply-file-access-guard") {
+            return HandleApplyFileAccessGuard(argc, argv);
         }
     }
 

@@ -89,6 +89,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   $USB_TASK      = 'SeceoKnight DLP USB Block'
   $CLIGUARD_TASK = 'SeceoKnight DLP CLI Guard'   # task #142/#145
   $WIRELESSGUARD_TASK = 'SeceoKnight DLP Wireless Guard'   # task #147
+  $FILEACCESSGUARD_TASK = 'SeceoKnight DLP File Access Guard'   # File Access Control, Aug 2026
   $EXTGUARD_TASK = 'SeceoKnight DLP Browser Extension Guard'   # gap-scan Aug 18 2026
   $EXT_STATE_CACHE = "$DATA_DIR\logs\browser_extension_state.cache"
 
@@ -1089,7 +1090,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     }
 
     # 3) Remove all scheduled tasks this project registers.
-    foreach ($n in @($TASK_NAME, $WATCHDOG_TASK, $USB_TASK, $CLIGUARD_TASK, $WIRELESSGUARD_TASK, $EXTGUARD_TASK)) {
+    foreach ($n in @($TASK_NAME, $WATCHDOG_TASK, $USB_TASK, $CLIGUARD_TASK, $WIRELESSGUARD_TASK, $FILEACCESSGUARD_TASK, $EXTGUARD_TASK)) {
       if (Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) {
         Info "Removing scheduled task: $n"
         Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
