@@ -8,6 +8,36 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: File Access Control never activated on any agent -- wrong auth dependency (September 2, 2026)
+
+Found during first field test of the feature (see the two entries below). Every symptom pointed the same
+direction at first: the elevated guard task never applied a DACL, `file_access_targets.cache` never got created,
+and the agent log had zero trace of `FetchFileAccessPolicy` running at all -- not even on its own exception-catch
+paths, across a full log spanning a clean agent restart to now. That ruled out "hasn't synced yet" and "stale
+downloaded binary" (independently confirmed the running binary matched the latest commit on `main`) as
+explanations, which meant the fetch itself was failing before ever reaching a log statement.
+
+Two compounding bugs:
+
+- `agent.cpp`, `FetchFileAccessPolicy()`: `if (status != 200) return;` on any non-200 HTTP response, with no
+  logging at all -- silently indistinguishable from the feature simply not existing in the build. Fixed to log
+  the status code (and a response snippet) via `logger.Debug` before returning, matching how the main policy-sync
+  loop already handles non-200/unreachable-server cases.
+- `agents.py`, `get_file_access_policy()`: shipped requiring `require_agent_key`, which 401s any request missing
+  an `X-Agent-Key` header. Every other agent-polling endpoint (`wireless-policy`, `printer-policy`, etc.) uses the
+  permissive `verify_agent_key` instead, because **no Windows agent build has ever sent an `X-Agent-Key` header**
+  -- that header is for a different, not-yet-built agent auth mechanism. `require_agent_key` is correct for the
+  endpoints task #7 fixed (policy/evaluate, decision, classification -- called by things other than the agent
+  binary itself), but wrong for an agent-polling endpoint: it 401'd every single agent in the fleet, on every
+  poll, permanently. Fixed to use `verify_agent_key`, matching its sibling endpoints.
+
+Combined effect: the agent polled the endpoint every sync cycle, got a 401, and silently discarded it -- forever,
+on every machine, with no error anywhere. Both bugs need the fix; the logging fix alone would have made the 401
+visible but not resolved it, and the auth fix alone would have kept working silently if it broke again in the
+future.
+
+---
+
 ## New: File Access Control policy type (GDPR-style per-file access) (September 2, 2026)
 
 Every existing policy type governs content LEAVING the endpoint (clipboard, USB, print, network share, email,
@@ -25,9 +55,9 @@ accounts/groups if the endpoint is domain-joined -- resolved via `LookupAccountN
 **Server**: `GET /agents/{id}/file-access-policy` in `agents.py` (mirrors the existing `wireless-policy` /
 `printer-policy` agent-polling pattern -- this policy type isn't expressed as conditions/actions rules, so it
 doesn't go through `policy_transformer.py`/`database_policy_evaluator.py` at all). Domain-mapped to the existing
-(previously unused) `ACCESS_CONTROL` RBAC domain in `domains.py`. Requires a valid `X-Agent-Key` (`require_agent_key`,
-not the permissive `verify_agent_key`) since the response contains the authorized-user list, which is itself
-sensitive.
+(previously unused) `ACCESS_CONTROL` RBAC domain in `domains.py`. Auth: uses `verify_agent_key`, same as every
+other agent-polling endpoint -- see the September 2, 2026 fix entry below for why the stricter `require_agent_key`
+this endpoint originally shipped with was wrong here.
 
 **Dashboard**: new "File Access Control (GDPR)" policy type -- `FileAccessControlPolicyForm.tsx`, registered in
 `types/policy.ts`, `PolicyTypeSelector.tsx`, `PolicyCreatorModal.tsx`, and `policyUtils.ts` (icon/label/summary/

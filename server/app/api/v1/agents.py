@@ -1445,7 +1445,7 @@ async def get_wireless_policy(
 async def get_file_access_policy(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(require_agent_key),
+    _verified_agent: str = Depends(verify_agent_key),
 ):
     """
     Per-file/folder access control policies for this agent -- the GDPR

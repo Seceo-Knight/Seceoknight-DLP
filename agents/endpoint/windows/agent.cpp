@@ -5833,7 +5833,22 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              std::pair<int, std::string> resp = GetHttpClient()->Get(
                  "/agents/" + config.agentId + "/file-access-policy");
              auto& [status, response] = resp;
-             if (status != 200) return;   // keep last-known-good on error/outage
+             if (status != 200) {
+                 // Keep last-known-good policy on error/outage -- but log it.
+                 // This previously returned silently here, which made a
+                 // misconfigured/unreachable endpoint indistinguishable from
+                 // "feature not in this build" purely from the agent log
+                 // (found during Sept 2 2026 field testing -- zero log trace
+                 // at all, even on the exception paths below, because a
+                 // non-200 HTTP response isn't an exception).
+                 if (status == 0) {
+                     logger.Debug("FetchFileAccessPolicy: cannot connect to server");
+                 } else {
+                     logger.Debug("FetchFileAccessPolicy: HTTP " + std::to_string(status) +
+                                  (response.empty() ? "" : (" - " + response.substr(0, 300))));
+                 }
+                 return;
+             }
 
              auto fetched = ParseFileAccessPolicies(response);
 
