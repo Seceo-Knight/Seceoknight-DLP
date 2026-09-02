@@ -5727,10 +5727,22 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              if (!f.is_open()) return;
              std::string line;
              while (std::getline(f, line)) {
+                 // See the matching comment in HandleApplyFileAccessGuard()'s
+                 // reader -- `while (std::getline(ss, field, '\t'))` silently
+                 // drops a trailing empty field (authorizedGroups, empty on
+                 // any policy without groups set), turning 8 fields into 7
+                 // and discarding the whole entry via the size check below.
                  std::vector<std::string> fields;
-                 std::stringstream ss(line);
-                 std::string field;
-                 while (std::getline(ss, field, '\t')) fields.push_back(field);
+                 size_t fieldStart = 0;
+                 while (true) {
+                     size_t tab = line.find('\t', fieldStart);
+                     if (tab == std::string::npos) {
+                         fields.push_back(line.substr(fieldStart));
+                         break;
+                     }
+                     fields.push_back(line.substr(fieldStart, tab - fieldStart));
+                     fieldStart = tab + 1;
+                 }
                  if (fields.size() < 8 || fields[0] != "classification") continue;
                  FileAccessCacheEntry e;
                  e.source = fields[0];
@@ -13185,10 +13197,30 @@ int HandleApplyFileAccessGuard(int /*argc*/, char* /*argv*/[]) {
             std::ifstream tf(targetsPath, std::ios::binary);
             std::string line;
             while (std::getline(tf, line)) {
+                // NOTE: deliberately NOT `while (std::getline(ss, field, '\t'))
+                // fields.push_back(field);` -- that idiom silently drops the
+                // LAST field whenever it's empty (std::getline hits EOF with
+                // zero characters left to extract, sets failbit, loop exits
+                // one field short). Every line here ends in authorizedGroups,
+                // which is empty on any policy that only sets Authorized
+                // Users -- i.e. the common case -- so that idiom was turning
+                // an 8-field line into 7 and silently discarding the whole
+                // entry below. Found during Sept 2, 2026 field testing:
+                // apply-file-access-guard ran cleanly every 2 minutes,
+                // applied=0 every time, no error logged anywhere. Manual
+                // index-based split below always yields (tab count + 1)
+                // fields regardless of trailing empties.
                 std::vector<std::string> fields;
-                std::stringstream ss(line);
-                std::string field;
-                while (std::getline(ss, field, '\t')) fields.push_back(field);
+                size_t fieldStart = 0;
+                while (true) {
+                    size_t tab = line.find('\t', fieldStart);
+                    if (tab == std::string::npos) {
+                        fields.push_back(line.substr(fieldStart));
+                        break;
+                    }
+                    fields.push_back(line.substr(fieldStart, tab - fieldStart));
+                    fieldStart = tab + 1;
+                }
                 if (fields.size() < 8) continue;
                 const std::string& path = fields[1];
                 if (path.empty()) continue;
