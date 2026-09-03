@@ -33,6 +33,7 @@ import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -85,29 +86,43 @@ def _risk_level(score: float) -> str:
     return "low"
 
 
-# Office hours used for the "off hours" behavioral signal, in the
-# configured APP_TIMEZONE (see app/core/timezone.py) -- 09:30-18:30,
-# Monday-Friday. No per-tenant/per-department schedule concept exists in
-# this schema, so this is one fixed window for the whole deployment; if
-# that ever needs to vary, it should move to settings.
+# Office hours used for the "off hours" behavioral signal: 09:30-18:30,
+# Monday-Friday, Asia/Kolkata -- this deployment's actual stated office
+# hours, not "whatever timezone the server happens to be configured to
+# display in". Deliberately hardcoded rather than read from
+# settings.APP_TIMEZONE: APP_TIMEZONE defaults to "UTC" and nothing in
+# this deployment's .env sets it, so a version of this function that
+# converted via to_display_tz() was a silent no-op in production --
+# still comparing raw UTC hour against the business-hours window,
+# exactly the original bug, just hidden behind a function that looked
+# fixed (confirmed live: an event stored as 05:56 UTC / 11:26 IST on a
+# Thursday -- the middle of the workday -- was still flagged off-hours).
+# Office hours are a fact about this business, not a generic app-wide
+# display preference, so they shouldn't move if APP_TIMEZONE is ever
+# changed for unrelated reasons (e.g. log timestamps). Matches the
+# frontend's identically-hardcoded RISK_TIMEZONE in RiskScoring.tsx --
+# if this deployment ever serves multiple offices in different
+# timezones, this becomes a per-department setting; out of scope now.
+_OFFICE_TIMEZONE = ZoneInfo("Asia/Kolkata")
 _BUSINESS_START_MINUTES = 9 * 60 + 30   # 09:30
 _BUSINESS_END_MINUTES = 18 * 60 + 30    # 18:30
 
 
 def _is_off_hours(ts: datetime) -> bool:
-    """Outside business hours or a weekend, in the deployment's configured
-    local timezone -- NOT the timestamp's raw UTC hour.
+    """Outside business hours or a weekend, in the office's actual local
+    timezone (Asia/Kolkata) -- NOT the timestamp's raw UTC hour and NOT
+    whatever APP_TIMEZONE happens to be configured to (see module-level
+    comment above _OFFICE_TIMEZONE for why those are different).
 
     Event timestamps are stored in UTC. Comparing UTC hour directly
-    against a business-hours cutoff silently disagreed with the actual
-    local time whenever APP_TIMEZONE isn't UTC: an 11:26am IST event is
-    ~05:56 UTC, which read as "before 07:00" under the old UTC-only check
-    and got flagged off-hours even though it's the middle of the
-    workday. Converting to the display timezone first fixes that.
+    against a business-hours cutoff disagrees with actual local time by
+    a fixed 5.5-hour offset: an 11:26am IST event is ~05:56 UTC, which
+    reads as "before 07:00" under a UTC-only check and gets flagged
+    off-hours even though it's the middle of the workday.
     """
-    from app.core.timezone import to_display_tz
-
-    local = to_display_tz(ts)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    local = ts.astimezone(_OFFICE_TIMEZONE)
     if local.weekday() >= 5:
         return True
     minutes = local.hour * 60 + local.minute
