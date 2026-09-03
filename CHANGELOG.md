@@ -8,6 +8,42 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Field test result: File Access Control blocking confirmed working; audit-trail forwarding still unconfirmed (September 2-3, 2026)
+
+After the three fixes below (auth dependency, silent HTTP-error swallow, tab-delimited cache parser dropping
+entries with no Authorized Groups), the feature was tested end-to-end on a real Azure AD-joined Windows endpoint:
+
+**Confirmed working**: policy fetch, cache population, the elevated "File Access Guard" scheduled task applying
+the NTFS DACL, and the actual access block itself. `azuread\<user>` denied Authorized Users access to an explicit
+path got `Access is denied` reading a file inside it -- reproduced repeatedly, and still denied even from a fully
+elevated (UAC) session for a user who is a local Administrator, once "Always allow admins" is unchecked on the
+policy. `LookupAccountNameA`-based SID resolution against an Azure AD device-joined identity string
+(`azuread\<user>`) also confirmed working, closing out a previously-untested assumption flagged when the feature
+first shipped.
+
+**Not confirmed**: the SACL/Windows-Security-event-log audit-trail forwarding added in the "logs denied attempts"
+follow-up. The SACL was verified present and correctly configured on the protected object (`Get-Acl -Audit`,
+`Everyone`/`Failure`/`Read,Synchronize`), `auditpol` confirmed the "File System" subcategory active, the
+`SCENoApplyLegacyAuditPolicy` registry gap (a real, separate finding -- see below) was fixed and reapplied, a
+second, unrelated third-party security product running on the same test machine was stopped to rule out
+interference, and the local kernel driver in this codebase (`csfilter.c`) was confirmed not even loaded. Despite
+all of that, and a real, repeatable denied access, Windows never wrote a 4663 or 4656 event to the Security log.
+Root cause not identified -- most likely something specific to this Azure AD/Intune-managed device's audit-policy
+handling rather than a bug in `ForwardFileAccessAuditEvents()` itself, but that's an open hypothesis, not a
+confirmed diagnosis. Flagged as a known gap: the block itself is production-ready; the audit trail is not yet
+verified anywhere and should not be relied on until this is resolved (retest on a non-MDM-managed machine, or
+check with whoever administers Intune/GPO for this device, are the two next leads).
+
+**Also found and fixed as part of this test pass**:
+- `SCENoApplyLegacyAuditPolicy` registry value (`HKLM\System\CurrentControlSet\Control\Lsa`) was never set by
+  `install-agent.ps1`/`manage-agent.ps1`'s `auditpol /set` call. Per Microsoft's documented behavior, without this
+  flag a legacy category-level audit policy can silently override a subcategory-level setting like ours on its own
+  refresh cycle -- `auditpol /get` can report the subcategory as active while the legacy policy is what's actually
+  enforced. Not yet added to the install/update scripts (the audit-trail gap above means this fix's real-world
+  effect couldn't be confirmed either) -- tracked as a follow-up once the audit-trail root cause is found.
+
+---
+
 ## Fix: File Access Control never activated on any agent -- wrong auth dependency (September 2, 2026)
 
 Found during first field test of the feature (see the two entries below). Every symptom pointed the same
