@@ -199,7 +199,7 @@ export default function ProtectedFolderSelector({
                       )} />
                       <span className={cn(
                         "truncate text-sm font-medium transition-colors",
-                        isSelected ? "text-indigo-300" : "text-muted-foreground/50 group-hover:text-white"
+                        isSelected ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
                       )}>
                         {folder.name}
                       </span>

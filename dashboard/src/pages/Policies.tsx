@@ -281,7 +281,7 @@ export default function PoliciesPage() {
           </button>
           <button
             onClick={handleCreatePolicy}
-            className="flex items-center gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-6 py-3 rounded-xl hover:from-indigo-700 hover:to-purple-700 shadow-lg hover:shadow-xl transition-all"
+            className="flex items-center gap-2 bg-primary text-white px-6 py-3 rounded-xl hover:bg-primary/90 shadow-sm hover:shadow-md transition-all"
           >
             <Plus className="w-5 h-5" />
             Create Policy

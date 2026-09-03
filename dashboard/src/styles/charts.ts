@@ -1,73 +1,75 @@
-// Obsidian Vault theme tokens for Recharts. Hex values mirror the
-// CSS variables defined in dashboard/src/styles/obsidian-vault.css —
-// keep both in sync if the palette is ever retuned.
+// Light enterprise theme tokens for Recharts (Microsoft Purview / Azure
+// Portal style, September 2026 redesign). Hex values mirror the CSS
+// variables defined in dashboard/src/styles/obsidian-vault.css and
+// dashboard/src/index.css — keep all three in sync if the palette is
+// ever retuned.
 
 export const CHART_COLORS = {
-  primary: '#5B7EFF',
-  secondary: '#2DD4BF',
-  success: '#2DD4BF',
-  warning: '#FB923C',
-  critical: '#F87171',
-  info: '#5B7EFF',
+  primary: '#2563EB',
+  secondary: '#16A34A',
+  success: '#16A34A',
+  warning: '#D97706',
+  critical: '#DC2626',
+  info: '#2563EB',
 
   palette: [
-    '#5B7EFF',
-    '#2DD4BF',
-    '#FB923C',
-    '#F87171',
-    '#7B9EFF',
-    '#34D399',
-    '#FBBF24',
-    '#60A5FA',
+    '#2563EB',
+    '#16A34A',
+    '#D97706',
+    '#DC2626',
+    '#7C3AED',
+    '#0891B2',
+    '#DB2777',
+    '#65A30D',
   ],
 
   backgrounds: {
-    dark: '#0A0A0D',
-    surface: '#111118',
-    tertiary: '#1E1E2E',
+    dark: '#F8F9FA',
+    surface: '#FFFFFF',
+    tertiary: '#F1F3F5',
   },
 
   text: {
-    primary: '#E8E8F0',
-    secondary: '#A0A0B8',
-    tertiary: '#606080',
+    primary: '#1F2328',
+    secondary: '#57606A',
+    tertiary: '#6E7781',
   },
 
   line: {
-    stroke: '#5B7EFF',
-    fill: 'rgba(91, 126, 255, 0.1)',
-    dot: '#5B7EFF',
+    stroke: '#2563EB',
+    fill: 'rgba(37, 99, 235, 0.08)',
+    dot: '#2563EB',
   },
 
   bar: {
-    primary: '#5B7EFF',
-    hover: '#7B9EFF',
+    primary: '#2563EB',
+    hover: '#3B82F6',
   },
 
   pie: {
-    colors: ['#5B7EFF', '#2DD4BF', '#FB923C', '#F87171', '#7B9EFF'],
+    colors: ['#2563EB', '#16A34A', '#D97706', '#DC2626', '#7C3AED'],
   },
 } as const
 
 export const RECHARTS_CONFIG = {
-  gridStroke: '#1E1E2E',
-  gridOpacity: 0.5,
+  gridStroke: '#E1E4E8',
+  gridOpacity: 0.8,
 
-  axisStroke: '#1E1E2E',
-  axisTickFill: '#A0A0B8',
-  axisLabelFill: '#A0A0B8',
+  axisStroke: '#E1E4E8',
+  axisTickFill: '#57606A',
+  axisLabelFill: '#57606A',
   axisTickFontSize: 12,
 
-  tooltipBackground: '#111118',
-  tooltipBorder: '#1E1E2E',
-  tooltipTextColor: '#E8E8F0',
+  tooltipBackground: '#FFFFFF',
+  tooltipBorder: '#E1E4E8',
+  tooltipTextColor: '#1F2328',
   tooltipPadding: 12,
   tooltipBorderRadius: 6,
 
-  cursorStroke: '#5B7EFF',
-  cursorOpacity: 0.5,
+  cursorStroke: '#2563EB',
+  cursorOpacity: 0.15,
 
-  legendTextColor: '#A0A0B8',
+  legendTextColor: '#57606A',
   legendFontSize: 12,
 } as const
 
@@ -76,7 +78,7 @@ export const tooltipContentStyle = {
   border: `0.5px solid ${RECHARTS_CONFIG.tooltipBorder}`,
   borderRadius: RECHARTS_CONFIG.tooltipBorderRadius,
   padding: RECHARTS_CONFIG.tooltipPadding,
-  boxShadow: 'none',
+  boxShadow: '0 4px 12px -2px rgb(0 0 0 / 0.1)',
   color: RECHARTS_CONFIG.tooltipTextColor,
 }
 

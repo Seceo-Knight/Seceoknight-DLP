@@ -72,10 +72,10 @@ const REPORT_TYPES = [
 ]
 
 const STATUS_CONFIG = {
-  pending:    { icon: Clock,       color: 'text-yellow-400', bg: 'bg-yellow-500/10 border-yellow-500/20', label: 'Pending' },
-  generating: { icon: Loader2,     color: 'text-blue-400',   bg: 'bg-blue-500/10 border-blue-500/20',   label: 'Generating' },
-  completed:  { icon: CheckCircle, color: 'text-green-400',  bg: 'bg-green-500/10 border-green-500/20', label: 'Completed' },
-  failed:     { icon: AlertCircle, color: 'text-red-400',    bg: 'bg-red-500/10 border-red-500/20',     label: 'Failed' },
+  pending:    { icon: Clock,       color: 'text-yellow-700', bg: 'bg-yellow-500/10 border-yellow-500/20', label: 'Pending' },
+  generating: { icon: Loader2,     color: 'text-blue-700',   bg: 'bg-blue-500/10 border-blue-500/20',   label: 'Generating' },
+  completed:  { icon: CheckCircle, color: 'text-green-700',  bg: 'bg-green-500/10 border-green-500/20', label: 'Completed' },
+  failed:     { icon: AlertCircle, color: 'text-red-700',    bg: 'bg-red-500/10 border-red-500/20',     label: 'Failed' },
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -111,7 +111,7 @@ function defaultEndDate() {
 
 function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
-    <div className="bg-gray-800 border border-gray-700 rounded-lg p-4">
+    <div className="bg-card border border-border rounded-lg p-4">
       <p className="text-xs text-muted-foreground/70 uppercase tracking-wide mb-1">{label}</p>
       <p className={`text-3xl font-bold ${color}`}>{value}</p>
     </div>
@@ -285,7 +285,7 @@ export default function Reports() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <Loader2 className="w-8 h-8 text-indigo-400 animate-spin" />
+        <Loader2 className="w-8 h-8 text-primary animate-spin" />
       </div>
     )
   }
@@ -295,9 +295,9 @@ export default function Reports() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <BarChart2 className="w-6 h-6 text-indigo-400" />
+          <BarChart2 className="w-6 h-6 text-primary" />
           <div>
-            <h1 className="text-xl font-bold text-white">Reports &amp; Compliance</h1>
+            <h1 className="text-xl font-bold text-foreground">Reports &amp; Compliance</h1>
             <p className="text-sm text-muted-foreground/70">Generate and download compliance reports</p>
           </div>
         </div>
@@ -305,14 +305,14 @@ export default function Reports() {
           <button
             onClick={() => fetchAll(true)}
             disabled={refreshing}
-            className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-700 hover:bg-gray-600 text-muted-foreground/50 rounded-lg transition-colors"
+            className="flex items-center gap-2 px-3 py-2 text-sm bg-muted hover:bg-muted/70 text-muted-foreground/50 rounded-lg transition-colors"
           >
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
           </button>
           <button
             onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors"
+            className="flex items-center gap-2 px-4 py-2 text-sm bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors"
           >
             <Plus className="w-4 h-4" />
             Generate Report
@@ -323,10 +323,10 @@ export default function Reports() {
       {/* Stats */}
       {summary && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <StatCard label="Total" value={summary.total} color="text-white" />
-          <StatCard label="Completed" value={summary.completed} color="text-green-400" />
-          <StatCard label="Generating" value={summary.pending + summary.generating} color="text-blue-400" />
-          <StatCard label="Failed" value={summary.failed} color="text-red-400" />
+          <StatCard label="Total" value={summary.total} color="text-foreground" />
+          <StatCard label="Completed" value={summary.completed} color="text-green-600" />
+          <StatCard label="Generating" value={summary.pending + summary.generating} color="text-blue-600" />
+          <StatCard label="Failed" value={summary.failed} color="text-red-600" />
         </div>
       )}
 
@@ -335,7 +335,7 @@ export default function Reports() {
         <select
           value={filterStatus}
           onChange={e => setFilterStatus(e.target.value)}
-          className="bg-gray-800 border border-gray-700 text-muted-foreground/50 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
+          className="bg-card border border-border text-muted-foreground/50 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-primary"
         >
           <option value="">All Statuses</option>
           <option value="completed">Completed</option>
@@ -346,7 +346,7 @@ export default function Reports() {
         <select
           value={filterType}
           onChange={e => setFilterType(e.target.value)}
-          className="bg-gray-800 border border-gray-700 text-muted-foreground/50 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
+          className="bg-card border border-border text-muted-foreground/50 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-primary"
         >
           <option value="">All Types</option>
           {REPORT_TYPES.map(t => (
@@ -357,7 +357,7 @@ export default function Reports() {
       </div>
 
       {/* Reports Table */}
-      <div className="bg-gray-800 border border-gray-700 rounded-xl overflow-hidden">
+      <div className="bg-card border border-border rounded-xl overflow-hidden">
         {reports.length === 0 ? (
           <div className="text-center py-16">
             <BarChart2 className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
@@ -368,7 +368,7 @@ export default function Reports() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-700 bg-gray-900/40">
+                <tr className="border-b border-border bg-muted/60">
                   <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Report</th>
                   <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Type</th>
                   <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Period</th>
@@ -377,18 +377,18 @@ export default function Reports() {
                   <th className="text-right px-4 py-3 text-muted-foreground/70 font-medium">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-700/50">
+              <tbody className="divide-y divide-border/50">
                 {reports.map(report => (
-                  <tr key={report.id} className="hover:bg-gray-700/30 transition-colors">
+                  <tr key={report.id} className="hover:bg-accent transition-colors">
                     <td className="px-4 py-3">
-                      <div className="font-medium text-white">{report.name}</div>
+                      <div className="font-medium text-foreground">{report.name}</div>
                       <div className="text-xs text-muted-foreground mt-0.5">
                         {fmt(report.created_at)}
                         {report.file_size_bytes ? ` · ${fmtSize(report.file_size_bytes)}` : ''}
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className="inline-block px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs">
+                      <span className="inline-block px-2 py-0.5 rounded bg-primary/10 border border-primary/20 text-primary text-xs">
                         {REPORT_TYPES.find(t => t.value === report.report_type)?.label || report.report_type}
                       </span>
                     </td>
@@ -401,18 +401,18 @@ export default function Reports() {
                     <td className="px-4 py-3">
                       <StatusBadge status={report.status} />
                       {report.status === 'failed' && report.error_message && (
-                        <p className="text-red-400 text-xs mt-1 max-w-xs truncate" title={report.error_message}>
+                        <p className="text-red-600 text-xs mt-1 max-w-xs truncate" title={report.error_message}>
                           {report.error_message}
                         </p>
                       )}
                     </td>
                     <td className="px-4 py-3">
                       {report.email_sent === 'yes' ? (
-                        <span className="flex items-center gap-1 text-xs text-green-400">
+                        <span className="flex items-center gap-1 text-xs text-green-600">
                           <Mail className="w-3 h-3" /> Sent
                         </span>
                       ) : report.email_sent === 'no' ? (
-                        <span className="text-xs text-red-400">Failed</span>
+                        <span className="text-xs text-red-600">Failed</span>
                       ) : (
                         <span className="text-xs text-muted-foreground">—</span>
                       )}
@@ -449,7 +449,7 @@ export default function Reports() {
                           <button
                             onClick={() => handleDelete(report.id)}
                             title="Delete"
-                            className="p-1 text-muted-foreground hover:text-red-400 transition-colors"
+                            className="p-1 text-muted-foreground hover:text-red-600 transition-colors"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -465,14 +465,14 @@ export default function Reports() {
       </div>
 
       {/* Scheduled reports info */}
-      <div className="bg-indigo-900/20 border border-indigo-500/20 rounded-xl p-4">
+      <div className="bg-primary/5 border border-primary/20 rounded-xl p-4">
         <div className="flex items-start gap-3">
-          <Clock className="w-5 h-5 text-indigo-400 mt-0.5 flex-shrink-0" />
+          <Clock className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
           <div>
-            <p className="text-sm font-medium text-indigo-300">Scheduled Reports</p>
+            <p className="text-sm font-medium text-primary">Scheduled Reports</p>
             <p className="text-sm text-muted-foreground/70 mt-1">
               Automated reports run on a fixed schedule: daily at 8:00 AM UTC, weekly every Monday at 9:00 AM UTC,
-              and monthly on the 1st at 10:00 AM UTC. Configure recipients and SMTP settings in your <code className="text-indigo-300">.env</code> file.
+              and monthly on the 1st at 10:00 AM UTC. Configure recipients and SMTP settings in your <code className="text-primary">.env</code> file.
             </p>
           </div>
         </div>
@@ -483,13 +483,13 @@ export default function Reports() {
         open={showForm}
         onClose={() => setShowForm(false)}
         size="md"
-        className="!bg-gray-800 !border-gray-700"
+        className="!bg-card !border-border"
         label="Generate Report"
         header={
           <ModalHeader
             title={
               <span className="flex items-center gap-2">
-                <FileText className="w-5 h-5 text-indigo-400" />
+                <FileText className="w-5 h-5 text-primary" />
                 Generate Report
               </span>
             }
@@ -500,14 +500,14 @@ export default function Reports() {
           <ModalFooter>
             <button
               onClick={() => setShowForm(false)}
-              className="flex-1 px-4 py-2 text-sm text-muted-foreground/50 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors"
+              className="flex-1 px-4 py-2 text-sm text-muted-foreground/50 bg-muted hover:bg-muted/70 rounded-lg transition-colors"
             >
               Cancel
             </button>
             <button
               onClick={handleGenerate}
               disabled={generating}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-50"
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 text-sm bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors disabled:opacity-50"
             >
               {generating ? (
                 <><Loader2 className="w-4 h-4 animate-spin" /> Queueing...</>
@@ -527,7 +527,7 @@ export default function Reports() {
                   value={form.name}
                   onChange={e => setForm(prev => ({ ...prev, name: e.target.value }))}
                   placeholder="e.g. Q2 Compliance Summary"
-                  className="w-full bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-muted border border-border text-foreground rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
                 />
               </div>
 
@@ -557,7 +557,7 @@ export default function Reports() {
                     type="datetime-local"
                     value={form.start_date}
                     onChange={e => setForm(prev => ({ ...prev, start_date: e.target.value }))}
-                    className="w-full bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-muted border border-border text-foreground rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
                   />
                 </div>
                 <div>
@@ -566,7 +566,7 @@ export default function Reports() {
                     type="datetime-local"
                     value={form.end_date}
                     onChange={e => setForm(prev => ({ ...prev, end_date: e.target.value }))}
-                    className="w-full bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                    className="w-full bg-muted border border-border text-foreground rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
                   />
                 </div>
               </div>
@@ -599,7 +599,7 @@ export default function Reports() {
                   value={form.recipients}
                   onChange={e => setForm(prev => ({ ...prev, recipients: e.target.value }))}
                   placeholder="ciso@company.com, security@company.com"
-                  className="w-full bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+                  className="w-full bg-muted border border-border text-foreground rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
                 />
               </div>
             </div>

@@ -36,15 +36,15 @@ const formatDateTimeIST = (d: Date) =>
 
 // Distinct, harmonious palette for event-type pie segments.
 const TYPE_PALETTE = [
-  '#5B7EFF', '#2DD4BF', '#FB923C', '#F87171', '#7B9EFF', '#34D399', '#FBBF24', '#60A5FA',
+  '#2563EB', '#16A34A', '#D97706', '#DC2626', '#7C3AED', '#0891B2', '#DB2777', '#65A30D',
 ]
 
 const SEVERITY_COLORS: Record<string, string> = {
-  critical: '#F87171',
-  high:     '#FB923C',
-  medium:   '#FBBF24',
-  low:      '#5B7EFF',
-  info:     '#A0A0B8',
+  critical: '#DC2626',
+  high:     '#D97706',
+  medium:   '#EAB308',
+  low:      '#2563EB',
+  info:     '#57606A',
 }
 
 // ── Custom tooltip ───────────────────────────────────────────────────────

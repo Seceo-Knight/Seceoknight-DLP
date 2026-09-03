@@ -803,9 +803,9 @@ export default function Settings() {
                       className="flex-1 px-3 py-2 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                       placeholder="Send test email to…" />
                     <button onClick={handleTestEmail} disabled={testEmailSending || !testEmailAddress}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-gray-700 text-white text-sm font-medium rounded-lg hover:bg-gray-800 disabled:opacity-50 transition-colors shrink-0">
+                      className="flex items-center gap-1.5 px-4 py-2 bg-foreground text-background text-sm font-medium rounded-lg hover:bg-foreground/90 disabled:opacity-50 transition-colors shrink-0">
                       {testEmailSending
-                        ? <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        ? <div className="h-4 w-4 border-2 border-background border-t-transparent rounded-full animate-spin" />
                         : <Send className="h-4 w-4" />}
                       Test
                     </button>
