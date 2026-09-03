@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowUp, ArrowDown, Minus, RefreshCw, ShieldQuestion } from 'lucide-react'
+import {
+  AlertTriangle, ArrowUp, ArrowDown, Minus, RefreshCw, ShieldQuestion,
+  Activity, Share2, Moon, Ban, type LucideIcon,
+} from 'lucide-react'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
@@ -61,6 +64,65 @@ function ScoreBar({ score }: { score: number }) {
   )
 }
 
+// ── Component breakdown → clickable event filters ─────────────────────────
+// Three of the five components map onto a clean per-event predicate (a
+// given event either happened off-hours, was blocked, or was high/critical
+// severity), so clicking those tiles genuinely filters the events driving
+// that number. Volume and channel diversity are population/set-level
+// stats rather than per-event flags -- volume counts every event equally
+// (so its "filter" is just showing everything), and channel diversity is
+// about which distinct channels are represented, so its tile shows one
+// representative (most recent) event per channel instead of a boolean
+// subset.
+type ComponentKey = 'volume' | 'channel_diversity' | 'off_hours' | 'block_ratio' | 'severity_mix'
+type RecentEvent = { timestamp: string; channel?: string | null; event_type: string; action: string; severity: string }
+
+const COMPONENT_META: Record<ComponentKey, { label: string; icon: LucideIcon }> = {
+  volume: { label: 'Volume', icon: Activity },
+  channel_diversity: { label: 'Channel Diversity', icon: Share2 },
+  off_hours: { label: 'Off Hours', icon: Moon },
+  block_ratio: { label: 'Block Ratio', icon: Ban },
+  severity_mix: { label: 'Severity Mix', icon: AlertTriangle },
+}
+
+// Same UTC-based cutoff as the backend's _is_off_hours (weekend, or
+// before 07:00 / at-or-after 19:00 UTC) -- timestamps are stored and
+// returned in UTC, so this has to use getUTCDay/getUTCHours rather than
+// the browser's local time, or "off hours" here would silently disagree
+// with the number the backend actually computed.
+function isOffHoursUTC(timestamp: string): boolean {
+  const d = new Date(timestamp)
+  const day = d.getUTCDay() // 0=Sun .. 6=Sat
+  const hour = d.getUTCHours()
+  return day === 0 || day === 6 || hour < 7 || hour >= 19
+}
+
+function filterEventsByComponent(events: RecentEvent[], key: ComponentKey): RecentEvent[] {
+  switch (key) {
+    case 'off_hours':
+      return events.filter((e) => isOffHoursUTC(e.timestamp))
+    case 'block_ratio':
+      return events.filter((e) => ['blocked', 'quarantined'].includes((e.action || '').toLowerCase()))
+    case 'severity_mix':
+      return events.filter((e) => ['critical', 'high'].includes((e.severity || '').toLowerCase()))
+    case 'channel_diversity': {
+      const seen = new Set<string>()
+      const out: RecentEvent[] = []
+      for (const e of events) {
+        const ch = (e.channel || e.event_type || '').toLowerCase()
+        if (ch && !seen.has(ch)) {
+          seen.add(ch)
+          out.push(e)
+        }
+      }
+      return out
+    }
+    case 'volume':
+    default:
+      return events
+  }
+}
+
 const LEVEL_FILTERS: { label: string; value: RiskLevel | '' }[] = [
   { label: 'All', value: '' },
   { label: 'Medium+', value: 'medium' },
@@ -108,7 +170,7 @@ export default function RiskScoring() {
       <PageHeader
         icon={ShieldQuestion}
         title="Risk Scoring"
-        description="Per-user behavioral score over a 14-day rolling window — event volume, channel diversity, off-hours activity, block ratio, and severity mix."
+        description="Behavioral risk score per user over a rolling window."
         actions={
           <Button onClick={() => recompute.mutate()} disabled={recompute.isPending} loading={recompute.isPending}>
             <RefreshCw className={cn('h-4 w-4', recompute.isPending && 'animate-spin')} />
@@ -116,14 +178,6 @@ export default function RiskScoring() {
           </Button>
         }
       />
-
-      {/* Explainability banner */}
-      <div className="flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-foreground/80">
-        <ShieldQuestion className="h-5 w-5 shrink-0 text-primary" />
-        <span>
-          Click any user row to see the full breakdown of events and factors behind their score.
-        </span>
-      </div>
 
       {/* Level filter */}
       <div className="flex items-center gap-1 rounded-md border border-border bg-card p-0.5 w-fit">
@@ -195,10 +249,15 @@ export default function RiskScoring() {
 }
 
 function DetailModal({ userEmail, onClose }: { userEmail: string; onClose: () => void }) {
+  const [activeComponent, setActiveComponent] = useState<ComponentKey | null>(null)
+
   const detailQ = useQuery({
     queryKey: ['risk-score-detail', userEmail],
     queryFn: () => getRiskScore(userEmail),
   })
+
+  const allEvents = detailQ.data?.recent_events || []
+  const displayedEvents = activeComponent ? filterEventsByComponent(allEvents, activeComponent) : allEvents
 
   return (
     <Modal
@@ -235,22 +294,57 @@ function DetailModal({ userEmail, onClose }: { userEmail: string; onClose: () =>
                 <div>
                   <h3 className="mb-2 text-sm font-semibold text-foreground">Component breakdown</h3>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    {Object.entries(detailQ.data.components).map(([key, value]) => (
-                      <div key={key} className="rounded-md border border-border bg-card p-2">
-                        <div className="text-xs capitalize text-muted-foreground">{key.replace(/_/g, ' ')}</div>
-                        <div className="font-medium tabular-nums text-foreground">{Number(value).toFixed(0)}</div>
-                      </div>
-                    ))}
+                    {(Object.entries(detailQ.data.components) as [ComponentKey, number][]).map(([key, value]) => {
+                      const meta = COMPONENT_META[key]
+                      if (!meta) return null
+                      const active = activeComponent === key
+                      const v = Number(value)
+                      const barColor = v >= 75 ? 'bg-critical' : v >= 50 ? 'bg-warning' : v >= 25 ? 'bg-info' : 'bg-success'
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setActiveComponent(active ? null : key)}
+                          className={cn(
+                            'rounded-md border p-2.5 text-left transition-colors',
+                            active
+                              ? 'border-primary/50 bg-primary/5 ring-1 ring-primary/30'
+                              : 'border-border bg-card hover:border-primary/40',
+                          )}
+                        >
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <meta.icon className="h-3.5 w-3.5" />
+                            {meta.label}
+                          </div>
+                          <div className="mt-1 font-semibold tabular-nums text-foreground">{v.toFixed(0)}</div>
+                          <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
+                            <div className={cn('h-full', barColor)} style={{ width: `${Math.min(100, Math.max(0, v))}%` }} />
+                          </div>
+                        </button>
+                      )
+                    })}
                   </div>
                 </div>
               )}
 
               <div>
-                <h3 className="mb-2 text-sm font-semibold text-foreground">
-                  Recent events ({detailQ.data.recent_events.length})
-                </h3>
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-foreground">
+                    {activeComponent ? `${COMPONENT_META[activeComponent].label} events` : 'Recent events'}
+                    {' '}({displayedEvents.length}{activeComponent ? ` of ${allEvents.length}` : ''})
+                  </h3>
+                  {activeComponent && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveComponent(null)}
+                      className="text-xs font-medium text-primary hover:underline"
+                    >
+                      Clear filter
+                    </button>
+                  )}
+                </div>
                 <div className="max-h-64 space-y-1.5 overflow-y-auto">
-                  {detailQ.data.recent_events.map((e) => (
+                  {displayedEvents.map((e: any) => (
                     <div key={e.id} className="flex items-center gap-2 rounded-md border border-border bg-card p-2 text-xs">
                       <Badge variant="info" className="shrink-0">{e.event_type}</Badge>
                       <span className="flex-1 truncate text-muted-foreground">{e.description}</span>
@@ -258,8 +352,10 @@ function DetailModal({ userEmail, onClose }: { userEmail: string; onClose: () =>
                       <span className="shrink-0 text-muted-foreground">{fmt(e.timestamp)}</span>
                     </div>
                   ))}
-                  {detailQ.data.recent_events.length === 0 && (
-                    <p className="text-xs text-muted-foreground">No recent events found.</p>
+                  {displayedEvents.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      {activeComponent ? 'No events match this filter.' : 'No recent events found.'}
+                    </p>
                   )}
                 </div>
               </div>

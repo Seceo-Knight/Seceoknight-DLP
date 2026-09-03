@@ -287,16 +287,33 @@ class RiskScoringService:
         )
         return result.scalars().first()
 
-    async def get_recent_events_for_user(self, user_email: str, limit: int = 20) -> List[Event]:
+    async def get_recent_events_for_user(
+        self,
+        user_email: str,
+        limit: int = 50,
+        window_start: Optional[datetime] = None,
+        window_end: Optional[datetime] = None,
+    ) -> List[Event]:
         """The contributing events behind a score, for the detail view --
         an analyst should never have to trust a number without being able
-        to see what produced it."""
-        result = await self.db.execute(
-            select(Event)
-            .where(Event.user_email == user_email)
-            .order_by(Event.timestamp.desc())
-            .limit(limit)
-        )
+        to see what produced it.
+
+        Scoped to [window_start, window_end) -- the same rolling window
+        `_score_user` actually computed the components from -- when given,
+        rather than just "this user's N most recent events regardless of
+        window". Without that scoping, the detail view could show events
+        from after the score was last computed (or, for a user who was
+        quiet since, a long-stale window), which don't explain the number
+        on screen and make any per-component filter (off-hours/blocked/
+        high-severity) misleading.
+        """
+        query = select(Event).where(Event.user_email == user_email)
+        if window_start is not None:
+            query = query.where(Event.timestamp >= window_start)
+        if window_end is not None:
+            query = query.where(Event.timestamp < window_end)
+        query = query.order_by(Event.timestamp.desc()).limit(limit)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
 
     async def count_by_level(self) -> Dict[str, int]:
