@@ -23,7 +23,6 @@ export type PolicyType =
   | 'printer_control'
   | 'email_send_prevention'
   | 'web_activity_control'
-  | 'file_access_control'
 
 export type PolicySeverity = 'low' | 'medium' | 'high' | 'critical'
 export type ClipboardAction = 'alert' | 'log'
@@ -193,28 +192,6 @@ export interface PrintContentPreventionConfig {
   unknownContentAction?: PrintUnknownContentAction
 }
 
-export type FileAccessControlMode = 'enforce' | 'audit' | 'off'
-
-export interface FileAccessControlConfig {
-  mode: FileAccessControlMode
-  // Applied the moment the agent's file_system_monitoring pipeline
-  // classifies a newly written/modified file under a monitored path as one
-  // of these levels — e.g. ["Confidential", "Restricted"].
-  classification_levels: string[]
-  // Applied/reconciled every policy-sync cycle, independent of
-  // classification — admin-named files/folders (e.g. "C:\\Shared\\HR").
-  explicit_paths: string[]
-  // Local Windows accounts, or AD accounts if the endpoint is domain-joined
-  // (resolved via LookupAccountNameW on the agent) — by name, not SID.
-  authorized_users: string[]
-  authorized_groups: string[]
-  // SYSTEM + local Administrators always keep full control regardless of
-  // this setting, so an admin can never lock themselves out entirely; this
-  // only controls whether the *domain* Administrators group / other admin
-  // groups are also always-allowed. Defaults to true.
-  always_allow_admins?: boolean
-}
-
 export type MessagingAppAction = 'alert' | 'block'
 
 export interface MessagingAppControlConfig {
@@ -357,7 +334,6 @@ export type PolicyConfig =
   | PrinterControlConfig
   | EmailConfig
   | WebActivityControlConfig
-  | FileAccessControlConfig
 
 export interface Policy {
   id: string

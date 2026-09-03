@@ -89,7 +89,6 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
   $USB_TASK      = 'SeceoKnight DLP USB Block'
   $CLIGUARD_TASK = 'SeceoKnight DLP CLI Guard'   # task #142/#145
   $WIRELESSGUARD_TASK = 'SeceoKnight DLP Wireless Guard'   # task #147
-  $FILEACCESSGUARD_TASK = 'SeceoKnight DLP File Access Guard'   # File Access Control, Aug 2026
   $EXTGUARD_TASK = 'SeceoKnight DLP Browser Extension Guard'   # gap-scan Aug 18 2026
   $EXT_STATE_CACHE = "$DATA_DIR\logs\browser_extension_state.cache"
 
@@ -851,27 +850,24 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     }
   }
 
-  # Reconciles the policy-driven elevated guard tasks (Wireless Guard, File
-  # Access Guard) that install-agent.ps1 registers on a fresh Install, but
-  # which Update-Agent historically never touched -- a machine that was
-  # installed before one of these features shipped, and has only ever run
-  # [2] Update since, would silently never get the new guard task at all.
-  # Found September 2, 2026: File Access Control policy fetched fine, the
-  # desired-state cache populated fine, mode was correctly "enforce" -- but
-  # nothing ever applied the DACL, because "SeceoKnight DLP File Access
-  # Guard" simply didn't exist on the machine (Get-ScheduledTaskInfo:
-  # "The system cannot find the file specified."). Same class of bug as
-  # Repair-WatchdogTask above, just for tasks Update never created at all
-  # rather than one it created wrong -- so on every Update, not just every
-  # Install, make sure both exist.
+  # Reconciles the policy-driven elevated guard tasks (currently: Wireless
+  # Guard) that install-agent.ps1 registers on a fresh Install, but which
+  # Update-Agent historically never touched -- a machine that was installed
+  # before a feature like this shipped, and has only ever run [2] Update
+  # since, would silently never get the new guard task at all. Same class
+  # of bug as Repair-WatchdogTask above, just for tasks Update never created
+  # at all rather than one it created wrong.
+  #
+  # Also cleans up "SeceoKnight DLP File Access Guard" if still present --
+  # File Access Control was removed entirely after field testing (Sept 3,
+  # 2026) found it unreliable (see CHANGELOG.md), but a machine that had it
+  # installed would otherwise keep running that task forever with no policy
+  # behind it, since nothing else ever revisits already-registered tasks.
   function Repair-GuardTasks($s) {
     $guardTasks = @(
       @{ Name = 'SeceoKnight DLP Wireless Guard'
          Arg  = '--apply-wireless-guard'
          Desc = 'SeceoKnight DLP - Reconcile Bluetooth/Nearby Sharing IFEO and policy state every 2 minutes (requires SYSTEM elevation)' }
-      @{ Name = 'SeceoKnight DLP File Access Guard'
-         Arg  = '--apply-file-access-guard'
-         Desc = 'SeceoKnight DLP - Reconcile per-file/folder NTFS access-control permissions every 2 minutes (requires SYSTEM elevation)' }
     )
 
     foreach ($t in $guardTasks) {
@@ -897,17 +893,14 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       }
     }
 
-    # File Access Guard's audit-trail forwarding needs failure auditing on
-    # the "File System" object-access subcategory -- also install-only
-    # historically, same gap as the tasks above. Idempotent, failure-only
-    # (see install-agent.ps1 for why not success too).
-    try {
-      $auditResult = & auditpol.exe /set /subcategory:"File System" /failure:enable /success:disable 2>&1
-      if ($LASTEXITCODE -ne 0) {
-        Warn "Could not enable 'File System' failure auditing (non-fatal): $auditResult"
+    $legacyFileAccessGuard = Get-ScheduledTask -TaskName 'SeceoKnight DLP File Access Guard' -ErrorAction SilentlyContinue
+    if ($legacyFileAccessGuard) {
+      try {
+        Unregister-ScheduledTask -TaskName 'SeceoKnight DLP File Access Guard' -Confirm:$false
+        Ok 'Removed leftover File Access Guard task (feature removed).'
+      } catch {
+        Warn "Could not remove leftover File Access Guard task (non-fatal): $($_.Exception.Message)"
       }
-    } catch {
-      Warn "Could not run auditpol.exe (non-fatal): $($_.Exception.Message)"
     }
   }
 
@@ -1151,7 +1144,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     }
 
     # 3) Remove all scheduled tasks this project registers.
-    foreach ($n in @($TASK_NAME, $WATCHDOG_TASK, $USB_TASK, $CLIGUARD_TASK, $WIRELESSGUARD_TASK, $FILEACCESSGUARD_TASK, $EXTGUARD_TASK)) {
+    foreach ($n in @($TASK_NAME, $WATCHDOG_TASK, $USB_TASK, $CLIGUARD_TASK, $WIRELESSGUARD_TASK, 'SeceoKnight DLP File Access Guard', $EXTGUARD_TASK)) {
       if (Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue) {
         Info "Removing scheduled task: $n"
         Stop-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
