@@ -77,13 +77,6 @@ POLICY_TYPE_DOMAIN = {
     # USB device allowlist (strict default-deny by serial number) — created via
     # the USB Devices page's enforcement toggle, ported from CyberSentinel-DLP.
     "usb_device_control": PolicyDomain.ACCESS_CONTROL,
-    # Per-file/folder access control -- restricts which named users/groups may
-    # open a file at all (NTFS DACL enforcement on the Windows agent), scoped
-    # either by classification level or an explicit path list. This is the
-    # GDPR Art. 32 "access control" measure, distinct from every other policy
-    # type here which governs content leaving the endpoint -- this one governs
-    # who may read it in the first place. Added August 2026.
-    "file_access_control": PolicyDomain.ACCESS_CONTROL,
     # Printer allowlist — device control (block_all/network/local/allowlist).
     # Agent enforcement landed alongside print_content_prevention below.
     "printer_control": PolicyDomain.THREAT,
@@ -121,10 +114,6 @@ EVENT_TYPE_DOMAIN = {
     "google_drive": PolicyDomain.DATA_PROTECTION,
     "onedrive": PolicyDomain.DATA_PROTECTION,
     "classification": PolicyDomain.DATA_PROTECTION,
-    # Emitted by the Windows agent when it applies/reverts an ACL, or once
-    # SACL-based audit forwarding lands, when it detects a denied open
-    # attempt against a protected file (see file_access_control above).
-    "file_access": PolicyDomain.ACCESS_CONTROL,
 }
 
 

@@ -99,7 +99,6 @@ jobs:
             -lcrypt32 \
             -lwtsapi32 \
             -lmpr \
-            -lwevtapi \
             -static-libgcc \
             -static-libstdc++ \
             -static -lpthread \

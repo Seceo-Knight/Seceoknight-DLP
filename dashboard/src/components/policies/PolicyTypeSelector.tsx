@@ -1,7 +1,7 @@
 'use client'
 
 import { PolicyType } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield, Globe, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail, Bot, Lock } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Shield, Globe, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail, Bot } from 'lucide-react'
 
 interface PolicyTypeSelectorProps {
   selectedType: PolicyType | null
@@ -127,12 +127,6 @@ const policyTypes: Array<{
     label: 'Web Activity Control (GenAI DLP)',
     description: 'Detect and control sensitive data sent to/from ChatGPT, Copilot, Gemini, Claude, webmail, and collaboration tools',
     icon: Bot
-  },
-  {
-    type: 'file_access_control',
-    label: 'File Access Control (GDPR)',
-    description: 'Restrict who can open classified files or protected folders to a named list of users/groups — everyone else is denied at the OS level',
-    icon: Lock
   }
 ]
 

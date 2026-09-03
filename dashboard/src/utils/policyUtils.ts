@@ -20,10 +20,9 @@ import {
   MessagingAppControlConfig,
   PrinterControlConfig,
   EmailConfig,
-  WebActivityControlConfig,
-  FileAccessControlConfig
+  WebActivityControlConfig
 } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail, Bot, Lock } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail, Bot } from 'lucide-react'
 
 /**
  * Get icon component for policy type
@@ -64,8 +63,6 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return Mail
     case 'web_activity_control':
       return Bot
-    case 'file_access_control':
-      return Lock
     default:
       return FileText
   }
@@ -110,8 +107,6 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Email DLP (Outbound)'
     case 'web_activity_control':
       return 'Web Activity Control (GenAI DLP)'
-    case 'file_access_control':
-      return 'File Access Control (GDPR)'
     default:
       return 'Unknown'
   }
@@ -263,16 +258,6 @@ export const formatPolicyConfig = (policy: Policy): string => {
         return cells.map(([cell, action]) => `${cell}: ${action}`).join(' | ')
       }
 
-      case 'file_access_control': {
-        const c = config as FileAccessControlConfig
-        const targets = [
-          ...(c.classification_levels || []),
-          ...(c.explicit_paths || []).map((p) => `path:${p}`),
-        ].join(', ') || 'None selected'
-        const principals = (c.authorized_users || []).length + (c.authorized_groups || []).length
-        return `Mode: ${c.mode || 'audit'} | Targets: ${targets} | Authorized: ${principals}`
-      }
-
       default:
         return (config as any).description || 'Custom configuration'
     }
@@ -422,19 +407,6 @@ export const validatePolicy = (policy: Partial<Policy>): { valid: boolean; error
       // messaging_app_control have no required fields beyond mode/action
       // (both already default to a sensible value), so no case is needed
       // here -- getDefaultConfig() alone is always a valid policy.
-
-      case 'file_access_control': {
-        const c = policy.config as FileAccessControlConfig
-        if (c.mode !== 'off') {
-          if ((c.classification_levels || []).length === 0 && (c.explicit_paths || []).length === 0) {
-            errors.push('Select at least one classification level or path to restrict, or set mode to Off')
-          }
-          if ((c.authorized_users || []).length === 0 && (c.authorized_groups || []).length === 0) {
-            errors.push('At least one authorized user or group is required so the policy has someone to allow')
-          }
-        }
-        break
-      }
     }
   }
 
@@ -724,15 +696,6 @@ const getDefaultConfig = (type: PolicyType): any => {
       return { action: 'block', triggerLevels: ['Confidential', 'Restricted'] }
     case 'web_activity_control':
       return { matrix: {} }
-    case 'file_access_control':
-      return {
-        mode: 'audit',
-        classification_levels: [],
-        explicit_paths: [],
-        authorized_users: [],
-        authorized_groups: [],
-        always_allow_admins: true
-      }
     default:
       return {}
   }

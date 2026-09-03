@@ -8,6 +8,44 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Removed: File Access Control (GDPR) policy type (September 3, 2026)
+
+Pulled entirely -- server endpoint, dashboard UI, and Windows agent enforcement code -- after field testing
+(see the entries below) found it unreliable enough to be a liability rather than a control worth shipping.
+Decision made after weighing what the day's testing actually surfaced, not a single bug: the feature required
+five separate fixes in one session (wrong auth dependency locking every agent out silently, a silent HTTP-error
+swallow that hid it, a tab-delimited cache parser that dropped any entry without Authorized Groups, `manage-agent.ps1`
+never creating the guard task on any machine that predated the feature, and a failed-revert tracking bug that could
+leave a folder's NTFS permissions permanently altered with no way to self-heal) and, even after all of those fixes,
+had two side effects that reached real files: a test policy's default classification-level scope silently applied
+restrictive permissions to unrelated files on the tester's Desktop, and the audit-trail leg (SACL -> Windows
+Security event log -> dashboard event) was never gotten working at all despite exhausting the standard Windows
+audit-policy diagnostic checklist. A DLP control that can silently alter a customer's file permissions with no
+confirmed way to see what it did, and no confirmed way it will always cleanly revert, is not production-ready.
+
+**What was removed:**
+- Server: `GET /agents/{id}/file-access-policy` endpoint (`agents.py`), the `file_access_control`/`file_access`
+  domain mappings (`domains.py`).
+- Dashboard: `FileAccessControlPolicyForm.tsx` (deleted), and every registration surface (`types/policy.ts`,
+  `PolicyTypeSelector.tsx`, `PolicyCreatorModal.tsx`, `policyUtils.ts`).
+- Windows agent (`agent.cpp`): all fetch/parse/cache/apply/revert/audit-forwarding code, the classify-on-write
+  hook, the `--apply-file-access-guard` one-shot entry point, and the now-unused `accctrl.h`/`aclapi.h`/`sddl.h`/
+  `winevt.h` includes and `-lwevtapi` link dependency. Verified clean by diffing against the last commit before
+  the feature ever existed (`d0cf2a1`) -- the resulting file differs by exactly one whitespace character.
+- `install-agent.ps1`/`manage-agent.ps1`: the "SeceoKnight DLP File Access Guard" scheduled task registration and
+  the `auditpol` "File System" failure-auditing step. Both scripts now actively **remove** the leftover task on
+  any machine that already has it (Install's cleanup block, and `Repair-GuardTasks` on every Update), rather than
+  just no longer creating new ones -- a machine that had this feature installed would otherwise keep running an
+  orphaned task with no server-side policy behind it forever.
+
+**If this is revisited later**: the underlying idea (GDPR Art. 32 per-file access control) is still valid and was
+the right ask -- what wasn't ready was this specific implementation's operational maturity. A future attempt
+should resolve the audit-trail root cause BEFORE shipping (not after, as happened here), and should not scope a
+single policy to match "every classification level" as a default, given how easily that swept up unrelated files
+in testing.
+
+---
+
 ## Field test result: File Access Control blocking confirmed working; audit-trail forwarding still unconfirmed (September 2-3, 2026)
 
 After the three fixes below (auth dependency, silent HTTP-error swallow, tab-delimited cache parser dropping
