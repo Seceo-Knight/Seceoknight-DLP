@@ -15,7 +15,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Badge, severityToVariant } from '@/components/ui/badge'
+import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { DataPagination } from '@/components/ui/pagination'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -96,7 +96,10 @@ function EventDetailModal({
     return 'File Activity'
   }
 
-  const severityTone: Tone = event.severity === 'critical' ? 'red' : event.severity === 'high' ? 'orange' : event.severity === 'medium' ? 'yellow' : 'green'
+  // Matches the Dashboard chart legend and the search-result row's tone
+  // ladder (critical=red, high=orange, medium=yellow, low=blue) instead
+  // of a 4th ad hoc scheme.
+  const severityTone: Tone = event.severity === 'critical' ? 'red' : event.severity === 'high' ? 'orange' : event.severity === 'medium' ? 'yellow' : 'blue'
 
   const rawDataToggle = (
     <div className="border-t border-border pt-4">
@@ -652,6 +655,33 @@ export default function Events() {
     return match ? match[1] + ':' : ''
   }
 
+  // Severity → tone, matching the Dashboard's "Events by Severity" chart
+  // legend (critical=red, high=orange, medium=yellow, low=blue). The row
+  // below used to only branch on critical/high and fall everything else
+  // -- both medium AND low -- through to the same blue icon, so a
+  // "medium" badge sat next to an icon that visually claimed "low
+  // priority", and it disagreed with the Badge component's own
+  // severityToVariant (a third, different red/orange/blue/green scheme).
+  // Rendered as a plain span in the row instead of <Badge> so this one
+  // severity chip can share the same 4-tone ladder as the icon box and
+  // the left accent border, instead of adding a 3rd inconsistent scheme.
+  const severityTone = (severity?: string | null): Tone => {
+    switch ((severity || '').toLowerCase()) {
+      case 'critical': return 'red'
+      case 'high': return 'orange'
+      case 'medium': return 'yellow'
+      case 'low': return 'blue'
+      default: return 'gray'
+    }
+  }
+
+  const SEVERITY_BORDER: Record<string, string> = {
+    critical: 'border-l-critical',
+    high: 'border-l-warning',
+    medium: 'border-l-warning/50',
+    low: 'border-l-info',
+  }
+
   const getEventSubtypeIcon = (subtype: string) => {
     const normalized = subtype?.toLowerCase() || ''
     if (normalized.includes('created')) return <FilePlus className="w-4 h-4" />
@@ -1052,136 +1082,142 @@ export default function Events() {
               description="Try adjusting your search query or clearing active filters."
             />
           ) : (
-            pageRows.map((event) => (
+            pageRows.map((event) => {
+              const sevTone = severityTone(event.severity)
+              const eventId = event.id || event.event_id || ''
+              return (
               <div
-                key={event.id || event.event_id}
-                className="p-4 hover:bg-accent cursor-pointer transition-colors"
+                key={eventId}
+                className={cn(
+                  'flex items-start gap-3 border-l-2 py-3.5 pl-3 pr-4 cursor-pointer transition-colors hover:bg-accent',
+                  SEVERITY_BORDER[(event.severity || '').toLowerCase()] || 'border-l-border',
+                )}
                 onClick={() => setSelectedEvent(event)}
               >
-                <div className="flex items-start gap-4">
-                  <div className={cn(
-                    'p-2 rounded-lg border',
-                    usbTransferFailed(event) ? tone('red')
-                      : (event.blocked || usbTransferOutcome(event, 'blocked')) ? tone('red')
-                      : (event.quarantined || usbTransferOutcome(event, 'quarantined')) ? tone('blue')
-                      : event.severity === 'critical' ? tone('red') : event.severity === 'high' ? tone('orange') : tone('blue'),
-                  )}>
-                    {event.event_type === 'file' ? <FileText className="h-5 w-5" /> :
-                      event.event_type === 'usb' ? <Shield className="h-5 w-5" /> :
-                      <AlertTriangle className="h-5 w-5" />}
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    {event.title && (
-                      <h4 className="font-semibold text-foreground mb-2 text-base">{event.title}</h4>
-                    )}
-
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      {event.event_subtype && (event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && (
-                        <span className={cn('inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-semibold', tone(getEventSubtypeTone(event.event_subtype)))}>
-                          {getEventSubtypeIcon(event.event_subtype)}
-                          {getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}
-                        </span>
-                      )}
-                      <Badge variant={severityToVariant(event.severity)}>{event.severity}</Badge>
-                      <Badge variant="info">
-                        {event.event_type === 'usb' && event.event_subtype
-                          ? (event.event_subtype === 'usb_connect' ? 'USB Connected'
-                            : event.event_subtype === 'usb_disconnect' ? 'USB Disconnected'
-                            : event.event_subtype === 'usb_blocked' ? 'USB Blocked'
-                            : event.event_subtype === 'usb_file_transfer'
-                              ? (event.action === 'block_failed' ? 'USB Transfer Block FAILED'
-                                : event.action === 'quarantine_failed' ? 'USB Transfer Quarantine FAILED'
-                                : usbTransferOutcome(event, 'blocked') ? 'USB Transfer Blocked'
-                                : usbTransferOutcome(event, 'quarantined') ? 'USB Transfer Quarantined'
-                                : 'USB Transfer')
-                            : event.event_type)
-                          : event.event_type}
-                      </Badge>
-                      {usbTransferFailed(event) && (
-                        <Badge variant="critical">
-                          {event.action === 'quarantine_failed' ? 'quarantine failed — file still present' : 'block failed — file still present'}
-                        </Badge>
-                      )}
-                      {!usbTransferFailed(event) && (event.blocked || usbTransferOutcome(event, 'blocked')) && <Badge variant="critical">blocked</Badge>}
-                      {!usbTransferFailed(event) && !event.blocked && !usbTransferOutcome(event, 'blocked') &&
-                        (event.quarantined || event.action_taken === 'quarantined' || event.action === 'quarantined' || usbTransferOutcome(event, 'quarantined')) && (
-                        <Badge variant="warning">quarantined</Badge>
-                      )}
-                      {event.classification_labels && event.classification_labels.length > 0 && (
-                        <span className={cn('inline-flex items-center px-2 py-1 text-xs font-medium rounded-full border', tone('purple'))}>
-                          {event.classification_labels[0]}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-3 text-sm text-muted-foreground flex-wrap">
-                      <span>
-                        <span className="text-muted-foreground/70">Agent:</span>{' '}
-                        <span className="font-medium text-foreground" title={event.agent_id}>{getEventAgentLabel(event)}</span>
-                      </span>
-                      {event.user_email && event.user_email !== 'agent@system' && (
-                        <>
-                          <span className="text-muted-foreground/40">•</span>
-                          <span>
-                            <span className="text-muted-foreground/70">User:</span>{' '}
-                            <span className="font-medium text-foreground">{event.user_email}</span>
-                          </span>
-                        </>
-                      )}
-                      <span className="text-muted-foreground/40">•</span>
-                      <span>{formatDate(event.timestamp, 'PPpp')}</span>
-                      <span className="text-muted-foreground/40">•</span>
-                      <code className="text-xs bg-secondary px-1 py-0.5 rounded">{event.id || event.event_id}</code>
-                    </div>
-
-                    {event.file_path && (
-                      <p className="mt-2 text-sm text-foreground/80">
-                        <strong className="text-foreground">File:</strong>{' '}
-                        {(event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && event.event_subtype ? (
-                          <>
-                            <span className="font-medium">{getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}:</span>{' '}
-                            {event.file_name || truncate(event.file_path, 60)}
-                          </>
-                        ) : truncate(event.file_path, 80)}
-                      </p>
-                    )}
-
-                    {Array.isArray(event.matched_policies) && event.matched_policies.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {event.matched_policies
-                          .map((policy: any) => policy?.policy_name)
-                          .filter(Boolean)
-                          .map((name: string) => (
-                            <span key={`${event.id}-policy-${name}`} className={cn('inline-flex items-center px-2 py-1 text-xs font-medium rounded-full border', tone('indigo'))}>
-                              {name}
-                            </span>
-                          ))}
-                      </div>
-                    )}
-
-                    {event.usb && (
-                      <p className="mt-2 text-sm text-foreground/80">
-                        <strong className="text-foreground">USB:</strong> {event.usb.vendor} {event.usb.product}
-                        {event.usb.serial && ` (${event.usb.serial})`}
-                      </p>
-                    )}
-
-                    {event.policy && (
-                      <p className="mt-2 text-sm text-foreground/80">
-                        <strong className="text-foreground">Policy:</strong> {event.policy.policy_name} ({event.policy.action})
-                      </p>
-                    )}
-
-                    {event.content_redacted && (
-                      <div className="mt-2 p-2 bg-secondary rounded text-xs font-mono text-muted-foreground">
-                        {truncate(event.content_redacted, 200)}
-                      </div>
-                    )}
-                  </div>
+                <div className={cn(
+                  'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border',
+                  usbTransferFailed(event) ? tone('red')
+                    : (event.blocked || usbTransferOutcome(event, 'blocked')) ? tone('red')
+                    : (event.quarantined || usbTransferOutcome(event, 'quarantined')) ? tone('blue')
+                    : tone(sevTone),
+                )}>
+                  {event.event_type === 'file' ? <FileText className="h-4 w-4" /> :
+                    event.event_type === 'usb' ? <Shield className="h-4 w-4" /> :
+                    <AlertTriangle className="h-4 w-4" />}
                 </div>
+
+                <div className="min-w-0 flex-1">
+                  {event.title && (
+                    <h4 className="mb-1 text-sm font-semibold text-foreground">{event.title}</h4>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide', tone(sevTone))}>
+                      {event.severity}
+                    </span>
+                    {event.event_subtype && (event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && (
+                      <span className={cn('inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-medium border', tone(getEventSubtypeTone(event.event_subtype)))}>
+                        {getEventSubtypeIcon(event.event_subtype)}
+                        {getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}
+                      </span>
+                    )}
+                    <Badge variant="info">
+                      {event.event_type === 'usb' && event.event_subtype
+                        ? (event.event_subtype === 'usb_connect' ? 'USB Connected'
+                          : event.event_subtype === 'usb_disconnect' ? 'USB Disconnected'
+                          : event.event_subtype === 'usb_blocked' ? 'USB Blocked'
+                          : event.event_subtype === 'usb_file_transfer'
+                            ? (event.action === 'block_failed' ? 'USB Transfer Block FAILED'
+                              : event.action === 'quarantine_failed' ? 'USB Transfer Quarantine FAILED'
+                              : usbTransferOutcome(event, 'blocked') ? 'USB Transfer Blocked'
+                              : usbTransferOutcome(event, 'quarantined') ? 'USB Transfer Quarantined'
+                              : 'USB Transfer')
+                          : event.event_type)
+                        : event.event_type}
+                    </Badge>
+                    {usbTransferFailed(event) && (
+                      <Badge variant="critical">
+                        {event.action === 'quarantine_failed' ? 'quarantine failed — file still present' : 'block failed — file still present'}
+                      </Badge>
+                    )}
+                    {!usbTransferFailed(event) && (event.blocked || usbTransferOutcome(event, 'blocked')) && <Badge variant="critical">blocked</Badge>}
+                    {!usbTransferFailed(event) && !event.blocked && !usbTransferOutcome(event, 'blocked') &&
+                      (event.quarantined || event.action_taken === 'quarantined' || event.action === 'quarantined' || usbTransferOutcome(event, 'quarantined')) && (
+                      <Badge variant="warning">quarantined</Badge>
+                    )}
+                    {event.classification_labels && event.classification_labels.length > 0 && (
+                      <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium border', tone('purple'))}>
+                        {event.classification_labels[0]}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+                    <span title={event.agent_id}>
+                      <span className="text-muted-foreground/70">Agent</span>{' '}
+                      <span className="font-medium text-foreground">{getEventAgentLabel(event)}</span>
+                    </span>
+                    {event.user_email && event.user_email !== 'agent@system' && (
+                      <>
+                        <span className="text-muted-foreground/30">·</span>
+                        <span>
+                          <span className="text-muted-foreground/70">User</span>{' '}
+                          <span className="font-medium text-foreground">{event.user_email}</span>
+                        </span>
+                      </>
+                    )}
+                    <span className="text-muted-foreground/30">·</span>
+                    <span>{formatDate(event.timestamp, 'PPpp')}</span>
+                  </div>
+
+                  {event.file_path && (
+                    <p className="mt-1 text-xs text-foreground/80">
+                      <span className="font-medium text-foreground">File:</span>{' '}
+                      {(event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && event.event_subtype ? (
+                        <>
+                          <span className="font-medium">{getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}:</span>{' '}
+                          {event.file_name || truncate(event.file_path, 60)}
+                        </>
+                      ) : truncate(event.file_path, 80)}
+                    </p>
+                  )}
+
+                  {Array.isArray(event.matched_policies) && event.matched_policies.length > 0 && (
+                    <p className="mt-1 text-xs text-foreground/80">
+                      <span className="font-medium text-foreground">Matched Policy:</span>{' '}
+                      {event.matched_policies.map((p: any) => p?.policy_name).filter(Boolean).join(', ')}
+                    </p>
+                  )}
+
+                  {event.usb && (
+                    <p className="mt-1 text-xs text-foreground/80">
+                      <span className="font-medium text-foreground">USB:</span> {event.usb.vendor} {event.usb.product}
+                      {event.usb.serial && ` (${event.usb.serial})`}
+                    </p>
+                  )}
+
+                  {event.policy && (
+                    <p className="mt-1 text-xs text-foreground/80">
+                      <span className="font-medium text-foreground">Policy:</span> {event.policy.policy_name} ({event.policy.action})
+                    </p>
+                  )}
+
+                  {event.content_redacted && (
+                    <div className="mt-1.5 rounded border border-border bg-secondary/60 p-2 text-xs font-mono text-muted-foreground">
+                      {truncate(event.content_redacted, 200)}
+                    </div>
+                  )}
+                </div>
+
+                <code
+                  className="mt-0.5 hidden shrink-0 font-mono text-[10px] text-muted-foreground/40 sm:block"
+                  title={eventId}
+                >
+                  {eventId.length > 10 ? `${eventId.slice(0, 10)}…` : eventId}
+                </code>
               </div>
-            ))
+              )
+            })
           )}
         </div>
 
