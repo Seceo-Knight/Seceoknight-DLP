@@ -4,6 +4,7 @@ import { useMutation } from '@tanstack/react-query'
 import { TestTube, AlertTriangle, CheckCircle } from 'lucide-react'
 import { testRules, type RuleTestResponse } from '@/lib/rules-api'
 import { cn } from '@/lib/utils'
+import { tone, type Tone } from '@/lib/tone'
 import toast from 'react-hot-toast'
 import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
 
@@ -39,26 +40,36 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
     setResult(null)
   }
 
+  // Same Restricted=red/Confidential=orange/Internal=yellow/Public=green
+  // ladder as Events.tsx's EventDetailModal and Log Explorer, instead of
+  // an independently-invented 4th scheme.
   const getClassificationColor = (classification: string) => {
     switch (classification) {
-      case 'Restricted':
-        return 'text-red-400 bg-red-500/15 border-red-500/40'
-      case 'Confidential':
-        return 'text-orange-400 bg-orange-500/15 border-orange-500/40'
-      case 'Internal':
-        return 'text-yellow-400 bg-yellow-500/15 border-yellow-500/40'
-      case 'Public':
-        return 'text-green-400 bg-green-500/15 border-green-500/40'
-      default:
-        return 'text-foreground/90 bg-secondary border-border'
+      case 'Restricted': return tone('red')
+      case 'Confidential': return tone('orange')
+      case 'Internal': return tone('yellow')
+      case 'Public': return tone('green')
+      default: return tone('gray')
     }
   }
 
-  const getConfidenceColor = (score: number) => {
-    if (score >= 0.8) return 'text-red-400'
-    if (score >= 0.6) return 'text-orange-400'
-    if (score >= 0.3) return 'text-yellow-400'
-    return 'text-green-400'
+  const getConfidenceTone = (score: number): 'red' | 'orange' | 'yellow' | 'green' => {
+    if (score >= 0.8) return 'red'
+    if (score >= 0.6) return 'orange'
+    if (score >= 0.3) return 'yellow'
+    return 'green'
+  }
+
+  // Same 4-tone severity ladder as Events/Alerts/Risk Scoring/Log
+  // Explorer/Rules (critical=red, high=orange, medium=yellow, low=blue).
+  const severityTone = (severity?: string | null): Tone => {
+    switch ((severity || '').toLowerCase()) {
+      case 'critical': return 'red'
+      case 'high': return 'orange'
+      case 'medium': return 'yellow'
+      case 'low': return 'blue'
+      default: return 'gray'
+    }
   }
 
   return (
@@ -71,8 +82,8 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
         <ModalHeader
           title={
             <span className="flex items-center gap-3">
-              <span className="p-2 bg-blue-500/15 rounded-lg inline-flex">
-                <TestTube className="h-6 w-6 text-blue-400" />
+              <span className="p-2 bg-primary/10 rounded-lg inline-flex">
+                <TestTube className="h-6 w-6 text-primary" />
               </span>
               Rule Testing Tool
             </span>
@@ -147,7 +158,12 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
                     <div
                       className={cn(
                         'text-3xl font-bold',
-                        getConfidenceColor(result.confidence_score)
+                        {
+                          red: 'text-critical',
+                          orange: 'text-warning',
+                          yellow: 'text-warning',
+                          green: 'text-success',
+                        }[getConfidenceTone(result.confidence_score)],
                       )}
                     >
                       {(result.confidence_score * 100).toFixed(1)}%
@@ -156,7 +172,7 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
 
                   <div className="card">
                     <div className="text-sm text-muted-foreground mb-1">Matched Rules</div>
-                    <div className="text-3xl font-bold text-blue-400">
+                    <div className="text-3xl font-bold text-primary">
                       {result.matched_rules.length}
                     </div>
                     <div className="text-xs text-muted-foreground mt-1">
@@ -175,16 +191,16 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
                       {result.matched_rules.map((match, index) => (
                         <div
                           key={index}
-                          className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4"
+                          className="rounded-lg border border-primary/30 bg-primary/5 p-4"
                         >
                           <div className="flex items-start justify-between mb-2">
                             <div className="flex-1">
                               <div className="flex items-center gap-2 mb-1">
-                                <CheckCircle className="h-4 w-4 text-blue-400" />
+                                <CheckCircle className="h-4 w-4 text-primary" />
                                 <span className="font-semibold text-foreground">
                                   {match.rule_name}
                                 </span>
-                                <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300">
+                                <span className={cn('rounded-full border px-2 py-0.5 text-xs capitalize', tone('indigo'))}>
                                   {match.rule_type}
                                 </span>
                               </div>
@@ -196,18 +212,7 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
                             </div>
                             <div className="text-right">
                               {match.severity && (
-                                <div
-                                  className={cn(
-                                    'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium mb-1',
-                                    match.severity === 'critical'
-                                      ? 'bg-red-500/15 text-red-300'
-                                      : match.severity === 'high'
-                                      ? 'bg-orange-500/15 text-orange-300'
-                                      : match.severity === 'medium'
-                                      ? 'bg-yellow-500/15 text-yellow-300'
-                                      : 'bg-green-500/15 text-green-300'
-                                  )}
-                                >
+                                <div className={cn('mb-1 inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium', tone(severityTone(match.severity)))}>
                                   {match.severity}
                                 </div>
                               )}
@@ -228,7 +233,7 @@ export default function RuleTestModal({ isOpen, onClose }: RuleTestModalProps) {
                                   {match.classification_labels.map((label) => (
                                     <span
                                       key={label}
-                                      className="px-2 py-0.5 bg-purple-500/15 text-purple-300 rounded text-xs"
+                                      className={cn('rounded px-2 py-0.5 text-xs', tone('purple'))}
                                     >
                                       {label}
                                     </span>

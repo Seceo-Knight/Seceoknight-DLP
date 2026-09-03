@@ -5,6 +5,8 @@ import { X, Plus } from 'lucide-react'
 import { createRule, updateRule, type Rule, type RuleCreate } from '@/lib/rules-api'
 import toast from 'react-hot-toast'
 import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
+import { cn } from '@/lib/utils'
+import { tone } from '@/lib/tone'
 
 // Modal.tsx renders header/body/footer as siblings (that split is the whole
 // point -- see Modal.tsx's docstring on why sticky bands over one scrolling
@@ -334,13 +336,13 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                     {formData.keywords?.map((keyword) => (
                       <span
                         key={keyword}
-                        className="inline-flex items-center gap-1 px-3 py-1 bg-blue-500/15 text-blue-300 rounded-full text-sm"
+                        className={cn('inline-flex items-center gap-1 rounded-full border px-3 py-1 text-sm', tone('indigo'))}
                       >
                         {keyword}
                         <button
                           type="button"
                           onClick={() => removeKeyword(keyword)}
-                          className="hover:text-blue-300"
+                          className="hover:opacity-70"
                         >
                           <X className="h-3 w-3" />
                         </button>
@@ -465,13 +467,13 @@ export default function RuleModal({ rule, isOpen, onClose, onSuccess }: RuleModa
                 {formData.classification_labels?.map((label) => (
                   <span
                     key={label}
-                    className="inline-flex items-center gap-1 px-3 py-1 bg-purple-500/15 text-purple-300 rounded-full text-sm"
+                    className={cn('inline-flex items-center gap-1 rounded-full border px-3 py-1 text-sm', tone('purple'))}
                   >
                     {label}
                     <button
                       type="button"
                       onClick={() => removeLabel(label)}
-                      className="hover:text-purple-300"
+                      className="hover:opacity-70"
                     >
                       <X className="h-3 w-3" />
                     </button>
