@@ -167,6 +167,12 @@ class EventsResponse(BaseModel):
     total: int
     skip: int
     limit: int
+    # Quick-glance breakdown for UIs like Log Explorer's stat tiles.
+    # Computed against the same filter/ABAC/domain scope as `total`, but
+    # each independent of the caller's own event_type/blocked selection --
+    # same pattern as alerts.py's high/critical counts -- so switching the
+    # Event Type dropdown to "USB" doesn't zero out the USB tile itself.
+    counts: Optional[Dict[str, int]] = None
 
 
 class EventQueryParams(BaseModel):
@@ -937,6 +943,8 @@ async def get_events(
     classification: Optional[str] = Query(None, description="classification_level tier, or '*' for any"),
     channel: Optional[str] = Query(None),
     blocked: Optional[bool] = Query(None, description="Filter to blocked (true) or not-blocked (false) events"),
+    agent_id: Optional[str] = Query(None, description="Substring match against agent_id (Log Explorer's dedicated Agent field, distinct from the general `search` box)"),
+    user_email: Optional[str] = Query(None, description="Substring match against user_email (Log Explorer's dedicated User field, distinct from the general `search` box)"),
     current_user=Depends(require_role("analyst")),
     pg_db: AsyncSession = Depends(get_db),
 ):
@@ -952,6 +960,8 @@ async def get_events(
     - source filter
     - search keyword (searches in event_type, description, file_path, destination, etc.)
     - time range via start_time / end_time
+    - agent_id / user_email substring filters (separate from `search`, for
+      UIs like Log Explorer that expose them as their own fields)
 
     ABAC: Results are further constrained per the viewer's department +
     clearance_level, unless they carry the ``view_all_departments``
@@ -1030,6 +1040,16 @@ async def get_events(
         query_filter["channel"] = _ci_exact(channel)
     if blocked is not None:
         query_filter["blocked"] = blocked
+    if agent_id:
+        # Substring, not anchored/exact -- Log Explorer's Agent field is
+        # meant for "type part of an agent ID", same UX as user_email
+        # below. Escaped like `search` above so this can't be used as a
+        # ReDoS or enumeration vector.
+        import re as _re
+        query_filter["agent_id"] = {"$regex": _re.escape(agent_id), "$options": "i"}
+    if user_email:
+        import re as _re
+        query_filter["user_email"] = {"$regex": _re.escape(user_email), "$options": "i"}
 
     # ── ABAC: merge viewer-specific visibility filter ─────────────────
     from app.services.abac_service import (
@@ -1112,6 +1132,29 @@ async def get_events(
     # Get total count for pagination
     total = await db.dlp_events.count_documents(query_filter)
 
+    # Quick-glance counts (Log Explorer's Clipboard/USB/Blocked tiles).
+    # Built off `query_filter` (already carries search/time-range/severity/
+    # ABAC/domain scope) with event_type and blocked stripped, so these
+    # reflect the same search context without being zeroed out by the
+    # caller's own Event Type / Blocked selection -- e.g. filtering Event
+    # Type to "usb" still shows the true Clipboard count for the rest of
+    # the active search, not 0. Previously these tiles were computed
+    # client-side over the ~100-row page actually fetched, silently
+    # undercounting for any deployment with more matching events than
+    # that (same class of bug fixed in alerts.py's high/critical counts).
+    counts_base = {k: v for k, v in query_filter.items() if k not in ("event_type", "blocked")}
+    counts = {
+        "clipboard": await db.dlp_events.count_documents(
+            merge_mongo_filter(dict(counts_base), {"event_type": _ci_exact("clipboard")})
+        ),
+        "usb": await db.dlp_events.count_documents(
+            merge_mongo_filter(dict(counts_base), {"event_type": _ci_exact("usb")})
+        ),
+        "blocked": await db.dlp_events.count_documents(
+            merge_mongo_filter(dict(counts_base), {"blocked": True})
+        ),
+    }
+
     logger.info(
         "Events queried",
         user=getattr(current_user, "email", None),
@@ -1136,6 +1179,7 @@ async def get_events(
         "total": total,
         "skip": skip,
         "limit": limit,
+        "counts": counts,
     }
 
 
