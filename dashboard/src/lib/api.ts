@@ -131,8 +131,8 @@ export const cleanupStaleAgents = async (
 }
 
 // Additional exports for direct imports
-export const getAlerts = async () => {
-  const { data } = await apiClient.get('/alerts/')
+export const getAlerts = async (params?: { severity?: string; status?: string; skip?: number; limit?: number }) => {
+  const { data } = await apiClient.get('/alerts/', { params })
   return data
 }
 

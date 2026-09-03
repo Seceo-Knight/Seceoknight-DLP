@@ -45,7 +45,12 @@ export default function Header({ onOpenMobileNav }: HeaderProps) {
 
   const { data: alertsData } = useQuery({
     queryKey: ['alerts'],
-    queryFn: getAlerts,
+    // Explicit no-args wrapper -- passing `getAlerts` directly as `queryFn`
+    // would hand it react-query's QueryFunctionContext object as its first
+    // positional argument (queryKey/signal/meta), which getAlerts would
+    // then serialize as request params now that it takes an optional
+    // params object.
+    queryFn: () => getAlerts(),
     refetchInterval: 30000,
   })
   const alerts = normalizeAlerts(alertsData)

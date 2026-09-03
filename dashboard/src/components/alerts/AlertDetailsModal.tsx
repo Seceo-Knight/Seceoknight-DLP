@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { getEvent } from '@/lib/api'
 import LoadingSpinner from '../LoadingSpinner'
 import { cn, formatAgentLabel } from '@/lib/utils'
+import { tone } from '@/lib/tone'
 import Modal, { ModalHeader, ModalFooter } from '@/components/ui/Modal'
 
 interface AlertDetailsModalProps {
@@ -142,32 +143,32 @@ export default function AlertDetailsModal({ alert: rawAlert, isOpen, onClose }: 
 
             {/* Classification Details */}
             {(alert.classification_category || alert.classification_level || alert.classification_rules_matched?.length > 0) && (
-              <div className="mb-6 bg-purple-500/10 border border-purple-500/30 rounded-lg p-4">
-                <h3 className="text-sm font-semibold text-purple-300 mb-3">Classification Details</h3>
+              <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
+                <h3 className="mb-3 text-sm font-semibold text-foreground">Classification Details</h3>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>
                     <span className="font-medium text-muted-foreground">Category:</span>
                     <span className={cn(
-                      'ml-2 px-2 py-0.5 rounded text-xs font-bold uppercase',
-                      (alert.classification_category || alert.classification_level) === 'Restricted' ? 'bg-red-500/15 text-red-300' :
-                      (alert.classification_category || alert.classification_level) === 'Confidential' ? 'bg-orange-500/15 text-orange-300' :
-                      (alert.classification_category || alert.classification_level) === 'Internal' ? 'bg-yellow-500/15 text-yellow-300' :
-                      'bg-green-500/15 text-green-300'
+                      'ml-2 rounded px-2 py-0.5 text-xs font-bold uppercase',
+                      (alert.classification_category || alert.classification_level) === 'Restricted' ? 'bg-critical/15 text-critical' :
+                      (alert.classification_category || alert.classification_level) === 'Confidential' ? 'bg-warning/15 text-warning' :
+                      (alert.classification_category || alert.classification_level) === 'Internal' ? 'bg-warning/10 text-warning' :
+                      'bg-success/15 text-success'
                     )}>
                       {alert.classification_category || alert.classification_level || 'Public'}
                     </span>
                   </div>
                   <div>
                     <span className="font-medium text-muted-foreground">Confidence:</span>
-                    <span className="ml-2 font-bold">{((alert.classification_score || 0) * 100).toFixed(0)}%</span>
+                    <span className="ml-2 font-bold text-foreground">{((alert.classification_score || 0) * 100).toFixed(0)}%</span>
                   </div>
                   <div>
                     <span className="font-medium text-muted-foreground">Action:</span>
                     <span className={cn(
-                      'ml-2 px-2 py-0.5 rounded text-xs font-medium uppercase',
-                      alert.action_taken === 'block' ? 'bg-red-500/15 text-red-300' :
-                      alert.action_taken === 'alert' ? 'bg-yellow-500/15 text-yellow-300' :
-                      'bg-green-500/15 text-green-300'
+                      'ml-2 rounded px-2 py-0.5 text-xs font-medium uppercase',
+                      alert.action_taken === 'block' ? 'bg-critical/15 text-critical' :
+                      alert.action_taken === 'alert' ? 'bg-warning/10 text-warning' :
+                      'bg-success/15 text-success'
                     )}>
                       {alert.action_taken || 'allowed'}
                     </span>
@@ -175,8 +176,8 @@ export default function AlertDetailsModal({ alert: rawAlert, isOpen, onClose }: 
                   <div>
                     <span className="font-medium text-muted-foreground">Blocked:</span>
                     <span className={cn(
-                      'ml-2 px-2 py-0.5 rounded text-xs font-medium',
-                      alert.blocked ? 'bg-red-500/15 text-red-300' : 'bg-green-500/15 text-green-300'
+                      'ml-2 rounded px-2 py-0.5 text-xs font-medium',
+                      alert.blocked ? 'bg-critical/15 text-critical' : 'bg-success/15 text-success'
                     )}>
                       {alert.blocked ? 'Yes' : 'No'}
                     </span>
@@ -184,10 +185,10 @@ export default function AlertDetailsModal({ alert: rawAlert, isOpen, onClose }: 
                 </div>
                 {alert.classification_rules_matched && alert.classification_rules_matched.length > 0 && (
                   <div className="mt-3">
-                    <span className="font-medium text-muted-foreground text-sm">Matched Rules:</span>
-                    <div className="flex flex-wrap gap-1.5 mt-1">
+                    <span className="text-sm font-medium text-muted-foreground">Matched Rules:</span>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
                       {alert.classification_rules_matched.map((rule: string, idx: number) => (
-                        <span key={idx} className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-500/15 text-purple-300">
+                        <span key={idx} className={cn('rounded-full px-2 py-0.5 text-xs font-medium border', tone('purple'))}>
                           {rule}
                         </span>
                       ))}
@@ -196,8 +197,8 @@ export default function AlertDetailsModal({ alert: rawAlert, isOpen, onClose }: 
                 )}
                 {alert.detected_content && (
                   <div className="mt-3">
-                    <span className="font-medium text-muted-foreground text-sm">Detected Content:</span>
-                    <pre className="mt-1 text-xs text-foreground/90 bg-card rounded p-2 border border-border whitespace-pre-wrap">{alert.detected_content}</pre>
+                    <span className="text-sm font-medium text-muted-foreground">Detected Content:</span>
+                    <pre className="mt-1 rounded border border-border bg-card p-2 text-xs text-foreground/90 whitespace-pre-wrap">{alert.detected_content}</pre>
                   </div>
                 )}
               </div>
@@ -214,8 +215,8 @@ export default function AlertDetailsModal({ alert: rawAlert, isOpen, onClose }: 
               )}
 
               {error && (
-                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4">
-                  <p className="text-sm text-red-300">{error}</p>
+                <div className="rounded-lg border border-critical/30 bg-critical/10 p-4">
+                  <p className="text-sm text-critical">{error}</p>
                 </div>
               )}
 
@@ -228,8 +229,8 @@ export default function AlertDetailsModal({ alert: rawAlert, isOpen, onClose }: 
               )}
 
               {!loading && !error && !eventData && (
-                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4">
-                  <p className="text-sm text-yellow-300">No event data available</p>
+                <div className="rounded-lg border border-warning/30 bg-warning/10 p-4">
+                  <p className="text-sm text-warning">No event data available</p>
                 </div>
               )}
             </div>
