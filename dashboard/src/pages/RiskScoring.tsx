@@ -121,8 +121,7 @@ export default function RiskScoring() {
       <div className="flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-foreground/80">
         <ShieldQuestion className="h-5 w-5 shrink-0 text-primary" />
         <span>
-          Statistical baselining, not a black-box model — every score's component breakdown is visible
-          in the user's detail view, so an analyst can always see exactly why a number is what it is.
+          Click any user row to see the full breakdown of events and factors behind their score.
         </span>
       </div>
 
