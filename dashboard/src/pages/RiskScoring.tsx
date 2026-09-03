@@ -85,22 +85,33 @@ const COMPONENT_META: Record<ComponentKey, { label: string; icon: LucideIcon }> 
   severity_mix: { label: 'Severity Mix', icon: AlertTriangle },
 }
 
-// Same UTC-based cutoff as the backend's _is_off_hours (weekend, or
-// before 07:00 / at-or-after 19:00 UTC) -- timestamps are stored and
-// returned in UTC, so this has to use getUTCDay/getUTCHours rather than
-// the browser's local time, or "off hours" here would silently disagree
-// with the number the backend actually computed.
-function isOffHoursUTC(timestamp: string): boolean {
-  const d = new Date(timestamp)
-  const day = d.getUTCDay() // 0=Sun .. 6=Sat
-  const hour = d.getUTCHours()
-  return day === 0 || day === 6 || hour < 7 || hour >= 19
+// Same business-hours window as the backend's _is_off_hours: 09:30-18:30,
+// Monday-Friday, in the deployment's local timezone (Asia/Kolkata) --
+// NOT the browser's own local time and NOT raw UTC. An event stored as
+// ~05:56 UTC is 11:26am IST -- checking UTC hour directly (or trusting
+// the visiting analyst's own OS timezone) would misclassify it as
+// off-hours even though it's the middle of the workday.
+const RISK_TIMEZONE = 'Asia/Kolkata'
+const BUSINESS_START_MINUTES = 9 * 60 + 30  // 09:30
+const BUSINESS_END_MINUTES = 18 * 60 + 30   // 18:30
+
+function isOffHoursIST(timestamp: string): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: RISK_TIMEZONE, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(timestamp))
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  const weekday = get('weekday')
+  if (weekday === 'Sat' || weekday === 'Sun') return true
+  const hour = parseInt(get('hour'), 10) % 24 // Intl can return "24" for midnight
+  const minute = parseInt(get('minute'), 10)
+  const minutes = hour * 60 + minute
+  return minutes < BUSINESS_START_MINUTES || minutes >= BUSINESS_END_MINUTES
 }
 
 function filterEventsByComponent(events: RecentEvent[], key: ComponentKey): RecentEvent[] {
   switch (key) {
     case 'off_hours':
-      return events.filter((e) => isOffHoursUTC(e.timestamp))
+      return events.filter((e) => isOffHoursIST(e.timestamp))
     case 'block_ratio':
       return events.filter((e) => ['blocked', 'quarantined'].includes((e.action || '').toLowerCase()))
     case 'severity_mix':

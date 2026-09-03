@@ -85,14 +85,33 @@ def _risk_level(score: float) -> str:
     return "low"
 
 
+# Office hours used for the "off hours" behavioral signal, in the
+# configured APP_TIMEZONE (see app/core/timezone.py) -- 09:30-18:30,
+# Monday-Friday. No per-tenant/per-department schedule concept exists in
+# this schema, so this is one fixed window for the whole deployment; if
+# that ever needs to vary, it should move to settings.
+_BUSINESS_START_MINUTES = 9 * 60 + 30   # 09:30
+_BUSINESS_END_MINUTES = 18 * 60 + 30    # 18:30
+
+
 def _is_off_hours(ts: datetime) -> bool:
-    """Outside 07:00-19:00 or a weekend, by the timestamp's own tzinfo (or
-    UTC if naive). A deliberately simple global cutoff -- no per-user
-    timezone/shift data exists anywhere in this schema to do better, and a
-    wrong-but-consistent baseline is more useful than none."""
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts.weekday() >= 5 or ts.hour < 7 or ts.hour >= 19
+    """Outside business hours or a weekend, in the deployment's configured
+    local timezone -- NOT the timestamp's raw UTC hour.
+
+    Event timestamps are stored in UTC. Comparing UTC hour directly
+    against a business-hours cutoff silently disagreed with the actual
+    local time whenever APP_TIMEZONE isn't UTC: an 11:26am IST event is
+    ~05:56 UTC, which read as "before 07:00" under the old UTC-only check
+    and got flagged off-hours even though it's the middle of the
+    workday. Converting to the display timezone first fixes that.
+    """
+    from app.core.timezone import to_display_tz
+
+    local = to_display_tz(ts)
+    if local.weekday() >= 5:
+        return True
+    minutes = local.hour * 60 + local.minute
+    return minutes < _BUSINESS_START_MINUTES or minutes >= _BUSINESS_END_MINUTES
 
 
 @dataclass
