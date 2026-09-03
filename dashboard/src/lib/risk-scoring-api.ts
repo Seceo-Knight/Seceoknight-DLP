@@ -52,6 +52,11 @@ export interface RiskScoreDetail extends UserRiskScore {
     description: string
     timestamp: string
   }>
+  // True count of events matching the requested `component` filter across
+  // the FULL scoring window -- may exceed recent_events.length, since the
+  // backend caps how many it returns for display. Absent/unfiltered
+  // requests still return this (equal to recent_events.length up to the cap).
+  recent_events_total: number
 }
 
 export interface RiskScoreListResponse {
@@ -68,8 +73,13 @@ export const listRiskScores = async (params?: {
   return data
 }
 
-export const getRiskScore = async (userEmail: string): Promise<RiskScoreDetail> => {
-  const { data } = await apiClient.get(`/risk-scoring/users/${encodeURIComponent(userEmail)}`)
+export const getRiskScore = async (
+  userEmail: string,
+  component?: string | null,
+): Promise<RiskScoreDetail> => {
+  const { data } = await apiClient.get(`/risk-scoring/users/${encodeURIComponent(userEmail)}`, {
+    params: component ? { component } : undefined,
+  })
   return data
 }
 

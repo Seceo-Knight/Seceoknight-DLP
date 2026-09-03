@@ -74,8 +74,16 @@ function ScoreBar({ score }: { score: number }) {
 // about which distinct channels are represented, so its tile shows one
 // representative (most recent) event per channel instead of a boolean
 // subset.
+//
+// The filter itself runs server-side (RiskScoringService.get_events_for_user)
+// over the user's FULL scoring window, not just the events already loaded
+// in this modal. A client-side filter over only the most-recent N events
+// looked identical for a light user but silently showed "0 of 50" for
+// tiles whose qualifying events weren't among the 50 most recent -- e.g.
+// an "Off Hours" component of 26 with all of that user's off-hours
+// activity earlier in a 282-event window. See risk_scoring.py's
+// `component` query param and get_events_for_user's docstring.
 type ComponentKey = 'volume' | 'channel_diversity' | 'off_hours' | 'block_ratio' | 'severity_mix'
-type RecentEvent = { timestamp: string; channel?: string | null; event_type: string; action: string; severity: string }
 
 const COMPONENT_META: Record<ComponentKey, { label: string; icon: LucideIcon }> = {
   volume: { label: 'Volume', icon: Activity },
@@ -83,55 +91,6 @@ const COMPONENT_META: Record<ComponentKey, { label: string; icon: LucideIcon }> 
   off_hours: { label: 'Off Hours', icon: Moon },
   block_ratio: { label: 'Block Ratio', icon: Ban },
   severity_mix: { label: 'Severity Mix', icon: AlertTriangle },
-}
-
-// Same business-hours window as the backend's _is_off_hours: 09:30-18:30,
-// Monday-Friday, in the deployment's local timezone (Asia/Kolkata) --
-// NOT the browser's own local time and NOT raw UTC. An event stored as
-// ~05:56 UTC is 11:26am IST -- checking UTC hour directly (or trusting
-// the visiting analyst's own OS timezone) would misclassify it as
-// off-hours even though it's the middle of the workday.
-const RISK_TIMEZONE = 'Asia/Kolkata'
-const BUSINESS_START_MINUTES = 9 * 60 + 30  // 09:30
-const BUSINESS_END_MINUTES = 18 * 60 + 30   // 18:30
-
-function isOffHoursIST(timestamp: string): boolean {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: RISK_TIMEZONE, weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(new Date(timestamp))
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
-  const weekday = get('weekday')
-  if (weekday === 'Sat' || weekday === 'Sun') return true
-  const hour = parseInt(get('hour'), 10) % 24 // Intl can return "24" for midnight
-  const minute = parseInt(get('minute'), 10)
-  const minutes = hour * 60 + minute
-  return minutes < BUSINESS_START_MINUTES || minutes >= BUSINESS_END_MINUTES
-}
-
-function filterEventsByComponent(events: RecentEvent[], key: ComponentKey): RecentEvent[] {
-  switch (key) {
-    case 'off_hours':
-      return events.filter((e) => isOffHoursIST(e.timestamp))
-    case 'block_ratio':
-      return events.filter((e) => ['blocked', 'quarantined'].includes((e.action || '').toLowerCase()))
-    case 'severity_mix':
-      return events.filter((e) => ['critical', 'high'].includes((e.severity || '').toLowerCase()))
-    case 'channel_diversity': {
-      const seen = new Set<string>()
-      const out: RecentEvent[] = []
-      for (const e of events) {
-        const ch = (e.channel || e.event_type || '').toLowerCase()
-        if (ch && !seen.has(ch)) {
-          seen.add(ch)
-          out.push(e)
-        }
-      }
-      return out
-    }
-    case 'volume':
-    default:
-      return events
-  }
 }
 
 const LEVEL_FILTERS: { label: string; value: RiskLevel | '' }[] = [
@@ -263,12 +222,17 @@ function DetailModal({ userEmail, onClose }: { userEmail: string; onClose: () =>
   const [activeComponent, setActiveComponent] = useState<ComponentKey | null>(null)
 
   const detailQ = useQuery({
-    queryKey: ['risk-score-detail', userEmail],
-    queryFn: () => getRiskScore(userEmail),
+    queryKey: ['risk-score-detail', userEmail, activeComponent],
+    queryFn: () => getRiskScore(userEmail, activeComponent),
+    // Component tiles read from detailQ.data.components below, which is
+    // identical across every component filter for a given user -- keep the
+    // score/breakdown visible (not blanked to a loading spinner) while a
+    // new filtered event list loads in.
+    placeholderData: (prev) => prev,
   })
 
-  const allEvents = detailQ.data?.recent_events || []
-  const displayedEvents = activeComponent ? filterEventsByComponent(allEvents, activeComponent) : allEvents
+  const displayedEvents = detailQ.data?.recent_events || []
+  const displayedTotal = detailQ.data?.recent_events_total ?? displayedEvents.length
 
   return (
     <Modal
@@ -342,7 +306,7 @@ function DetailModal({ userEmail, onClose }: { userEmail: string; onClose: () =>
                 <div className="mb-2 flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-foreground">
                     {activeComponent ? `${COMPONENT_META[activeComponent].label} events` : 'Recent events'}
-                    {' '}({displayedEvents.length}{activeComponent ? ` of ${allEvents.length}` : ''})
+                    {' '}({displayedEvents.length}{displayedTotal > displayedEvents.length ? ` of ${displayedTotal}` : ''})
                   </h3>
                   {activeComponent && (
                     <button

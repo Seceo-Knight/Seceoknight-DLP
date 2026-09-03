@@ -306,34 +306,78 @@ class RiskScoringService:
         )
         return result.scalars().first()
 
-    async def get_recent_events_for_user(
+    # Component keys that map onto a clean per-event predicate -- must
+    # match COMPONENT_META/filterEventsByComponent on the frontend
+    # (dashboard/src/pages/RiskScoring.tsx). "volume" (every event counts)
+    # and unrecognized values fall through to "no filter, all events".
+    _EVENT_PREDICATES = ("off_hours", "block_ratio", "severity_mix", "channel_diversity")
+
+    def _event_matches_component(self, event: Event, component: str) -> bool:
+        if component == "off_hours":
+            return bool(event.timestamp) and _is_off_hours(event.timestamp)
+        if component == "block_ratio":
+            return (event.action or "").lower() in ("blocked", "quarantined")
+        if component == "severity_mix":
+            return (event.severity or "").lower() in ("critical", "high")
+        return True
+
+    async def get_events_for_user(
         self,
         user_email: str,
-        limit: int = 50,
         window_start: Optional[datetime] = None,
         window_end: Optional[datetime] = None,
-    ) -> List[Event]:
+        component: Optional[str] = None,
+        limit: int = 100,
+    ) -> tuple[List[Event], int]:
         """The contributing events behind a score, for the detail view --
         an analyst should never have to trust a number without being able
-        to see what produced it.
+        to see what produced it. Optionally filtered to exactly the
+        predicate one component tile represents.
 
         Scoped to [window_start, window_end) -- the same rolling window
-        `_score_user` actually computed the components from -- when given,
-        rather than just "this user's N most recent events regardless of
-        window". Without that scoping, the detail view could show events
-        from after the score was last computed (or, for a user who was
-        quiet since, a long-stale window), which don't explain the number
-        on screen and make any per-component filter (off-hours/blocked/
-        high-severity) misleading.
+        `_score_user` actually computed the components from -- rather than
+        just "this user's N most recent events regardless of window".
+
+        Returns (events_to_display, total_matching_count). Critically,
+        the predicate is applied across the user's ENTIRE window, not
+        just a capped "most recent N" slice -- a user can easily have
+        hundreds of events in a 14-day window, and if the off-hours (or
+        blocked, or high-severity) ones aren't among the most recent N,
+        a "most recent N, then filter" approach silently shows zero
+        matches for a component tile that clearly reads a nonzero score
+        (confirmed live: an "Off Hours" component of 26 with 0 of the 50
+        most-recent events matching, because this user's off-hours
+        activity happened earlier in a 282-event window). Fetching the
+        full window and filtering in Python -- rather than pushing each
+        predicate into SQL -- mirrors `_collect_raw_stats`'s own
+        reasoning above: one straightforward, auditable pass beats
+        several dialect-specific conditional-aggregate queries, and a
+        single user's 14-day window is not large enough for this to
+        matter at this deployment's scale.
         """
         query = select(Event).where(Event.user_email == user_email)
         if window_start is not None:
             query = query.where(Event.timestamp >= window_start)
         if window_end is not None:
             query = query.where(Event.timestamp < window_end)
-        query = query.order_by(Event.timestamp.desc()).limit(limit)
+        query = query.order_by(Event.timestamp.desc())
         result = await self.db.execute(query)
-        return list(result.scalars().all())
+        all_events = list(result.scalars().all())
+
+        if component == "channel_diversity":
+            seen: set = set()
+            matching: List[Event] = []
+            for e in all_events:
+                ch = (e.channel or e.event_type or "").lower()
+                if ch and ch not in seen:
+                    seen.add(ch)
+                    matching.append(e)
+        elif component in self._EVENT_PREDICATES:
+            matching = [e for e in all_events if self._event_matches_component(e, component)]
+        else:
+            matching = all_events
+
+        return matching[:limit], len(matching)
 
     async def count_by_level(self) -> Dict[str, int]:
         result = await self.db.execute(
