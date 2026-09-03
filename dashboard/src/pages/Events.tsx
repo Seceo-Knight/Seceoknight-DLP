@@ -5,7 +5,7 @@ import { useSearchParams } from 'react-router-dom'
 import {
   Search, Filter, FileText, Shield, AlertTriangle, Ban, ArrowRight, File, HardDrive, Usb,
   ChevronDown, ChevronUp, Trash2, Clipboard, Eye, Bell, Download, RefreshCcw, Loader2, Move, Copy,
-  FilePlus, FileEdit, FileX, ArrowUpDown, ListFilter,
+  FilePlus, FileEdit, FileX, ArrowUpDown, ListFilter, Clock,
 } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
@@ -15,15 +15,28 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Badge, severityToVariant } from '@/components/ui/badge'
+import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { DataPagination } from '@/components/ui/pagination'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { useTableSort, usePagination } from '@/lib/hooks/useTableState'
+import { useTableSort } from '@/lib/hooks/useTableState'
 import { tone, surfaceBox, innerBox, labelCls, type Tone } from '@/lib/tone'
 import { useConfirm } from '@/components/ui/Modal'
 import toast from 'react-hot-toast'
+
+// ── Time range filter ────────────────────────────────────────────────────
+// `hours: undefined` means "All time" (no lower bound) -- the default, so
+// narrowing the search window is opt-in rather than silently hiding older
+// matches from an analyst who doesn't know to widen it.
+const TIME_RANGES: { label: string; short: string; hours: number | undefined }[] = [
+  { label: 'All time', short: 'All', hours: undefined },
+  { label: '12 hours', short: '12h', hours: 12 },
+  { label: '24 hours', short: '24h', hours: 24 },
+  { label: '3 days', short: '3d', hours: 72 },
+  { label: '7 days', short: '7d', hours: 168 },
+  { label: '90 days', short: '90d', hours: 2160 },
+]
 
 // Event Detail Modal Component
 function EventDetailModal({
@@ -83,7 +96,10 @@ function EventDetailModal({
     return 'File Activity'
   }
 
-  const severityTone: Tone = event.severity === 'critical' ? 'red' : event.severity === 'high' ? 'orange' : event.severity === 'medium' ? 'yellow' : 'green'
+  // Matches the Dashboard chart legend and the search-result row's tone
+  // ladder (critical=red, high=orange, medium=yellow, low=blue) instead
+  // of a 4th ad hoc scheme.
+  const severityTone: Tone = event.severity === 'critical' ? 'red' : event.severity === 'high' ? 'orange' : event.severity === 'medium' ? 'yellow' : 'blue'
 
   const rawDataToggle = (
     <div className="border-t border-border pt-4">
@@ -575,6 +591,10 @@ export default function Events() {
   const [showFilters, setShowFilters] = useState(false)
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [rangeHours, setRangeHours] = useState<number | undefined>(undefined)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const activeRange = TIME_RANGES.find((r) => r.hours === rangeHours) ?? TIME_RANGES[0]
 
   useEffect(() => {
     if (agentParam) {
@@ -635,6 +655,33 @@ export default function Events() {
     return match ? match[1] + ':' : ''
   }
 
+  // Severity → tone, matching the Dashboard's "Events by Severity" chart
+  // legend (critical=red, high=orange, medium=yellow, low=blue). The row
+  // below used to only branch on critical/high and fall everything else
+  // -- both medium AND low -- through to the same blue icon, so a
+  // "medium" badge sat next to an icon that visually claimed "low
+  // priority", and it disagreed with the Badge component's own
+  // severityToVariant (a third, different red/orange/blue/green scheme).
+  // Rendered as a plain span in the row instead of <Badge> so this one
+  // severity chip can share the same 4-tone ladder as the icon box and
+  // the left accent border, instead of adding a 3rd inconsistent scheme.
+  const severityTone = (severity?: string | null): Tone => {
+    switch ((severity || '').toLowerCase()) {
+      case 'critical': return 'red'
+      case 'high': return 'orange'
+      case 'medium': return 'yellow'
+      case 'low': return 'blue'
+      default: return 'gray'
+    }
+  }
+
+  const SEVERITY_BORDER: Record<string, string> = {
+    critical: 'border-l-critical',
+    high: 'border-l-warning',
+    medium: 'border-l-warning/50',
+    low: 'border-l-info',
+  }
+
   const getEventSubtypeIcon = (subtype: string) => {
     const normalized = subtype?.toLowerCase() || ''
     if (normalized.includes('created')) return <FilePlus className="w-4 h-4" />
@@ -669,12 +716,21 @@ export default function Events() {
   }
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['events', activeQuery, dashboardFilters],
+    queryKey: ['events', activeQuery, dashboardFilters, rangeHours, page, pageSize],
     queryFn: () => {
-      const params: Record<string, any> = { limit: 100 }
+      // Real server-side pagination: `total` below is the actual count of
+      // matching events (could be thousands), and skip/limit request the
+      // specific page from the backend. This used to fetch a flat 100-row
+      // cap and paginate client-side over just that -- so "2,814 events
+      // found" was true, but Next/Page 2/Page 3 could never reach rows
+      // 101+ no matter how you paged, because they were never fetched.
+      const params: Record<string, any> = { limit: pageSize, skip: (page - 1) * pageSize }
       if (activeQuery) params.search = activeQuery
       for (const [k, v] of Object.entries(dashboardFilters)) {
         if (v) params[k] = v
+      }
+      if (rangeHours) {
+        params.start_time = new Date(Date.now() - rangeHours * 60 * 60 * 1000).toISOString()
       }
       return searchEvents(params)
     },
@@ -684,13 +740,16 @@ export default function Events() {
   const events = data?.events || []
   const total = data?.total || 0
 
-  // Client-side sort + pagination over the fetched page. The Events feed
-  // is a rich, semi-structured record (not uniform tabular columns), so
-  // it keeps its expandable row-card layout rather than a literal
-  // <table> — but it gets the same sort/paginate affordances a table
-  // would have, which is the gap the earlier UI audit flagged.
+  // Client-side sort over the current server page. The Events feed is a
+  // rich, semi-structured record (not uniform tabular columns), so it
+  // keeps its expandable row-card layout rather than a literal <table> —
+  // but it gets the same sort affordance a table would have. Sorting is
+  // scoped to the fetched page (the backend has no arbitrary sort param
+  // yet); paging itself now comes from the server, not a client slice.
   const { sorted, sortKey, direction, onSort } = useTableSort<Event>(events, 'timestamp')
-  const { page, pageSize, pageRows, setPage, setPageSize } = usePagination<Event>(sorted, 20)
+  const pageRows = sorted
+
+  const resetToFirstPage = () => setPage(1)
 
   // USB file transfer events (event_subtype "usb_file_transfer") never set a
   // top-level `blocked`/`quarantined` boolean — the agent only reports the
@@ -717,7 +776,10 @@ export default function Events() {
     typeof event.action === 'string' &&
     event.action.endsWith('_failed')
 
-  const handleSearch = () => setActiveQuery(kqlQuery)
+  const handleSearch = () => {
+    setActiveQuery(kqlQuery)
+    resetToFirstPage()
+  }
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSearch()
   }
@@ -843,7 +905,30 @@ export default function Events() {
       <PageHeader
         icon={FileText}
         title="Events"
-        description="Search and analyze DLP events by keyword."
+        description={`Search and analyze DLP events by keyword — ${activeRange.label.toLowerCase()}.`}
+        actions={
+          <div className="flex items-center gap-1 rounded-md border border-border bg-card p-0.5">
+            <Clock className="ml-1.5 h-3.5 w-3.5 text-muted-foreground" />
+            {TIME_RANGES.map((r) => (
+              <button
+                key={r.short}
+                type="button"
+                onClick={() => {
+                  setRangeHours(r.hours)
+                  resetToFirstPage()
+                }}
+                className={cn(
+                  'rounded px-2 py-1 text-xs font-medium transition-colors',
+                  r.hours === rangeHours
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                )}
+              >
+                {r.short}
+              </button>
+            ))}
+          </div>
+        }
       />
 
       {activeDashboardFilters.length > 0 && (
@@ -858,6 +943,7 @@ export default function Events() {
           </div>
           <button
             onClick={() => {
+              resetToFirstPage()
               const next = new URLSearchParams(searchParams)
               for (const [k] of activeDashboardFilters) next.delete(k)
               setSearchParams(next, { replace: true })
@@ -870,7 +956,7 @@ export default function Events() {
       )}
 
       {/* Search Bar */}
-      <Card className="p-5">
+      <Card className="p-4">
         <div className="flex gap-3">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -902,6 +988,7 @@ export default function Events() {
                     // what's actually driving the results.
                     setKqlQuery('')
                     setActiveQuery('')
+                    resetToFirstPage()
                     const next = new URLSearchParams(searchParams)
                     for (const [k, v] of Object.entries(filter.params)) next.set(k, v)
                     setSearchParams(next, { replace: true })
@@ -995,146 +1082,155 @@ export default function Events() {
               description="Try adjusting your search query or clearing active filters."
             />
           ) : (
-            pageRows.map((event) => (
+            pageRows.map((event) => {
+              const sevTone = severityTone(event.severity)
+              const eventId = event.id || event.event_id || ''
+              return (
               <div
-                key={event.id || event.event_id}
-                className="p-4 hover:bg-accent cursor-pointer transition-colors"
+                key={eventId}
+                className={cn(
+                  'flex items-start gap-3 border-l-2 py-3.5 pl-3 pr-4 cursor-pointer transition-colors hover:bg-accent',
+                  SEVERITY_BORDER[(event.severity || '').toLowerCase()] || 'border-l-border',
+                )}
                 onClick={() => setSelectedEvent(event)}
               >
-                <div className="flex items-start gap-4">
-                  <div className={cn(
-                    'p-2 rounded-lg border',
-                    usbTransferFailed(event) ? tone('red')
-                      : (event.blocked || usbTransferOutcome(event, 'blocked')) ? tone('red')
-                      : (event.quarantined || usbTransferOutcome(event, 'quarantined')) ? tone('blue')
-                      : event.severity === 'critical' ? tone('red') : event.severity === 'high' ? tone('orange') : tone('blue'),
-                  )}>
-                    {event.event_type === 'file' ? <FileText className="h-5 w-5" /> :
-                      event.event_type === 'usb' ? <Shield className="h-5 w-5" /> :
-                      <AlertTriangle className="h-5 w-5" />}
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    {event.title && (
-                      <h4 className="font-semibold text-foreground mb-2 text-base">{event.title}</h4>
-                    )}
-
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      {event.event_subtype && (event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && (
-                        <span className={cn('inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm font-semibold', tone(getEventSubtypeTone(event.event_subtype)))}>
-                          {getEventSubtypeIcon(event.event_subtype)}
-                          {getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}
-                        </span>
-                      )}
-                      <Badge variant={severityToVariant(event.severity)}>{event.severity}</Badge>
-                      <Badge variant="info">
-                        {event.event_type === 'usb' && event.event_subtype
-                          ? (event.event_subtype === 'usb_connect' ? 'USB Connected'
-                            : event.event_subtype === 'usb_disconnect' ? 'USB Disconnected'
-                            : event.event_subtype === 'usb_blocked' ? 'USB Blocked'
-                            : event.event_subtype === 'usb_file_transfer'
-                              ? (event.action === 'block_failed' ? 'USB Transfer Block FAILED'
-                                : event.action === 'quarantine_failed' ? 'USB Transfer Quarantine FAILED'
-                                : usbTransferOutcome(event, 'blocked') ? 'USB Transfer Blocked'
-                                : usbTransferOutcome(event, 'quarantined') ? 'USB Transfer Quarantined'
-                                : 'USB Transfer')
-                            : event.event_type)
-                          : event.event_type}
-                      </Badge>
-                      {usbTransferFailed(event) && (
-                        <Badge variant="critical">
-                          {event.action === 'quarantine_failed' ? 'quarantine failed — file still present' : 'block failed — file still present'}
-                        </Badge>
-                      )}
-                      {!usbTransferFailed(event) && (event.blocked || usbTransferOutcome(event, 'blocked')) && <Badge variant="critical">blocked</Badge>}
-                      {!usbTransferFailed(event) && !event.blocked && !usbTransferOutcome(event, 'blocked') &&
-                        (event.quarantined || event.action_taken === 'quarantined' || event.action === 'quarantined' || usbTransferOutcome(event, 'quarantined')) && (
-                        <Badge variant="warning">quarantined</Badge>
-                      )}
-                      {event.classification_labels && event.classification_labels.length > 0 && (
-                        <span className={cn('inline-flex items-center px-2 py-1 text-xs font-medium rounded-full border', tone('purple'))}>
-                          {event.classification_labels[0]}
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-3 text-sm text-muted-foreground flex-wrap">
-                      <span>
-                        <span className="text-muted-foreground/70">Agent:</span>{' '}
-                        <span className="font-medium text-foreground" title={event.agent_id}>{getEventAgentLabel(event)}</span>
-                      </span>
-                      {event.user_email && event.user_email !== 'agent@system' && (
-                        <>
-                          <span className="text-muted-foreground/40">•</span>
-                          <span>
-                            <span className="text-muted-foreground/70">User:</span>{' '}
-                            <span className="font-medium text-foreground">{event.user_email}</span>
-                          </span>
-                        </>
-                      )}
-                      <span className="text-muted-foreground/40">•</span>
-                      <span>{formatDate(event.timestamp, 'PPpp')}</span>
-                      <span className="text-muted-foreground/40">•</span>
-                      <code className="text-xs bg-secondary px-1 py-0.5 rounded">{event.id || event.event_id}</code>
-                    </div>
-
-                    {event.file_path && (
-                      <p className="mt-2 text-sm text-foreground/80">
-                        <strong className="text-foreground">File:</strong>{' '}
-                        {(event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && event.event_subtype ? (
-                          <>
-                            <span className="font-medium">{getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}:</span>{' '}
-                            {event.file_name || truncate(event.file_path, 60)}
-                          </>
-                        ) : truncate(event.file_path, 80)}
-                      </p>
-                    )}
-
-                    {Array.isArray(event.matched_policies) && event.matched_policies.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {event.matched_policies
-                          .map((policy: any) => policy?.policy_name)
-                          .filter(Boolean)
-                          .map((name: string) => (
-                            <span key={`${event.id}-policy-${name}`} className={cn('inline-flex items-center px-2 py-1 text-xs font-medium rounded-full border', tone('indigo'))}>
-                              {name}
-                            </span>
-                          ))}
-                      </div>
-                    )}
-
-                    {event.usb && (
-                      <p className="mt-2 text-sm text-foreground/80">
-                        <strong className="text-foreground">USB:</strong> {event.usb.vendor} {event.usb.product}
-                        {event.usb.serial && ` (${event.usb.serial})`}
-                      </p>
-                    )}
-
-                    {event.policy && (
-                      <p className="mt-2 text-sm text-foreground/80">
-                        <strong className="text-foreground">Policy:</strong> {event.policy.policy_name} ({event.policy.action})
-                      </p>
-                    )}
-
-                    {event.content_redacted && (
-                      <div className="mt-2 p-2 bg-secondary rounded text-xs font-mono text-muted-foreground">
-                        {truncate(event.content_redacted, 200)}
-                      </div>
-                    )}
-                  </div>
+                <div className={cn(
+                  'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border',
+                  usbTransferFailed(event) ? tone('red')
+                    : (event.blocked || usbTransferOutcome(event, 'blocked')) ? tone('red')
+                    : (event.quarantined || usbTransferOutcome(event, 'quarantined')) ? tone('blue')
+                    : tone(sevTone),
+                )}>
+                  {event.event_type === 'file' ? <FileText className="h-4 w-4" /> :
+                    event.event_type === 'usb' ? <Shield className="h-4 w-4" /> :
+                    <AlertTriangle className="h-4 w-4" />}
                 </div>
+
+                <div className="min-w-0 flex-1">
+                  {event.title && (
+                    <h4 className="mb-1 text-sm font-semibold text-foreground">{event.title}</h4>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide', tone(sevTone))}>
+                      {event.severity}
+                    </span>
+                    {event.event_subtype && (event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && (
+                      <span className={cn('inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-medium border', tone(getEventSubtypeTone(event.event_subtype)))}>
+                        {getEventSubtypeIcon(event.event_subtype)}
+                        {getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}
+                      </span>
+                    )}
+                    <Badge variant="info">
+                      {event.event_type === 'usb' && event.event_subtype
+                        ? (event.event_subtype === 'usb_connect' ? 'USB Connected'
+                          : event.event_subtype === 'usb_disconnect' ? 'USB Disconnected'
+                          : event.event_subtype === 'usb_blocked' ? 'USB Blocked'
+                          : event.event_subtype === 'usb_file_transfer'
+                            ? (event.action === 'block_failed' ? 'USB Transfer Block FAILED'
+                              : event.action === 'quarantine_failed' ? 'USB Transfer Quarantine FAILED'
+                              : usbTransferOutcome(event, 'blocked') ? 'USB Transfer Blocked'
+                              : usbTransferOutcome(event, 'quarantined') ? 'USB Transfer Quarantined'
+                              : 'USB Transfer')
+                          : event.event_type)
+                        : event.event_type}
+                    </Badge>
+                    {usbTransferFailed(event) && (
+                      <Badge variant="critical">
+                        {event.action === 'quarantine_failed' ? 'quarantine failed — file still present' : 'block failed — file still present'}
+                      </Badge>
+                    )}
+                    {!usbTransferFailed(event) && (event.blocked || usbTransferOutcome(event, 'blocked')) && <Badge variant="critical">blocked</Badge>}
+                    {!usbTransferFailed(event) && !event.blocked && !usbTransferOutcome(event, 'blocked') &&
+                      (event.quarantined || event.action_taken === 'quarantined' || event.action === 'quarantined' || usbTransferOutcome(event, 'quarantined')) && (
+                      <Badge variant="warning">quarantined</Badge>
+                    )}
+                    {event.classification_labels && event.classification_labels.length > 0 && (
+                      <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium border', tone('purple'))}>
+                        {event.classification_labels[0]}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+                    <span title={event.agent_id}>
+                      <span className="text-muted-foreground/70">Agent</span>{' '}
+                      <span className="font-medium text-foreground">{getEventAgentLabel(event)}</span>
+                    </span>
+                    {event.user_email && event.user_email !== 'agent@system' && (
+                      <>
+                        <span className="text-muted-foreground/30">·</span>
+                        <span>
+                          <span className="text-muted-foreground/70">User</span>{' '}
+                          <span className="font-medium text-foreground">{event.user_email}</span>
+                        </span>
+                      </>
+                    )}
+                    <span className="text-muted-foreground/30">·</span>
+                    <span>{formatDate(event.timestamp, 'PPpp')}</span>
+                  </div>
+
+                  {event.file_path && (
+                    <p className="mt-1 text-xs text-foreground/80">
+                      <span className="font-medium text-foreground">File:</span>{' '}
+                      {(event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && event.event_subtype ? (
+                        <>
+                          <span className="font-medium">{getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}:</span>{' '}
+                          {event.file_name || truncate(event.file_path, 60)}
+                        </>
+                      ) : truncate(event.file_path, 80)}
+                    </p>
+                  )}
+
+                  {Array.isArray(event.matched_policies) && event.matched_policies.length > 0 && (
+                    <p className="mt-1 text-xs text-foreground/80">
+                      <span className="font-medium text-foreground">Matched Policy:</span>{' '}
+                      {event.matched_policies.map((p: any) => p?.policy_name).filter(Boolean).join(', ')}
+                    </p>
+                  )}
+
+                  {event.usb && (
+                    <p className="mt-1 text-xs text-foreground/80">
+                      <span className="font-medium text-foreground">USB:</span> {event.usb.vendor} {event.usb.product}
+                      {event.usb.serial && ` (${event.usb.serial})`}
+                    </p>
+                  )}
+
+                  {event.policy && (
+                    <p className="mt-1 text-xs text-foreground/80">
+                      <span className="font-medium text-foreground">Policy:</span> {event.policy.policy_name} ({event.policy.action})
+                    </p>
+                  )}
+
+                  {event.content_redacted && (
+                    <div className="mt-1.5 rounded border border-border bg-secondary/60 p-2 text-xs font-mono text-muted-foreground">
+                      {truncate(event.content_redacted, 200)}
+                    </div>
+                  )}
+                </div>
+
+                <code
+                  className="mt-0.5 hidden shrink-0 font-mono text-[10px] text-muted-foreground/40 sm:block"
+                  title={eventId}
+                >
+                  {eventId.length > 10 ? `${eventId.slice(0, 10)}…` : eventId}
+                </code>
               </div>
-            ))
+              )
+            })
           )}
         </div>
 
-        {!isLoading && !error && sorted.length > 0 && (
+        {!isLoading && !error && total > 0 && (
           <DataPagination
             page={page}
             pageSize={pageSize}
-            total={sorted.length}
+            total={total}
             onPageChange={setPage}
-            onPageSizeChange={setPageSize}
+            onPageSizeChange={(size) => {
+              setPageSize(size)
+              resetToFirstPage()
+            }}
             pageSizeOptions={[10, 20, 50, 100]}
           />
         )}
