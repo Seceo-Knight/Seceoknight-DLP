@@ -350,6 +350,230 @@ async def _seed_default_rules():
         logger.warning("Default rules seed encountered an error", error=str(e))
 
 
+async def _patch_default_rule_patterns():
+    """One-time-safe upgrade path for a handful of default classification
+    rule regexes found to be broken/incomplete during a Rules-tab audit
+    (user report: some regex rules -- particularly API key detection --
+    "detect wrongly").
+
+    Unlike _seed_default_rules() above (which only ever runs against an
+    EMPTY rules table, so it can never reach a deployment that's already
+    seeded), this runs on every boot and targets already-seeded rows --
+    but each UPDATE is scoped to `WHERE name = ... AND pattern = ...`
+    against the EXACT old, known-buggy pattern string. If an admin has
+    since hand-edited that rule's pattern through the UI, this matches
+    zero rows and leaves their edit alone; it only "un-sticks" rows still
+    on the originally-shipped default.
+
+    Concrete bugs fixed here:
+      - AWS Access Key: only matched the classic AKIA prefix, missing
+        ASIA (temporary/STS credentials -- extremely common in CI/CD
+        pipelines) and the AROA/AIDA identity-ARN prefixes.
+      - GitHub Personal Access Token: only matched classic ghp_ tokens,
+        missing gho_/ghu_/ghs_/ghr_ and modern fine-grained
+        github_pat_... tokens -- which GitHub has been steering users
+        toward since 2022. A fine-grained PAT pasted into a document was
+        never flagged at all.
+      - Credit Card Number: the regex requires exactly 16 digits in
+        4-digit groups, so it could mathematically never match a real
+        15-digit Amex or 14-digit Diners Club number, even though the
+        rule's own description claims Amex is covered. (The existing
+        Luhn-checksum validation in classification_engine.py already
+        handles the false-positive side of this rule correctly -- this
+        fix is purely about the false-negative/missed-format side.)
+      - Private Key Header: missing "ENCRYPTED PRIVATE KEY" (a
+        passphrase-protected PKCS#8 key -- a common, encouraged secure
+        practice) and PGP private key blocks.
+      - Database Connection String: only matched jdbc:-prefixed and a
+        few specific schemes; missing bare postgres://, postgresql://,
+        mysql://, and amqp(s)://. postgres:// in particular is the exact
+        format of a Heroku/most-PaaS DATABASE_URL env var -- one of the
+        single most common real-world ways a DB credential leaks.
+      - Indian PAN Card: the 4th character of a real PAN is a
+        constrained holder-type code (P/C/H/A/B/G/J/L/F/T), not any
+        letter -- unconstrained, the rule accepts far more 10-char alnum
+        strings than actually exist as valid PAN formats.
+      - Email Address: `[A-Z|a-z]` is a character class containing a
+        literal pipe character (a copy-pasted "or" that does nothing
+        inside `[...]`), not an alternation. Harmless in practice (it
+        only ever widens the class by one unlikely character) but not
+        what it visually appears to do.
+
+    Also adds several new, narrowly-scoped credential rules that didn't
+    exist before at all: AWS Secret Access Key (label+value anchored, to
+    avoid flagging arbitrary 40-char base64-ish strings), Slack tokens,
+    Stripe live secret/restricted keys, Google API keys, and JWTs -- each
+    self-identifying enough by its own prefix/shape to be low-false-
+    positive without needing a nearby "api_key=" label the way the
+    existing Generic API Key rule does.
+    """
+    import json
+    from sqlalchemy import text
+
+    # (rule_name, old_pattern, new_pattern) -- applied only if the row's
+    # pattern still exactly equals `old_pattern`.
+    PATTERN_FIXES = [
+        (
+            "AWS Access Key",
+            r"\b(AKIA[0-9A-Z]{16})\b",
+            r"\b((?:AKIA|ASIA|AROA|AIDA)[0-9A-Z]{16})\b",
+        ),
+        (
+            "GitHub Personal Access Token",
+            r"\b(ghp_[A-Za-z0-9]{36})\b",
+            r"\b(gh[oprsu]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82})\b",
+        ),
+        (
+            "Credit Card Number",
+            r"\b(?:\d{4}[\s-]?){3}\d{4}\b",
+            r"\b(?:(?:\d{4}[\s-]?){3}\d{4}|3[47]\d{2}[\s-]?\d{6}[\s-]?\d{5}|3(?:0[0-5]\d|[68]\d{2})[\s-]?\d{6}[\s-]?\d{4})\b",
+        ),
+        (
+            "Private Key Header",
+            r"-----BEGIN (RSA |DSA |EC |OPENSSH )?PRIVATE KEY-----",
+            r"-----BEGIN (RSA |DSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----|-----BEGIN PGP PRIVATE KEY BLOCK-----",
+        ),
+        (
+            "Database Connection String",
+            r"(jdbc:(mysql|postgresql|oracle|sqlserver)://|mongodb://|mongodb\+srv://|redis://|rediss://)",
+            r"(jdbc:(mysql|postgresql|oracle|sqlserver)://|mongodb://|mongodb\+srv://|redis://|rediss://|postgres(?:ql)?://|mysql://|amqp://|amqps://)",
+        ),
+        (
+            "Indian PAN Card",
+            r"\b[A-Z]{5}\d{4}[A-Z]{1}\b",
+            r"\b[A-Z]{3}[PCHABGJLFT][A-Z]\d{4}[A-Z]\b",
+        ),
+        (
+            "Email Address",
+            r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+            r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
+        ),
+    ]
+
+    # New rules that didn't exist in the original default set at all.
+    NEW_RULES = [
+        {
+            "name": "AWS Secret Access Key",
+            "description": "Detects AWS secret access keys (requires an adjacent aws_secret_access_key label to avoid flagging arbitrary 40-char strings)",
+            "type": "regex",
+            "pattern": r'(?i)aws_secret_access_key\s*[:=]\s*["\']?([A-Za-z0-9/+=]{40})["\']?',
+            "threshold": 1, "weight": 0.95, "priority": 5, "label": "Restricted",
+            "classification_labels": ["CREDENTIAL", "AWS", "API_KEY"],
+            "severity": "critical", "category": "Credentials",
+            "tags": ["aws", "cloud", "secrets"], "enabled": True,
+        },
+        {
+            "name": "Slack Token",
+            "description": "Detects Slack bot/user/app/legacy API tokens",
+            "type": "regex",
+            "pattern": r"\bxox[baprs]-[0-9A-Za-z-]{10,72}\b",
+            "threshold": 1, "weight": 0.95, "priority": 5, "label": "Restricted",
+            "classification_labels": ["CREDENTIAL", "SLACK", "API_KEY"],
+            "severity": "critical", "category": "Credentials",
+            "tags": ["slack", "secrets"], "enabled": True,
+        },
+        {
+            "name": "Stripe API Key",
+            "description": "Detects Stripe live secret/restricted API keys",
+            "type": "regex",
+            "pattern": r"\b(?:sk|rk)_live_[0-9A-Za-z]{24,}\b",
+            "threshold": 1, "weight": 0.95, "priority": 5, "label": "Restricted",
+            "classification_labels": ["CREDENTIAL", "STRIPE", "API_KEY"],
+            "severity": "critical", "category": "Credentials",
+            "tags": ["stripe", "payment", "secrets"], "enabled": True,
+        },
+        {
+            "name": "Google API Key",
+            "description": "Detects Google Cloud/Maps/Firebase API keys",
+            "type": "regex",
+            "pattern": r"\bAIza[0-9A-Za-z_\-]{35}\b",
+            "threshold": 1, "weight": 0.9, "priority": 10, "label": "Restricted",
+            "classification_labels": ["CREDENTIAL", "GOOGLE", "API_KEY"],
+            "severity": "critical", "category": "Credentials",
+            "tags": ["google", "cloud", "secrets"], "enabled": True,
+        },
+        {
+            "name": "JSON Web Token (JWT)",
+            "description": "Detects JWTs (header.payload.signature) -- often a live bearer session token",
+            "type": "regex",
+            "pattern": r"\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
+            "threshold": 1, "weight": 0.75, "priority": 20, "label": "Confidential",
+            "classification_labels": ["CREDENTIAL", "JWT", "API_KEY"],
+            "severity": "high", "category": "Credentials",
+            "tags": ["jwt", "session", "secrets"], "enabled": True,
+        },
+    ]
+
+    try:
+        async with _db.postgres_session_factory() as session:
+            patched = 0
+            for name, old_pattern, new_pattern in PATTERN_FIXES:
+                result = await session.execute(
+                    text(
+                        "UPDATE rules SET pattern = :new_pattern, updated_at = NOW() "
+                        "WHERE name = :name AND pattern = :old_pattern"
+                    ),
+                    {"name": name, "old_pattern": old_pattern, "new_pattern": new_pattern},
+                )
+                patched += result.rowcount or 0
+
+            # Reuse the same admin-lookup / label-lookup / insert shape as
+            # _seed_default_rules() above for any brand-new rule.
+            added = 0
+            result = await session.execute(text("SELECT id FROM users WHERE role = 'ADMIN' LIMIT 1"))
+            admin_row = result.first()
+            if admin_row:
+                admin_id = admin_row[0]
+                label_rows = await session.execute(text("SELECT id, name FROM data_labels"))
+                label_map = {row[1]: row[0] for row in label_rows.fetchall()}
+
+                for rule in NEW_RULES:
+                    label_id = label_map.get(rule.get("label"))
+                    insert_result = await session.execute(
+                        text(
+                            "INSERT INTO rules (id, name, description, enabled, type, pattern, regex_flags, "
+                            "keywords, case_sensitive, threshold, weight, priority, label_id, "
+                            "classification_labels, severity, "
+                            "category, tags, created_by, created_at, updated_at, match_count) "
+                            "VALUES (gen_random_uuid(), :name, :description, :enabled, :type, :pattern, "
+                            ":regex_flags, :keywords, :case_sensitive, :threshold, :weight, :priority, :label_id, "
+                            ":classification_labels, :severity, :category, :tags, :created_by, NOW(), NOW(), 0) "
+                            "ON CONFLICT (name) DO NOTHING"
+                        ),
+                        {
+                            "name": rule["name"],
+                            "description": rule.get("description"),
+                            "enabled": rule.get("enabled", True),
+                            "type": rule["type"],
+                            "pattern": rule.get("pattern"),
+                            "regex_flags": json.dumps(rule["regex_flags"]) if rule.get("regex_flags") else None,
+                            "keywords": json.dumps(rule["keywords"]) if rule.get("keywords") else None,
+                            "case_sensitive": rule.get("case_sensitive", False),
+                            "threshold": rule.get("threshold", 1),
+                            "weight": rule.get("weight", 0.5),
+                            "priority": rule.get("priority", 100),
+                            "label_id": str(label_id) if label_id else None,
+                            "classification_labels": json.dumps(rule["classification_labels"]) if rule.get("classification_labels") else None,
+                            "severity": rule.get("severity", "medium"),
+                            "category": rule.get("category"),
+                            "tags": json.dumps(rule["tags"]) if rule.get("tags") else None,
+                            "created_by": admin_id,
+                        },
+                    )
+                    added += insert_result.rowcount or 0
+            else:
+                logger.warning("No admin user found, skipping new credential rule inserts")
+
+            await session.commit()
+            if patched or added:
+                logger.info("Default rule patterns patched", patched=patched, added=added)
+            else:
+                logger.info("Default rule pattern patch: nothing to do (already patched or rows customized)")
+
+    except Exception as e:
+        logger.warning("Rule pattern patch encountered an error", error=str(e))
+
+
 async def _seed_default_policies():
     """Import default blocking policies on first boot if the policies table is empty."""
     import json
@@ -438,6 +662,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
         # Seed default classification rules on first boot
         await _seed_default_rules()
+
+        # Patch known-broken default rule regexes + add new credential
+        # rules, on every boot (not just first boot -- see the function's
+        # own docstring for why this is safe to run against an
+        # already-seeded table).
+        await _patch_default_rule_patterns()
 
         # Seed default blocking policies on first boot
         await _seed_default_policies()
