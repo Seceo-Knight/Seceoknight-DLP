@@ -63,7 +63,10 @@ async def get_risk_score(
     if not score:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                              "No risk score for this user yet -- try POST /risk-scoring/recompute")
-    recent_events = await svc.get_recent_events_for_user(user_email, limit=20)
+    recent_events = await svc.get_recent_events_for_user(
+        user_email, limit=50,
+        window_start=score.window_start, window_end=score.window_end,
+    )
     return {
         **score.to_dict(),
         "recent_events": [e.to_dict() for e in recent_events],
