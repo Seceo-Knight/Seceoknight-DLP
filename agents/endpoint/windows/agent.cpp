@@ -13263,14 +13263,34 @@ int HandleApplyFileAccessGuard(int /*argc*/, char* /*argv*/[]) {
         // Anything applied last run but not this run -- policy removed,
         // turned off, switched to audit, or this run's apply failed -- gets
         // reverted. Covers all of those cases with one check.
+        //
+        // BUG FOUND Sept 3, 2026 field testing: this used to write nowApplied
+        // straight to appliedPath below, unconditionally -- so a path whose
+        // RevertFileAccessControl() call FAILED still fell out of the applied
+        // set this cycle (it's not in "desired" as enforce, so it was never
+        // going to be in nowApplied either way) and got silently dropped from
+        // the tracking file regardless of whether the revert actually
+        // succeeded. Next cycle's previouslyApplied then no longer contained
+        // it, so nothing ever retried the revert again -- the live NTFS ACL
+        // stayed locked down indefinitely (observed: a policy switched from
+        // Enforce to Audit, but the folder stayed Guest-only-restricted
+        // forever after one failed revert). Fix: track failed reverts
+        // separately and keep them in the written-out cache so the next
+        // cycle retries instead of forgetting them.
+        std::set<std::string> failedReverts;
         for (const auto& path : previouslyApplied) {
             if (nowApplied.count(path) == 0) {
-                if (RevertFileAccessControl(path, logger)) revertedCount++;
+                if (RevertFileAccessControl(path, logger)) {
+                    revertedCount++;
+                } else {
+                    failedReverts.insert(path);
+                }
             }
         }
 
         std::ofstream af(appliedPath, std::ios::trunc | std::ios::binary);
         for (const auto& path : nowApplied) af << path << "\n";
+        for (const auto& path : failedReverts) af << path << "\n";
 
         // Only paths in nowApplied actually have a live SACL right now (set
         // alongside the DACL in ApplyFileAccessControl() above) -- audit
