@@ -284,21 +284,13 @@ export default function Dashboard() {
           ) : (
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={eventsBySeverity} margin={{ top: 10, right: 8, left: -12, bottom: 0 }}>
-                <defs>
-                  {Object.entries(SEVERITY_COLORS).map(([k, c]) => (
-                    <linearGradient key={k} id={`grad-sev-${k}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={c} stopOpacity={0.95} />
-                      <stop offset="100%" stopColor={c} stopOpacity={0.5} />
-                    </linearGradient>
-                  ))}
-                </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke={RECHARTS_CONFIG.gridStroke} vertical={false} />
                 <XAxis dataKey="severity" tick={{ fontSize: 11, fill: tickStyle.fill }} tickLine={false} axisLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: tickStyle.fill }} tickLine={false} axisLine={false} width={40} />
-                <Tooltip cursor={{ fill: 'rgba(91, 126, 255, 0.08)' }} content={<ChartTooltip drillHint="severity" />} />
+                <Tooltip cursor={{ fill: 'rgba(37, 99, 235, 0.06)' }} content={<ChartTooltip drillHint="severity" />} />
                 <Bar
                   dataKey="count"
-                  radius={[8, 8, 0, 0]}
+                  radius={[3, 3, 0, 0]}
                   onClick={(d: any) => {
                     const v = d?.payload?.severity ?? d?.severity
                     if (v) navigate(drillDownUrl({ severity: String(v) }))
@@ -306,7 +298,7 @@ export default function Dashboard() {
                   cursor="pointer"
                 >
                   {eventsBySeverity.map((entry: any, idx: number) => (
-                    <Cell key={idx} fill={`url(#grad-sev-${entry.severity})`} style={{ cursor: 'pointer' }} />
+                    <Cell key={idx} fill={SEVERITY_COLORS[entry.severity] || CHART_COLORS.info} style={{ cursor: 'pointer' }} />
                   ))}
                 </Bar>
               </BarChart>

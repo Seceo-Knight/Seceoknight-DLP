@@ -101,18 +101,18 @@ export default function Sidebar({ collapsed, onToggleCollapsed, variant = 'deskt
       )}
     >
       {/* Logo */}
-      <div className="flex h-16 items-center gap-2 border-b border-border px-4">
-        <img src={logo} alt="SeceoKnight DLP" className="h-9 w-9 shrink-0 rounded-lg object-contain" />
+      <div className="flex h-14 items-center gap-2 border-b border-border px-4">
+        <img src={logo} alt="SeceoKnight DLP" className="h-7 w-7 shrink-0 rounded-md object-contain" />
         {!isCollapsed && (
           <div className="min-w-0 overflow-hidden">
             <p className="truncate text-sm font-semibold leading-tight text-foreground">SeceoKnight</p>
-            <p className="truncate text-[11px] leading-tight text-muted-foreground">DLP Platform</p>
+            <p className="truncate text-[10.5px] leading-tight text-muted-foreground">DLP Platform</p>
           </div>
         )}
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-0.5 overflow-y-auto px-2.5 py-4">
+      <nav className="flex-1 space-y-px overflow-y-auto px-2 py-3">
         {visibleNav.map((item) => (
           <NavLink
             key={item.name}
@@ -120,7 +120,7 @@ export default function Sidebar({ collapsed, onToggleCollapsed, variant = 'deskt
             onClick={onNavigate}
             className={({ isActive }) =>
               cn(
-                'group relative flex items-center gap-3 rounded-md px-2.5 py-2 text-sm font-medium transition-colors',
+                'group relative flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[13px] font-medium transition-colors',
                 isActive
                   ? 'bg-primary/10 text-foreground'
                   : 'text-muted-foreground hover:bg-accent hover:text-foreground',
@@ -132,10 +132,10 @@ export default function Sidebar({ collapsed, onToggleCollapsed, variant = 'deskt
             {({ isActive }) => (
               <>
                 {isActive && (
-                  <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r bg-primary" />
+                  <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r bg-primary" />
                 )}
                 <item.icon
-                  className={cn('h-[18px] w-[18px] shrink-0', isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground')}
+                  className={cn('h-4 w-4 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-foreground')}
                 />
                 {!isCollapsed && <span className="truncate">{item.name}</span>}
               </>
@@ -148,7 +148,7 @@ export default function Sidebar({ collapsed, onToggleCollapsed, variant = 'deskt
       {variant === 'desktop' && (
         <button
           onClick={onToggleCollapsed}
-          className="mx-2.5 mb-2 flex items-center justify-center gap-2 rounded-md px-2.5 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="mx-2 mb-2 flex items-center justify-center gap-2 rounded-md px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
           {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <><ChevronLeft className="h-4 w-4" /> Collapse</>}
         </button>
@@ -156,7 +156,7 @@ export default function Sidebar({ collapsed, onToggleCollapsed, variant = 'deskt
 
       {/* Footer */}
       {!isCollapsed && (
-        <div className="border-t border-border px-4 py-3 text-[11px] text-muted-foreground">
+        <div className="border-t border-border px-4 py-2 text-[10.5px] text-muted-foreground">
           <div>Version 2.0.0</div>
           <div className="mt-0.5">© {new Date().getFullYear()} SeceoKnight DLP</div>
         </div>

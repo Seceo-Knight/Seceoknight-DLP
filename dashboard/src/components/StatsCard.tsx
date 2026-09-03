@@ -33,53 +33,46 @@ interface StatsCardProps {
 // Per-color visual treatments mapped onto the new semantic design tokens
 // (bg-primary, bg-critical, bg-warning, bg-success, bg-muted). Kept in one
 // map so palette tweaks live in a single place.
+//
+// Deliberately restrained (Purview/Azure Portal register, not a marketing
+// stat card): no tinted card background, no ring halo, no gradient accent
+// bar -- color shows up only in the icon and the left rule, which is
+// enough to carry meaning without the card reading as a colorful tile.
 const PALETTES: Record<StatsColor, {
-  wash: string      // faint tinted background wash
-  iconBg: string     // icon bubble background
-  iconFg: string      // icon color
-  ring: string        // soft ring round the bubble
+  iconBg: string    // icon bubble background
+  iconFg: string    // icon color
+  rule: string       // 2px left border rule
   value: string        // metric number color
-  accent: string        // 2px top accent bar gradient
 }> = {
   indigo: {
-    wash:   'bg-primary/5',
-    iconBg: 'bg-primary/15',
+    iconBg: 'bg-primary/10',
     iconFg: 'text-primary',
-    ring:   'ring-primary/10',
+    rule:   'border-l-primary',
     value:  'text-foreground',
-    accent: 'from-primary to-info',
   },
   red: {
-    wash:   'bg-critical/5',
-    iconBg: 'bg-critical/15',
+    iconBg: 'bg-critical/10',
     iconFg: 'text-critical',
-    ring:   'ring-critical/10',
+    rule:   'border-l-critical',
     value:  'text-foreground',
-    accent: 'from-critical to-destructive',
   },
   orange: {
-    wash:   'bg-warning/5',
-    iconBg: 'bg-warning/15',
+    iconBg: 'bg-warning/10',
     iconFg: 'text-warning',
-    ring:   'ring-warning/10',
+    rule:   'border-l-warning',
     value:  'text-foreground',
-    accent: 'from-warning to-critical',
   },
   green: {
-    wash:   'bg-success/5',
-    iconBg: 'bg-success/15',
+    iconBg: 'bg-success/10',
     iconFg: 'text-success',
-    ring:   'ring-success/10',
+    rule:   'border-l-success',
     value:  'text-foreground',
-    accent: 'from-success to-primary',
   },
   gray: {
-    wash:   'bg-muted/40',
     iconBg: 'bg-secondary',
     iconFg: 'text-muted-foreground',
-    ring:   'ring-border',
+    rule:   'border-l-border',
     value:  'text-foreground',
-    accent: 'from-muted-foreground/40 to-muted-foreground/10',
   },
 }
 
@@ -114,31 +107,28 @@ export default function StatsCard({
 
   const body = (
     <>
-      {/* Top accent stripe — 2px gradient bar bonded to the card. */}
-      <div className={cn('absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r', p.accent)} />
-
       {/* Drill-down affordance: a small arrow in the top-right that
           lights up on hover. Only rendered when ``to`` is set so the
           card visually advertises "click me" without saying so. */}
       {interactive && (
         <span
           aria-hidden
-          className="absolute right-3 top-3 text-muted-foreground/50 transition-colors group-hover:text-primary"
+          className="absolute right-2.5 top-2.5 text-muted-foreground/40 transition-colors group-hover:text-primary"
         >
-          <ArrowUpRight className="h-4 w-4" />
+          <ArrowUpRight className="h-3.5 w-3.5" />
         </span>
       )}
 
-      <div className="relative flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</p>
-          <p className={cn('mt-2 text-3xl font-bold tabular-nums tracking-tight', p.value)}>{value}</p>
+          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{title}</p>
+          <p className={cn('mt-1.5 text-2xl font-semibold tabular-nums tracking-tight', p.value)}>{value}</p>
           {subtext && <p className="mt-1 text-xs text-muted-foreground">{subtext}</p>}
           {trend && (
             <span
               className={cn(
-                'mt-3 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold',
-                trend.isPositive ? 'bg-success/15 text-success' : 'bg-critical/15 text-critical',
+                'mt-2 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-semibold',
+                trend.isPositive ? 'bg-success/10 text-success' : 'bg-critical/10 text-critical',
               )}
             >
               <span aria-hidden>{trend.isPositive ? '↑' : '↓'}</span>
@@ -148,24 +138,25 @@ export default function StatsCard({
         </div>
         <div
           className={cn(
-            'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-4',
-            p.iconBg, p.iconFg, p.ring,
+            'flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
+            p.iconBg, p.iconFg,
           )}
         >
-          <Icon className="h-5 w-5" />
+          <Icon className="h-4 w-4" />
         </div>
       </div>
     </>
   )
 
   const surface = cn(
-    'group relative overflow-hidden rounded-xl border border-border bg-card p-5 shadow-sm transition-all duration-200',
-    p.wash,
+    'group relative rounded-lg border border-l-2 border-border bg-card p-4 shadow-sm transition-colors duration-150',
+    p.rule,
   )
 
   // Non-interactive: plain div surface. Interactive: <Link> with
-  // cursor-pointer, focus ring, and a slightly stronger hover lift so
-  // the drill-down affordance is unmistakable.
+  // cursor-pointer and a focus ring -- no hover lift, just a border tint,
+  // so the drill-down affordance reads as "clickable data" rather than a
+  // marketing card.
   if (interactive) {
     return (
       <Link
@@ -174,7 +165,7 @@ export default function StatsCard({
         aria-label={`${title}: ${drillTooltip ?? DRILL_TOOLTIP}`}
         className={cn(
           surface,
-          'block cursor-pointer hover:-translate-y-1 hover:border-primary/30 hover:shadow-md',
+          'block cursor-pointer hover:border-primary/40',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         )}
       >
