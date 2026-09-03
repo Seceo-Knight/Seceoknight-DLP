@@ -49,6 +49,8 @@ async def get_alerts(
     current_user=Depends(get_current_user),
     severity: Optional[str] = Query(None, description="Filter by severity"),
     status: Optional[str] = Query(None, description="Filter by status"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     pg_db: AsyncSession = Depends(get_db),
 ):
     """
@@ -57,6 +59,11 @@ async def get_alerts(
     Generates alerts from critical/high severity events if no alerts exist
     in the database. Both the materialized-alerts path and the event-fallback
     path apply the viewer's ABAC visibility filter before counting/listing.
+
+    `skip`/`limit` page the returned `alerts` list; `counts.total` (and the
+    new `counts.high` / `counts.critical`) are always the true server-side
+    totals so the dashboard's stat tiles and pagination stay honest even
+    when there are more matching alerts than one page.
     """
     from app.services.abac_service import (
         build_abac_mongo_filter,
@@ -99,8 +106,21 @@ async def get_alerts(
             merge_mongo_filter({**query_filter, "status": "resolved"}, None)
         )
 
-        # Get limited list for display
-        cursor = alerts_collection.find(query_filter).sort("timestamp", -1).limit(100)
+        # Severity breakdown, deliberately independent of the caller's own
+        # `severity=` filter (unlike the counts above) -- this is what
+        # drives the dashboard's "High Alerts" / "Critical Alerts" stat
+        # tiles, which need to show their true counts simultaneously no
+        # matter which tile is currently selected.
+        severity_base = merge_mongo_filter({"severity": {"$nin": ["low", "info"]}}, abac)
+        if status:
+            severity_base["status"] = status
+        counts["high"] = await alerts_collection.count_documents({**severity_base, "severity": "high"})
+        counts["critical"] = await alerts_collection.count_documents({**severity_base, "severity": "critical"})
+
+        # Get the requested page for display -- previously hardcoded to the
+        # first 100 with no skip, so `counts.total` could report thousands
+        # while Next/Page 2 could never surface anything past row 100.
+        cursor = alerts_collection.find(query_filter).sort("timestamp", -1).skip(skip).limit(limit)
         async for alert_doc in cursor:
             try:
                 alert_dict = {k: v for k, v in alert_doc.items() if k != "_id"}
@@ -140,8 +160,20 @@ async def get_alerts(
         counts["acknowledged"] = 0
         counts["resolved"] = 0
 
-        # Get limited list for display
-        cursor = events_collection.find(query_filter).sort("timestamp", -1).limit(100)
+        # Severity breakdown, independent of any `severity=` filter the
+        # caller passed -- see the matching comment in the materialized-
+        # alerts branch above.
+        severity_base = merge_mongo_filter({"severity": {"$in": ["critical", "high"]}}, abac)
+        try:
+            counts["high"] = await events_collection.count_documents({**severity_base, "severity": "high"})
+            counts["critical"] = await events_collection.count_documents({**severity_base, "severity": "critical"})
+        except Exception:
+            counts["high"] = 0
+            counts["critical"] = 0
+
+        # Get the requested page for display -- see the pagination note in
+        # the materialized-alerts branch above; same fix applies here.
+        cursor = events_collection.find(query_filter).sort("timestamp", -1).skip(skip).limit(limit)
 
         async for event_doc in cursor:
             try:

@@ -1,27 +1,82 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, AlertTriangle, ShieldAlert, Search } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import AlertDetailsModal from '@/components/alerts/AlertDetailsModal'
-import { getAlerts } from '@/lib/api'
-import { formatRelativeTime, getSeverityColor, cn } from '@/lib/utils'
-import { usePagination } from '@/lib/hooks/useTableState'
+import StatsCard from '@/components/StatsCard'
+import { PageHeader } from '@/components/ui/page-header'
+import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import { EmptyState } from '@/components/ui/empty-state'
 import { DataPagination } from '@/components/ui/pagination'
+import { getAlerts, getAgents, type Agent } from '@/lib/api'
+import { formatRelativeTime, formatAgentLabel, cn } from '@/lib/utils'
+import { tone, type Tone } from '@/lib/tone'
 
 type FilterType = 'all' | 'high' | 'critical'
+
+// Same 4-tone severity ladder as the Events tab (critical=red, high=orange,
+// medium=yellow, low=blue) so the two "list of security records" pages
+// read consistently instead of each inventing its own scheme.
+const severityTone = (severity?: string | null): Tone => {
+  switch ((severity || '').toLowerCase()) {
+    case 'critical': return 'red'
+    case 'high': return 'orange'
+    case 'medium': return 'yellow'
+    case 'low': return 'blue'
+    default: return 'gray'
+  }
+}
+
+const SEVERITY_BORDER: Record<string, string> = {
+  critical: 'border-l-critical',
+  high: 'border-l-warning',
+  medium: 'border-l-warning/50',
+  low: 'border-l-info',
+}
 
 export default function Alerts() {
   const [selectedAlert, setSelectedAlert] = useState<any>(null)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [filter, setFilter] = useState<FilterType>('all')
   const [searchQuery, setSearchQuery] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
+
+  // Reset to page 1 whenever the severity filter, page size, or search
+  // query changes -- searchQuery in particular, since it narrows the
+  // current page's results and a stale page number would otherwise show
+  // as e.g. "Page 3 of 1" against the smaller filtered count below.
+  useEffect(() => setPage(1), [filter, pageSize, searchQuery])
+
+  const severityParam = filter === 'all' ? undefined : filter
 
   const { data: alertsData, isLoading, error, refetch } = useQuery({
-    queryKey: ['alerts'],
-    queryFn: getAlerts,
+    queryKey: ['alerts', severityParam, page, pageSize],
+    queryFn: () => getAlerts({ severity: severityParam, skip: (page - 1) * pageSize, limit: pageSize }),
     refetchInterval: 10000,
   })
+
+  const { data: agentsData } = useQuery({
+    queryKey: ['agents'],
+    queryFn: getAgents,
+    refetchInterval: 30000,
+  })
+  const agentMap = useMemo(() => {
+    const map = new Map<string, { name: string; agent_code?: number }>()
+    if (Array.isArray(agentsData)) {
+      agentsData.forEach((agent: Agent) => {
+        if (agent?.agent_id && agent?.name) map.set(agent.agent_id, { name: agent.name, agent_code: agent.agent_code })
+      })
+    }
+    return map
+  }, [agentsData])
+  const getAlertAgentLabel = (alert: any): string => {
+    const fallback = alert.agent_id ? agentMap.get(alert.agent_id) : undefined
+    return formatAgentLabel(fallback?.name, fallback?.agent_code, null, alert.agent_id)
+  }
 
   const handleAlertClick = (alert: any) => {
     setSelectedAlert(alert)
@@ -29,67 +84,52 @@ export default function Alerts() {
   }
 
   // Handle both old format (array) and new format (object with alerts and counts).
-  // This whole derivation -- including usePagination -- has to run
-  // unconditionally on every render, before the isLoading/error early
-  // returns below, since hooks can't be called conditionally. alertsData
-  // is simply undefined while loading, which every branch here already
-  // guards for.
+  // This whole derivation has to run unconditionally on every render, before
+  // the isLoading/error early returns below, since hooks can't be called
+  // conditionally. alertsData is simply undefined while loading, which
+  // every branch here already guards for.
   let alerts: any[] = []
   let counts: Record<string, number> = {}
 
   if (!alertsData) {
-    // No data - use empty arrays
     alerts = []
   } else if (Array.isArray(alertsData)) {
-    // Old format: direct array
     alerts = alertsData
   } else if (typeof alertsData === 'object' && alertsData !== null) {
-    // New format: object with alerts and counts
-    if ('alerts' in alertsData && Array.isArray(alertsData.alerts)) {
-      alerts = alertsData.alerts
-    }
-    if ('counts' in alertsData && typeof alertsData.counts === 'object' && alertsData.counts !== null) {
-      counts = alertsData.counts
-    }
+    if ('alerts' in alertsData && Array.isArray(alertsData.alerts)) alerts = alertsData.alerts
+    if ('counts' in alertsData && typeof alertsData.counts === 'object' && alertsData.counts !== null) counts = alertsData.counts
   }
+  if (!Array.isArray(alerts)) alerts = []
 
-  // Ensure alerts is always an array
-  if (!Array.isArray(alerts)) {
-    alerts = []
-  }
-
-  // Calculate alert counts by type
+  // Server-computed, filter-independent breakdown (counts.total tracks
+  // whatever `severity` filter is currently applied to the query; high/
+  // critical are always the true totals so the tiles stay accurate no
+  // matter which one is selected). Previously these were computed by
+  // counting severity matches within the capped ~100-row fetched page,
+  // silently undercounting once there were more alerts than that.
   const totalAlertsCount = typeof counts.total === 'number' ? counts.total : alerts.length
-  const highAlertsCount = alerts.filter((a) => a && a.severity === 'high').length
-  const criticalAlertsCount = alerts.filter((a) => a && a.severity === 'critical').length
+  const highAlertsCount = typeof counts.high === 'number' ? counts.high : alerts.filter((a) => a?.severity === 'high').length
+  const criticalAlertsCount = typeof counts.critical === 'number' ? counts.critical : alerts.filter((a) => a?.severity === 'critical').length
 
-  // Filter and search alerts
+  // Free-text search is a client-side refinement over the currently
+  // loaded page only (the backend has no keyword search for alerts) --
+  // narrower in scope than the Events tab's server-side search, so
+  // pagination below falls back to the local filtered count while a
+  // search is active instead of claiming the server's larger total.
   const filteredAlerts = alerts.filter((alert) => {
-    // Apply severity filter
-    if (filter === 'high' && alert.severity !== 'high') return false
-    if (filter === 'critical' && alert.severity !== 'critical') return false
-
-    // Apply search filter
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase()
-      return (
-        alert.title?.toLowerCase().includes(query) ||
-        alert.description?.toLowerCase().includes(query) ||
-        alert.agent_id?.toLowerCase().includes(query) ||
-        alert.user_email?.toLowerCase().includes(query) ||
-        alert.event_id?.toLowerCase().includes(query) ||
-        alert.severity?.toLowerCase().includes(query)
-      )
-    }
-
-    return true
+    if (!searchQuery) return true
+    const query = searchQuery.toLowerCase()
+    return (
+      alert.title?.toLowerCase().includes(query) ||
+      alert.description?.toLowerCase().includes(query) ||
+      alert.agent_id?.toLowerCase().includes(query) ||
+      alert.user_email?.toLowerCase().includes(query) ||
+      alert.event_id?.toLowerCase().includes(query) ||
+      alert.severity?.toLowerCase().includes(query)
+    )
   })
 
-  // Client-side pagination over the filtered list -- getAlerts() has no
-  // server-side skip/limit, so the full set is already in memory; this
-  // just windows what's rendered instead of dumping every alert into the
-  // DOM at once (the "list pages render everything unpaginated" gap).
-  const { page, pageSize, pageRows, setPage, setPageSize } = usePagination(filteredAlerts, 25)
+  const paginationTotal = searchQuery ? filteredAlerts.length : totalAlertsCount
 
   if (isLoading) {
     return <LoadingSpinner size="lg" />
@@ -101,167 +141,147 @@ export default function Alerts() {
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">Alerts</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Manage security alerts from DLP policies
-        </p>
-      </div>
+      <PageHeader
+        icon={ShieldAlert}
+        title="Alerts"
+        description="Security alerts triggered by DLP policies."
+      />
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div
-          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'all' ? 'ring-2 ring-blue-500' : ''}`}
+      {/* Stats — click to filter the list below */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatsCard
+          title="Total Alerts"
+          value={totalAlertsCount.toLocaleString()}
+          icon={ShieldAlert}
+          color="indigo"
           onClick={() => setFilter('all')}
-        >
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-500/15 rounded-lg">
-              <ShieldAlert className="h-5 w-5 text-blue-400" />
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Total Alerts</p>
-              <p className="text-2xl font-bold text-blue-400">{totalAlertsCount}</p>
-            </div>
-          </div>
-        </div>
-
-        <div
-          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'high' ? 'ring-2 ring-orange-500' : ''}`}
+          active={filter === 'all'}
+        />
+        <StatsCard
+          title="High Alerts"
+          value={highAlertsCount.toLocaleString()}
+          icon={AlertTriangle}
+          color="orange"
           onClick={() => setFilter('high')}
-        >
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-orange-500/15 rounded-lg">
-              <AlertTriangle className="h-5 w-5 text-orange-400" />
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">High Alerts</p>
-              <p className="text-2xl font-bold text-orange-400">
-                {highAlertsCount}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div
-          className={`card cursor-pointer hover:shadow-lg transition-shadow ${filter === 'critical' ? 'ring-2 ring-red-500' : ''}`}
+          active={filter === 'high'}
+        />
+        <StatsCard
+          title="Critical Alerts"
+          value={criticalAlertsCount.toLocaleString()}
+          icon={AlertCircle}
+          color="red"
           onClick={() => setFilter('critical')}
-        >
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-red-500/15 rounded-lg">
-              <AlertCircle className="h-5 w-5 text-red-400" />
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Critical Alerts</p>
-              <p className="text-2xl font-bold text-red-400">
-                {criticalAlertsCount}
-              </p>
-            </div>
-          </div>
-        </div>
+          active={filter === 'critical'}
+        />
       </div>
 
       {/* Search Bar */}
-      <div className="card">
+      <Card className="p-4">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground/70" />
-          <input
-            type="text"
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
             placeholder="Search alerts by title, description, agent ID, severity..."
+            className="pl-9"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
         </div>
-      </div>
+      </Card>
 
       {/* Alerts List */}
-      <div className="card p-0">
-        <div className="px-6 py-4 border-b border-border">
+      <Card className="p-0 overflow-hidden">
+        <div className="border-b border-border px-5 py-4">
           <h3 className="font-semibold text-foreground">
             {filter === 'all' ? 'All Alerts' : filter === 'high' ? 'High Severity Alerts' : 'Critical Severity Alerts'}
-            {searchQuery && ` - Search: "${searchQuery}"`}
+            {searchQuery && <span className="ml-2 font-normal text-muted-foreground">— search: "{searchQuery}"</span>}
           </h3>
         </div>
 
         <div className="divide-y divide-border">
-          {!filteredAlerts || filteredAlerts.length === 0 ? (
-            <div className="p-12 text-center">
-              <AlertCircle className="h-12 w-12 text-muted-foreground/70 mx-auto mb-3" />
-              <p className="text-muted-foreground font-medium">
-                {searchQuery ? 'No alerts found' : filter === 'all' ? 'No alerts' : `No ${filter} severity alerts`}
-              </p>
-              <p className="text-sm text-muted-foreground mt-1">
-                {searchQuery
-                  ? 'Try adjusting your search query'
+          {filteredAlerts.length === 0 ? (
+            <EmptyState
+              icon={AlertCircle}
+              title={searchQuery ? 'No alerts found' : filter === 'all' ? 'No alerts' : `No ${filter} severity alerts`}
+              description={
+                searchQuery
+                  ? 'Try adjusting your search query.'
                   : filter === 'all'
-                  ? 'Alerts will appear here when policies trigger'
-                  : 'Click "Total Alerts" to see all alerts'
-                }
-              </p>
-            </div>
+                    ? 'Alerts will appear here when policies trigger.'
+                    : 'Click "Total Alerts" to see all alerts.'
+              }
+            />
           ) : (
-            pageRows.map((alert) => (
-              <div
-                key={alert.id}
-                className="p-4 hover:bg-accent cursor-pointer transition-colors"
-                onClick={() => handleAlertClick(alert)}
-              >
-                <div className="flex items-start gap-4">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span
-                        className={cn('badge', getSeverityColor(alert.severity))}
-                      >
+            filteredAlerts.map((alert) => {
+              const sevTone = severityTone(alert.severity)
+              return (
+                <div
+                  key={alert.id}
+                  className={cn(
+                    'flex items-start gap-3 border-l-2 py-3.5 pl-3 pr-4 cursor-pointer transition-colors hover:bg-accent',
+                    SEVERITY_BORDER[(alert.severity || '').toLowerCase()] || 'border-l-border',
+                  )}
+                  onClick={() => handleAlertClick(alert)}
+                >
+                  <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border', tone(sevTone))}>
+                    <ShieldAlert className="h-4 w-4" />
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide', tone(sevTone))}>
                         {alert.severity}
                       </span>
-                      {alert.status === 'new' && (
-                        <span className="badge badge-danger">New</span>
-                      )}
-                      {alert.status === 'acknowledged' && (
-                        <span className="badge badge-warning">Acknowledged</span>
-                      )}
-                      {alert.status === 'resolved' && (
-                        <span className="badge badge-success">Resolved</span>
-                      )}
+                      {alert.status === 'new' && <Badge variant="critical">New</Badge>}
+                      {alert.status === 'acknowledged' && <Badge variant="warning">Acknowledged</Badge>}
+                      {alert.status === 'resolved' && <Badge variant="success">Resolved</Badge>}
                     </div>
 
-                    <h4 className="font-medium text-foreground">{alert.title}</h4>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {alert.description}
-                    </p>
+                    <h4 className="mt-1 text-sm font-semibold text-foreground">{alert.title}</h4>
+                    {alert.description && (
+                      <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{alert.description}</p>
+                    )}
 
-                    <div className="mt-2 flex items-center gap-3 text-xs text-muted-foreground">
-                      <span>Agent: {alert.agent_id}</span>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+                      <span title={alert.agent_id}>
+                        <span className="text-muted-foreground/70">Agent</span>{' '}
+                        <span className="font-medium text-foreground">{getAlertAgentLabel(alert)}</span>
+                      </span>
                       {alert.user_email && alert.user_email !== 'agent@system' && (
                         <>
-                          <span>•</span>
-                          <span>User: {alert.user_email}</span>
+                          <span className="text-muted-foreground/30">·</span>
+                          <span>
+                            <span className="text-muted-foreground/70">User</span>{' '}
+                            <span className="font-medium text-foreground">{alert.user_email}</span>
+                          </span>
                         </>
                       )}
-                      <span>•</span>
+                      <span className="text-muted-foreground/30">·</span>
                       <span>{formatRelativeTime(alert.created_at)}</span>
-                      <span>•</span>
-                      <code className="bg-secondary px-1 py-0.5 rounded">
-                        {alert.event_id}
-                      </code>
                     </div>
                   </div>
+
+                  <code
+                    className="mt-0.5 hidden shrink-0 font-mono text-[10px] text-muted-foreground/40 sm:block"
+                    title={alert.event_id}
+                  >
+                    {alert.event_id && alert.event_id.length > 10 ? `${alert.event_id.slice(0, 10)}…` : alert.event_id}
+                  </code>
                 </div>
-              </div>
-            ))
+              )
+            })
           )}
         </div>
-        {filteredAlerts.length > 0 && (
+        {paginationTotal > 0 && (
           <DataPagination
             page={page}
             pageSize={pageSize}
-            total={filteredAlerts.length}
+            total={paginationTotal}
             onPageChange={setPage}
             onPageSizeChange={setPageSize}
+            pageSizeOptions={[10, 25, 50, 100]}
           />
         )}
-      </div>
+      </Card>
 
       {/* Alert Details Modal */}
       <AlertDetailsModal

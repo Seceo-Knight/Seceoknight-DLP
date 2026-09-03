@@ -28,6 +28,15 @@ interface StatsCardProps {
   /** Tooltip override for the drill-down. Defaults to the shared
    *  "Click to drill down" copy. */
   drillTooltip?: string
+  /** Makes the card a toggle button instead of a display tile or a Link
+   *  (mutually exclusive with `to`) -- for stat tiles that filter an
+   *  on-page list rather than navigate away, e.g. Alerts' Total/High/
+   *  Critical tiles. */
+  onClick?: () => void
+  /** Whether this toggle tile is the currently-selected filter. Only
+   *  meaningful together with `onClick`. Renders a restrained selected
+   *  state (tinted border + 1px ring) rather than a bright glowing ring. */
+  active?: boolean
 }
 
 // Per-color visual treatments mapped onto the new semantic design tokens
@@ -43,36 +52,42 @@ const PALETTES: Record<StatsColor, {
   iconFg: string    // icon color
   rule: string       // 2px left border rule
   value: string        // metric number color
+  activeRing: string  // toggle-mode selected state
 }> = {
   indigo: {
     iconBg: 'bg-primary/10',
     iconFg: 'text-primary',
     rule:   'border-l-primary',
     value:  'text-foreground',
+    activeRing: 'ring-1 ring-primary/30 border-primary/40 bg-primary/[0.03]',
   },
   red: {
     iconBg: 'bg-critical/10',
     iconFg: 'text-critical',
     rule:   'border-l-critical',
     value:  'text-foreground',
+    activeRing: 'ring-1 ring-critical/30 border-critical/40 bg-critical/[0.03]',
   },
   orange: {
     iconBg: 'bg-warning/10',
     iconFg: 'text-warning',
     rule:   'border-l-warning',
     value:  'text-foreground',
+    activeRing: 'ring-1 ring-warning/30 border-warning/40 bg-warning/[0.03]',
   },
   green: {
     iconBg: 'bg-success/10',
     iconFg: 'text-success',
     rule:   'border-l-success',
     value:  'text-foreground',
+    activeRing: 'ring-1 ring-success/30 border-success/40 bg-success/[0.03]',
   },
   gray: {
     iconBg: 'bg-secondary',
     iconFg: 'text-muted-foreground',
     rule:   'border-l-border',
     value:  'text-foreground',
+    activeRing: 'ring-1 ring-border bg-muted/40',
   },
 }
 
@@ -100,10 +115,13 @@ export default function StatsCard({
   color,
   to,
   drillTooltip,
+  onClick,
+  active,
 }: StatsCardProps) {
   const semantic: StatsColor = normalize(color)
   const p = PALETTES[semantic]
   const interactive = !!to
+  const toggleable = !!onClick && !to
 
   const body = (
     <>
@@ -173,5 +191,29 @@ export default function StatsCard({
       </Link>
     )
   }
+
+  // Toggle mode: a filter tile (Alerts' Total/High/Critical, etc). The
+  // selected state is a tinted border + a 1px ring in the tile's own
+  // color, not the old bright ring-2 ring-{color}-500 glow -- enough to
+  // read as "this filter is active" without the page reading as a
+  // marketing dashboard.
+  if (toggleable) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={!!active}
+        className={cn(
+          surface,
+          'block w-full text-left cursor-pointer hover:border-primary/40',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+          active && p.activeRing,
+        )}
+      >
+        {body}
+      </button>
+    )
+  }
+
   return <div className={surface}>{body}</div>
 }
