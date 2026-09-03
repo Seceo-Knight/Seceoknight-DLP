@@ -53,6 +53,12 @@ async def list_risk_scores(
 @router.get("/users/{user_email}")
 async def get_risk_score(
     user_email: str,
+    component: Optional[str] = Query(
+        None, pattern="^(volume|channel_diversity|off_hours|block_ratio|severity_mix)$",
+        description="Filter recent_events to exactly the events behind this "
+                    "component tile, scanned across the FULL window rather "
+                    "than just the most-recent slice -- see "
+                    "RiskScoringService.get_events_for_user."),
     db: AsyncSession = Depends(get_db),
     current_user=Depends(require_role("analyst")),
 ):
@@ -63,13 +69,17 @@ async def get_risk_score(
     if not score:
         raise HTTPException(status.HTTP_404_NOT_FOUND,
                              "No risk score for this user yet -- try POST /risk-scoring/recompute")
-    recent_events = await svc.get_recent_events_for_user(
-        user_email, limit=50,
+    events, total_matching = await svc.get_events_for_user(
+        user_email, component=component, limit=100,
         window_start=score.window_start, window_end=score.window_end,
     )
     return {
         **score.to_dict(),
-        "recent_events": [e.to_dict() for e in recent_events],
+        "recent_events": [e.to_dict() for e in events],
+        # True count of events matching `component` across the whole window,
+        # not just len(recent_events) -- lets the UI show an honest "N of M"
+        # even when M exceeds what's returned for display.
+        "recent_events_total": total_matching,
     }
 
 
