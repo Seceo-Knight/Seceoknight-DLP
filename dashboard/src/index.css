@@ -120,27 +120,28 @@
      inherits the native dark theme instead of relying on the
      obsidian-vault.css !important override hack. */
   .card {
-    @apply bg-card text-card-foreground rounded-lg shadow-sm border border-border p-6;
+    @apply bg-card text-card-foreground rounded-lg shadow-sm border border-border p-4;
   }
 
   /* ── Modern dashboard cards (PART 2) ──────────────────────────────
-     Soft shadow, rounded-2xl, subtle surface, hover lift. The transition
-     is intentionally short so the UI feels responsive instead of bouncy. */
+     Dense, flat-bordered surface (Purview/Azure Portal register, not a
+     marketing-site "lift on hover" card) -- a hairline border does the
+     work a shadow used to, and the corner radius is tight enough to read
+     as a data panel rather than a rounded tile. */
   .card-modern {
     @apply bg-card text-card-foreground
-           border border-border rounded-2xl
-           shadow-sm hover:shadow-xl hover:border-primary/30
-           transition-all duration-200 ease-out
-           hover:-translate-y-0.5
-           p-6;
+           border border-border rounded-lg
+           shadow-sm hover:border-primary/40
+           transition-colors duration-150 ease-out
+           p-4;
   }
 
-  /* Same surface, no hover lift (use on chart cards where the chart
+  /* Same surface, no hover state (use on chart cards where the chart
      itself is the interactive element). */
   .card-static {
     @apply bg-card text-card-foreground
-           border border-border rounded-2xl
-           shadow-sm p-6;
+           border border-border rounded-lg
+           shadow-sm p-4;
   }
 
   /* Metric value: large, bold, inherits gradient color via parent's
