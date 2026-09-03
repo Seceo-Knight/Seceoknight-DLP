@@ -1,9 +1,9 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   Server, AlertCircle, FileText, ShieldAlert, Shield, Activity,
-  TrendingUp, LayoutDashboard,
+  TrendingUp, LayoutDashboard, Clock,
 } from 'lucide-react'
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -33,6 +33,47 @@ const formatDateTimeIST = (d: Date) =>
   new Intl.DateTimeFormat('en-IN', {
     timeZone: IST_TIMEZONE, dateStyle: 'long', timeStyle: 'long',
   }).format(d)
+const formatDateIST = (d: Date) =>
+  new Intl.DateTimeFormat('en-IN', {
+    timeZone: IST_TIMEZONE, day: '2-digit', month: 'short',
+  }).format(d)
+
+// ── Time range selector ─────────────────────────────────────────────────
+const TIME_RANGES = [
+  { label: '12 hours', short: '12h', hours: 12 },
+  { label: '24 hours', short: '24h', hours: 24 },
+  { label: '3 days', short: '3d', hours: 72 },
+  { label: '7 days', short: '7d', hours: 168 },
+  { label: '90 days', short: '90d', hours: 2160 },
+] as const
+
+/** "Updated Xs ago" — genuinely ticks off a live timestamp instead of a static claim. */
+function LiveStatus({ updatedAt, isFetching }: { updatedAt: number | undefined; isFetching: boolean }) {
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const secondsAgo = updatedAt ? Math.max(0, Math.round((Date.now() - updatedAt) / 1000)) : null
+  const label = isFetching
+    ? 'Syncing…'
+    : secondsAgo === null
+      ? 'Connecting…'
+      : secondsAgo < 1
+        ? 'Updated just now'
+        : `Updated ${secondsAgo}s ago`
+
+  return (
+    <div className="flex items-center gap-2 rounded-full border border-success/30 bg-success/10 px-3 py-1.5 text-xs font-medium text-success">
+      <span className="relative flex h-1.5 w-1.5">
+        {!isFetching && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />}
+        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-success" />
+      </span>
+      <span className="tabular-nums">{label}</span>
+    </div>
+  )
+}
 
 // Distinct, harmonious palette for event-type pie segments.
 const TYPE_PALETTE = [
@@ -78,26 +119,29 @@ function ChartTooltip({ active, payload, label, labelFormatter, drillHint }: any
 // ── Page ────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const navigate = useNavigate()
+  const [rangeHours, setRangeHours] = useState<number>(24)
+  const activeRange = TIME_RANGES.find((r) => r.hours === rangeHours) ?? TIME_RANGES[1]
+  const isDaily = rangeHours > 168
 
-  const { data: stats, isLoading: statsLoading, error: statsError, isFetching } = useQuery({
-    queryKey: ['stats'],
-    queryFn: getStats,
+  const { data: stats, isLoading: statsLoading, error: statsError, isFetching, dataUpdatedAt } = useQuery({
+    queryKey: ['stats', rangeHours],
+    queryFn: () => getStats(rangeHours),
     refetchInterval: 5000,
   })
 
   const { data: timeSeries = [], isLoading: timeSeriesLoading } = useQuery({
-    queryKey: ['eventTimeSeries'],
-    queryFn: () => getEventTimeSeries({ interval: 'hour' }),
+    queryKey: ['eventTimeSeries', rangeHours],
+    queryFn: () => getEventTimeSeries({ interval: 'hour', hours: rangeHours }),
   })
 
   const { data: eventsByType = [], isLoading: typeLoading } = useQuery({
-    queryKey: ['eventsByType'],
-    queryFn: getEventsByType,
+    queryKey: ['eventsByType', rangeHours],
+    queryFn: () => getEventsByType(rangeHours),
   })
 
   const { data: eventsBySeverity = [], isLoading: severityLoading } = useQuery({
-    queryKey: ['eventsBySeverity'],
-    queryFn: getEventsBySeverity,
+    queryKey: ['eventsBySeverity', rangeHours],
+    queryFn: () => getEventsBySeverity(rangeHours),
   })
 
   const agentHealth = useMemo(() => {
@@ -121,16 +165,29 @@ export default function Dashboard() {
     <div className="space-y-6">
       <PageHeader
         icon={LayoutDashboard}
-        title="Security Operations"
-        description="Real-time view of DLP activity across endpoints and channels."
+        title="Dashboard"
+        description={`DLP activity across endpoints and channels — last ${activeRange.label}.`}
         actions={
-          <div className="flex items-center gap-2 rounded-full border border-success/30 bg-success/10 px-3 py-1.5 text-xs font-medium text-success">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success opacity-75" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-success" />
-            </span>
-            Live · refreshes every 5s
-            {isFetching && <span className="ml-1 text-primary">syncing…</span>}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 rounded-md border border-border bg-card p-0.5">
+              <Clock className="ml-1.5 h-3.5 w-3.5 text-muted-foreground" />
+              {TIME_RANGES.map((r) => (
+                <button
+                  key={r.hours}
+                  type="button"
+                  onClick={() => setRangeHours(r.hours)}
+                  className={cn(
+                    'rounded px-2 py-1 text-xs font-medium transition-colors',
+                    r.hours === rangeHours
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  {r.short}
+                </button>
+              ))}
+            </div>
+            <LiveStatus updatedAt={dataUpdatedAt} isFetching={isFetching} />
           </div>
         }
       />
@@ -142,7 +199,7 @@ export default function Dashboard() {
           value={(stats?.total_events ?? 0).toLocaleString()}
           icon={FileText}
           color="indigo"
-          subtext="all-time recorded"
+          subtext={`last ${activeRange.label}`}
           to={drillDownUrl({})}
           drillTooltip="See all events"
         />
@@ -177,7 +234,7 @@ export default function Dashboard() {
 
       {/* Row 1 — events over time + by type */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <ChartCard title="Events Over Time" subtitle="Hourly volume across all DLP modules" icon={Activity} accent="indigo" className="lg:col-span-2">
+        <ChartCard title="Events Over Time" subtitle={isDaily ? 'Daily volume across all DLP modules' : 'Hourly volume across all DLP modules'} icon={Activity} accent="indigo" className="lg:col-span-2">
           {timeSeriesLoading ? (
             <ChartSkeleton />
           ) : timeSeries.length === 0 ? (
@@ -197,13 +254,13 @@ export default function Dashboard() {
                   tick={{ fontSize: 11, fill: tickStyle.fill }}
                   tickLine={false}
                   axisLine={false}
-                  tickFormatter={(v) => formatTimeIST(new Date(v))}
+                  tickFormatter={(v) => (isDaily ? formatDateIST(new Date(v)) : formatTimeIST(new Date(v)))}
                   minTickGap={32}
                 />
                 <YAxis tick={{ fontSize: 11, fill: tickStyle.fill }} tickLine={false} axisLine={false} width={40} />
                 <Tooltip
                   cursor={{ stroke: RECHARTS_CONFIG.cursorStroke, strokeWidth: 1, strokeDasharray: '3 3', opacity: RECHARTS_CONFIG.cursorOpacity }}
-                  content={<ChartTooltip labelFormatter={(v: any) => formatDateTimeIST(new Date(v))} />}
+                  content={<ChartTooltip labelFormatter={(v: any) => (isDaily ? formatDateIST(new Date(v)) : formatDateTimeIST(new Date(v)))} />}
                 />
                 <Area
                   type="monotone"

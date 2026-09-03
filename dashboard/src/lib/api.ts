@@ -69,8 +69,10 @@ apiClient.interceptors.response.use(
 )
 
 // Helper functions for Dashboard
-export const getStats = async () => {
-  const { data } = await apiClient.get('/dashboard/overview')
+export const getStats = async (hours?: number) => {
+  const { data } = await apiClient.get('/dashboard/overview', {
+    params: hours ? { hours } : undefined,
+  })
   return data
 }
 
@@ -81,13 +83,17 @@ export const getEventTimeSeries = async (params?: { interval?: string; hours?: n
   return data
 }
 
-export const getEventsByType = async () => {
-  const { data } = await apiClient.get('/events/stats/by-type')
+export const getEventsByType = async (hours?: number) => {
+  const { data } = await apiClient.get('/events/stats/by-type', {
+    params: hours ? { hours } : undefined,
+  })
   return data
 }
 
-export const getEventsBySeverity = async () => {
-  const { data } = await apiClient.get('/events/stats/by-severity')
+export const getEventsBySeverity = async (hours?: number) => {
+  const { data } = await apiClient.get('/events/stats/by-severity', {
+    params: hours ? { hours } : undefined,
+  })
   return data
 }
 
