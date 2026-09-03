@@ -6,6 +6,7 @@ import { getAutoIncidents, getAutoIncident, updateAutoIncident } from '@/lib/api
 import { formatDateTimeIST, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/page-header'
 import { Card } from '@/components/ui/card'
+import StatsCard from '@/components/StatsCard'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -40,7 +41,7 @@ function IncidentCard({ incident, onClick }: { incident: any; onClick: () => voi
   return (
     <div
       onClick={onClick}
-      className="group rounded-xl border border-border bg-card p-4 hover:border-primary/40 hover:shadow-md hover:-translate-y-0.5 cursor-pointer transition-all"
+      className="group rounded-lg border border-border bg-card p-4 cursor-pointer transition-colors hover:border-primary/40"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
@@ -248,7 +249,7 @@ function IncidentColumn({
       </div>
       <div className="space-y-3">
         {incidents.length === 0 ? (
-          <div className="rounded-xl border border-border bg-muted/20 p-6 text-center">
+          <div className="rounded-lg border border-border bg-muted/20 p-6 text-center">
             <p className="text-muted-foreground text-sm">{emptyLabel}</p>
           </div>
         ) : (
@@ -274,7 +275,11 @@ export default function IncidentsPage() {
 
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['auto-incidents'],
-    queryFn: () => getAutoIncidents({ limit: 200 }),
+    // 500 is the backend's own ceiling (le=500) -- stats.total below is
+    // already a true server count regardless of this cap, but the board
+    // itself has no further pagination past whatever it fetches, so this
+    // should be as generous as the backend allows.
+    queryFn: () => getAutoIncidents({ limit: 500 }),
     staleTime: 0,
     refetchInterval: 15000,
     retry: false,
@@ -315,20 +320,11 @@ export default function IncidentsPage() {
       />
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {[
-          { label: 'Total', value: stats.total, t: 'gray' as Tone },
-          { label: 'Open', value: stats.open, t: 'red' as Tone },
-          { label: 'Investigating', value: stats.investigating, t: 'yellow' as Tone },
-          { label: 'Resolved', value: stats.resolved, t: 'green' as Tone },
-        ].map((s) => (
-          <Card key={s.label} className="p-4">
-            <p className="text-muted-foreground text-xs uppercase">{s.label}</p>
-            <p className={cn('text-3xl font-bold mt-1', tone(s.t).split(' ').find((c) => c.startsWith('text-')) || 'text-foreground')}>
-              {s.value}
-            </p>
-          </Card>
-        ))}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatsCard title="Total" value={stats.total} icon={Shield} color="gray" />
+        <StatsCard title="Open" value={stats.open} icon={AlertTriangle} color="red" />
+        <StatsCard title="Investigating" value={stats.investigating} icon={Eye} color="orange" />
+        <StatsCard title="Resolved" value={stats.resolved} icon={CheckCircle} color="green" />
       </div>
 
       {isLoading ? (
