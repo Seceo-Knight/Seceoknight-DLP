@@ -4,6 +4,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Plus, Edit, Trash2, Power, PowerOff, TestTube, Search } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
+import StatsCard from '@/components/StatsCard'
+import { PageHeader } from '@/components/ui/page-header'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { EmptyState } from '@/components/ui/empty-state'
 import RuleModal from '@/components/rules/RuleModal'
 import RuleTestModal from '@/components/rules/RuleTestModal'
 import { getRules, getRuleStatistics, deleteRule, toggleRule, type Rule } from '@/lib/rules-api'
@@ -11,9 +17,34 @@ import { formatRelativeTime, cn } from '@/lib/utils'
 import { usePagination } from '@/lib/hooks/useTableState'
 import { DataPagination } from '@/components/ui/pagination'
 import { useConfirm } from '@/components/ui/Modal'
+import { tone, type Tone } from '@/lib/tone'
 import toast from 'react-hot-toast'
 
 type FilterType = 'all' | 'regex' | 'keyword' | 'dictionary'
+
+// Same 4-tone severity ladder as Events/Alerts/Risk Scoring/Log Explorer
+// (critical=red, high=orange, medium=yellow, low=blue). This page
+// previously mapped low -> green, a scheme that disagreed with every
+// other tab's severity colors.
+const severityTone = (severity?: string | null): Tone => {
+  switch ((severity || '').toLowerCase()) {
+    case 'critical': return 'red'
+    case 'high': return 'orange'
+    case 'medium': return 'yellow'
+    case 'low': return 'blue'
+    default: return 'gray'
+  }
+}
+
+// The backend's own hard ceiling (GET /rules/ le=1000) -- there's no
+// dedicated pagination UI here (rule sets are a bounded configuration
+// resource, not an ever-growing event log), so this just needs to be
+// high enough to never silently truncate a real deployment's rule set.
+// Previously the page never passed `limit` at all, so it silently rode
+// the backend's *default* of 100 -- fine at today's 21 rules, but a
+// deployment with more custom regex/keyword/dictionary rules than that
+// would have rules quietly missing from the list with no indication.
+const RULES_FETCH_LIMIT = 1000
 
 export default function Rules() {
   const { confirm, dialog: confirmDialog } = useConfirm()
@@ -27,7 +58,7 @@ export default function Rules() {
   // Fetch rules
   const { data: rules, isLoading, error, refetch } = useQuery({
     queryKey: ['rules', filter],
-    queryFn: () => getRules({ type: filter === 'all' ? undefined : filter }),
+    queryFn: () => getRules({ type: filter === 'all' ? undefined : filter, limit: RULES_FETCH_LIMIT }),
     refetchInterval: 30000,
   })
 
@@ -112,112 +143,80 @@ export default function Rules() {
     return <ErrorMessage message="Failed to load rules" retry={() => refetch()} />
   }
 
+  // Honest truncation notice: stats.total_rules is a true DB aggregate
+  // (RuleService.get_rule_statistics), independent of RULES_FETCH_LIMIT
+  // -- if the two disagree, the list below is missing rules rather than
+  // silently showing an incomplete set as if it were everything.
+  const fetchedCount = rules?.length ?? 0
+  const isTruncated = !!stats && filter === 'all' && stats.total_rules > fetchedCount
+
   return (
     <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Classification Rules</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Manage detection rules for data classification
-          </p>
-        </div>
-        <div className="flex gap-3">
-          <button
-            onClick={() => setIsTestModalOpen(true)}
-            className="btn-secondary flex items-center gap-2"
-          >
-            <TestTube className="h-4 w-4" />
-            Test Rules
-          </button>
-          <button onClick={handleCreate} className="btn-primary flex items-center gap-2">
-            <Plus className="h-4 w-4" />
-            Create Rule
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        icon={Shield}
+        title="Classification Rules"
+        description="Manage detection rules for data classification."
+        actions={
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setIsTestModalOpen(true)}>
+              <TestTube className="h-4 w-4" />
+              Test Rules
+            </Button>
+            <Button onClick={handleCreate}>
+              <Plus className="h-4 w-4" />
+              Create Rule
+            </Button>
+          </div>
+        }
+      />
 
-      {/* Statistics Cards */}
+      {isTruncated && (
+        <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-foreground">
+          Showing {fetchedCount.toLocaleString()} of {stats!.total_rules.toLocaleString()} rules
+          (fetch cap reached). Narrow your filters or search to find a specific rule.
+        </div>
+      )}
+
+      {/* Statistics */}
       {stats && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="card">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-blue-500/15 rounded-lg">
-                <Shield className="h-5 w-5 text-blue-400" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Total Rules</p>
-                <p className="text-2xl font-bold text-foreground">{stats.total_rules}</p>
-              </div>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+          <StatsCard title="Total Rules" value={stats.total_rules} icon={Shield} color="indigo" />
+          <StatsCard title="Enabled" value={stats.enabled_rules} icon={Power} color="green" />
+          <StatsCard title="Disabled" value={stats.disabled_rules} icon={PowerOff} color="gray" />
+          <Card className="p-4">
+            <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">By Type</p>
+            <div className="space-y-1 text-sm">
+              <div className="flex justify-between"><span className="text-muted-foreground">Regex</span><span className="font-medium text-foreground">{stats.by_type.regex}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Keyword</span><span className="font-medium text-foreground">{stats.by_type.keyword}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Dictionary</span><span className="font-medium text-foreground">{stats.by_type.dictionary}</span></div>
             </div>
-          </div>
-          <div className="card">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-green-500/15 rounded-lg">
-                <Power className="h-5 w-5 text-green-400" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Enabled</p>
-                <p className="text-2xl font-bold text-green-400">{stats.enabled_rules}</p>
-              </div>
-            </div>
-          </div>
-          <div className="card">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-secondary rounded-lg">
-                <PowerOff className="h-5 w-5 text-muted-foreground" />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Disabled</p>
-                <p className="text-2xl font-bold text-muted-foreground">{stats.disabled_rules}</p>
-              </div>
-            </div>
-          </div>
-          <div className="card">
-            <div>
-              <p className="text-xs text-muted-foreground mb-2">By Type</p>
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Regex:</span>
-                  <span className="font-medium">{stats.by_type.regex}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Keyword:</span>
-                  <span className="font-medium">{stats.by_type.keyword}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Dictionary:</span>
-                  <span className="font-medium">{stats.by_type.dictionary}</span>
-                </div>
-              </div>
-            </div>
-          </div>
+          </Card>
         </div>
       )}
 
       {/* Filters */}
-      <div className="card">
-        <div className="flex gap-3 items-center">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground/70" />
-            <input
-              type="text"
+      <Card className="p-4">
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
               placeholder="Search rules by name, category, or type..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="pl-9"
             />
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-1 rounded-md border border-border bg-card p-0.5">
             {(['all', 'regex', 'keyword', 'dictionary'] as const).map((type) => (
               <button
                 key={type}
+                type="button"
                 onClick={() => setFilter(type)}
                 className={cn(
-                  'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                  'rounded px-3 py-1.5 text-xs font-medium transition-colors',
                   filter === type
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-secondary text-foreground/90 hover:bg-accent'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                 )}
               >
                 {type === 'all' ? 'All' : type.charAt(0).toUpperCase() + type.slice(1)}
@@ -225,10 +224,10 @@ export default function Rules() {
             ))}
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* Rules Table */}
-      <div className="card p-0">
+      <Card className="p-0 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="table">
             <thead>
@@ -246,14 +245,12 @@ export default function Rules() {
             <tbody>
               {filteredRules?.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center py-12">
-                    <Shield className="h-12 w-12 text-muted-foreground/70 mx-auto mb-3" />
-                    <p className="text-muted-foreground font-medium">No rules found</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {searchQuery
-                        ? 'Try adjusting your search query'
-                        : 'Create your first classification rule'}
-                    </p>
+                  <td colSpan={8} className="p-0">
+                    <EmptyState
+                      icon={Shield}
+                      title="No rules found"
+                      description={searchQuery ? 'Try adjusting your search query.' : 'Create your first classification rule.'}
+                    />
                   </td>
                 </tr>
               ) : (
@@ -263,30 +260,19 @@ export default function Rules() {
                       <button
                         onClick={() => handleToggle(rule.id, rule.enabled)}
                         className={cn(
-                          'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium',
-                          rule.enabled
-                            ? 'bg-green-500/15 text-green-300'
-                            : 'bg-secondary text-foreground'
+                          'inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium transition-colors',
+                          rule.enabled ? tone('green') : tone('gray'),
                         )}
                       >
-                        {rule.enabled ? (
-                          <>
-                            <Power className="h-3 w-3 mr-1" />
-                            Enabled
-                          </>
-                        ) : (
-                          <>
-                            <PowerOff className="h-3 w-3 mr-1" />
-                            Disabled
-                          </>
-                        )}
+                        {rule.enabled ? <Power className="h-3 w-3" /> : <PowerOff className="h-3 w-3" />}
+                        {rule.enabled ? 'Enabled' : 'Disabled'}
                       </button>
                     </td>
                     <td>
                       <div>
                         <div className="font-medium text-foreground">{rule.name}</div>
                         {rule.description && (
-                          <div className="text-xs text-muted-foreground mt-1">
+                          <div className="mt-1 text-xs text-muted-foreground">
                             {rule.description.length > 60
                               ? rule.description.substring(0, 60) + '...'
                               : rule.description}
@@ -295,7 +281,7 @@ export default function Rules() {
                       </div>
                     </td>
                     <td>
-                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-500/15 text-blue-300">
+                      <span className={cn('inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium capitalize', tone('indigo'))}>
                         {rule.type}
                       </span>
                     </td>
@@ -308,24 +294,13 @@ export default function Rules() {
                     </td>
                     <td>
                       {rule.severity && (
-                        <span
-                          className={cn(
-                            'inline-flex items-center px-2 py-1 rounded-full text-xs font-medium',
-                            rule.severity === 'critical'
-                              ? 'bg-red-500/15 text-red-300'
-                              : rule.severity === 'high'
-                              ? 'bg-orange-500/15 text-orange-300'
-                              : rule.severity === 'medium'
-                              ? 'bg-yellow-500/15 text-yellow-300'
-                              : 'bg-green-500/15 text-green-300'
-                          )}
-                        >
+                        <span className={cn('inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium', tone(severityTone(rule.severity)))}>
                           {rule.severity}
                         </span>
                       )}
                     </td>
                     <td>
-                      <span className="text-sm font-mono text-foreground/90">
+                      <span className="font-mono text-sm text-foreground/90">
                         {rule.weight.toFixed(2)}
                       </span>
                     </td>
@@ -345,14 +320,14 @@ export default function Rules() {
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => handleEdit(rule)}
-                          className="p-1 text-blue-400 hover:bg-blue-500/10 rounded transition-colors"
+                          className="rounded p-1 text-primary transition-colors hover:bg-primary/10"
                           title="Edit rule"
                         >
                           <Edit className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => handleDelete(rule.id, rule.name)}
-                          className="p-1 text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                          className="rounded p-1 text-critical transition-colors hover:bg-critical/10"
                           title="Delete rule"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -374,7 +349,7 @@ export default function Rules() {
             onPageSizeChange={setPageSize}
           />
         )}
-      </div>
+      </Card>
 
       {/* Modals */}
       <RuleModal
