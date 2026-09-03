@@ -4,7 +4,7 @@ Query, filter, and manage DLP events
 """
 
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, HTTPException, status, Request
 from pydantic import BaseModel, Field
@@ -1240,6 +1240,10 @@ async def get_event_stats(
 
 @router.get("/stats/by-type")
 async def get_events_by_type(
+    hours: Optional[int] = Query(
+        None, ge=1, le=2160,
+        description="Restrict to the last N hours (omit for all-time)",
+    ),
     current_user=Depends(get_current_user),
     pg_db: AsyncSession = Depends(get_db),
 ):
@@ -1251,7 +1255,8 @@ async def get_events_by_type(
 
     db = get_mongodb()
     abac = await build_abac_mongo_filter(pg_db, current_user)
-    base = merge_mongo_filter(merge_mongo_filter({}, abac), build_domain_mongo_filter(current_user))
+    time_filter = {"timestamp": {"$gte": datetime.utcnow() - timedelta(hours=hours)}} if hours else {}
+    base = merge_mongo_filter(merge_mongo_filter(dict(time_filter), abac), build_domain_mongo_filter(current_user))
     pre_match: list = [{"$match": base}] if base else []
 
     pipeline = pre_match + [
@@ -1267,6 +1272,10 @@ async def get_events_by_type(
 
 @router.get("/stats/by-severity")
 async def get_events_by_severity(
+    hours: Optional[int] = Query(
+        None, ge=1, le=2160,
+        description="Restrict to the last N hours (omit for all-time)",
+    ),
     current_user=Depends(get_current_user),
     pg_db: AsyncSession = Depends(get_db),
 ):
@@ -1278,7 +1287,8 @@ async def get_events_by_severity(
 
     db = get_mongodb()
     abac = await build_abac_mongo_filter(pg_db, current_user)
-    base = merge_mongo_filter(merge_mongo_filter({}, abac), build_domain_mongo_filter(current_user))
+    time_filter = {"timestamp": {"$gte": datetime.utcnow() - timedelta(hours=hours)}} if hours else {}
+    base = merge_mongo_filter(merge_mongo_filter(dict(time_filter), abac), build_domain_mongo_filter(current_user))
     pre_match: list = [{"$match": base}] if base else []
 
     pipeline = pre_match + [

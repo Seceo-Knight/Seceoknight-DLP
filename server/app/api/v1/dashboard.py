@@ -4,7 +4,7 @@ Real-time statistics and metrics for dashboard
 Returns actual data from database (populated by agents)
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
@@ -21,6 +21,10 @@ router = APIRouter()
 
 @router.get("/overview")
 async def get_dashboard_overview(
+    hours: Optional[int] = Query(
+        None, ge=1, le=2160,
+        description="Restrict event-derived metrics to the last N hours (omit for all-time)",
+    ),
     current_user=Depends(get_current_user),
     pg_db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
@@ -29,7 +33,11 @@ async def get_dashboard_overview(
 
     Agent counts are *not* ABAC-gated — visibility of agents is an
     operational concern, not a DLP record. Event-derived metrics (total
-    events / critical / blocked) respect the viewer's ABAC scope.
+    events / critical / blocked) respect the viewer's ABAC scope, and are
+    scoped to the last `hours` hours when given -- this mirrors the
+    dashboard's time-range selector so "Total Events" etc. actually change
+    when the user picks a different window instead of always showing an
+    all-time count next to a chart that's showing 24h.
     """
     from datetime import datetime, timedelta, timezone
     from app.services.abac_service import (
@@ -57,6 +65,10 @@ async def get_dashboard_overview(
     # could show 0 active agents while the Agents page correctly showed
     # the same agent as online -- two different definitions of "active"
     # disagreeing with each other on the same dashboard.
+    #
+    # Deliberately NOT scoped by the `hours` time-range filter -- "active"
+    # is a live/current-state concept, not a historical one, so it stays
+    # the same regardless of which reporting window is selected.
     from app.api.v1.agents import AGENT_TIMEOUT_SECONDS
     cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
     cutoff_naive = datetime.utcnow() - timedelta(seconds=AGENT_TIMEOUT_SECONDS)
@@ -71,19 +83,23 @@ async def get_dashboard_overview(
     # Query events from MongoDB (using correct collection name)
     events_collection = db.dlp_events
 
-    # Total events (all time), ABAC-scoped
+    time_filter: Dict[str, Any] = {}
+    if hours is not None:
+        time_filter = {"timestamp": {"$gte": datetime.utcnow() - timedelta(hours=hours)}}
+
+    # Total events (all time, or last `hours`), ABAC-scoped
     total_events = await events_collection.count_documents(
-        merge_mongo_filter({}, abac)
+        merge_mongo_filter(dict(time_filter), abac)
     )
 
     # Critical alerts/events, ABAC-scoped
     critical_alerts = await events_collection.count_documents(
-        merge_mongo_filter({"severity": "critical"}, abac)
+        merge_mongo_filter({**time_filter, "severity": "critical"}, abac)
     )
 
     # Blocked events, ABAC-scoped
     blocked_events = await events_collection.count_documents(
-        merge_mongo_filter({"blocked": True}, abac)
+        merge_mongo_filter({**time_filter, "blocked": True}, abac)
     )
 
     return {
@@ -97,13 +113,18 @@ async def get_dashboard_overview(
 
 @router.get("/timeline")
 async def get_event_timeline(
-    hours: int = Query(24, ge=1, le=168, description="Number of hours to retrieve"),
+    hours: int = Query(24, ge=1, le=2160, description="Number of hours to retrieve (up to 90 days)"),
     current_user=Depends(get_current_user),
     pg_db: AsyncSession = Depends(get_db),
 ) -> List[Dict[str, Any]]:
     """
     Get event timeline data for charts (ABAC-scoped).
-    Returns actual event counts grouped by hour.
+
+    Buckets by hour for ranges up to 7 days (168h); beyond that, buckets by
+    day instead -- a 90-day range bucketed hourly would be ~2,160 points,
+    which is unreadable on a line chart and would send a huge payload for
+    no benefit. The dashboard's time-range selector offers 12h/24h/3d/7d
+    (hourly) and 30d/90d (daily) to match.
     """
     from app.services.abac_service import (
         build_abac_mongo_filter,
@@ -115,18 +136,19 @@ async def get_event_timeline(
 
     now = datetime.utcnow()
     start_time = now - timedelta(hours=hours)
+    daily = hours > 168
 
     abac = await build_abac_mongo_filter(pg_db, current_user)
     match_stage = merge_mongo_filter({"timestamp": {"$gte": start_time}}, abac)
 
-    # Aggregate events by hour
+    # Aggregate events by hour (or by day for long ranges)
     pipeline = [
         {"$match": match_stage},
         {
             "$group": {
                 "_id": {
                     "$dateToString": {
-                        "format": "%Y-%m-%dT%H:00:00Z",
+                        "format": "%Y-%m-%dT00:00:00Z" if daily else "%Y-%m-%dT%H:00:00Z",
                         "date": "$timestamp"
                     }
                 },
