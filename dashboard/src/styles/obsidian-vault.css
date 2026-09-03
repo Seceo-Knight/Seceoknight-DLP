@@ -1,57 +1,71 @@
 /*
- * ── Obsidian Vault Theme (v2 — high-contrast) ─────────────────────────
+ * ── Light Enterprise Theme (v3 — Microsoft Purview / Azure Portal style) ─
  * Pure visual override. Loaded AFTER index.css so its rules win the
  * cascade. No HTML/markup changes.
  *
- * Visibility rules (from spec):
- *   1. NO blue/purple body text — primary text is platinum-white #E8E8F0.
- *   2. Sidebar inactive nav text is bright (#A0A0B8), active text fully
- *      bright (#E8E8F0) with a 3px indigo left border.
- *   3. Indigo (#5B7EFF) is reserved for accents, icons, active borders,
- *      links — never for large blocks of body text.
- *   4. Status colors (red/orange/teal) are saturated for clear severity
- *      signaling on the void background.
+ * This file started life as "Obsidian Vault" (a dark-theme override layer
+ * collapsing Tailwind's full gray/color ladder down onto a handful of
+ * semantic tiers, targeting literal Tailwind utility classes so pages that
+ * were never migrated onto the src/index.css semantic tokens still get a
+ * consistent theme). The September 2026 redesign retunes those same tiers
+ * to a light, corporate palette instead of removing the layer — see the
+ * comment above :root in src/index.css for which files still depend on
+ * this (src/components/policies/*PolicyForm.tsx and most of it, minus
+ * LoginForm.tsx which was rewritten directly onto semantic tokens since
+ * its bespoke gradient/glassmorphism styling didn't fit a generic
+ * class-name override).
+ *
+ * Visibility rules (retained from the original spec, still correct for a
+ * light theme):
+ *   1. Primary body text is nowhere near pure black harshness, but dark
+ *      enough for real contrast — #1F2328 slate, not gray-on-gray.
+ *   2. Sidebar/nav inactive text is legible but quiet; active text is the
+ *      darkest tier with a 3px blue left border.
+ *   3. Blue (#2563EB) is reserved for accents, icons, active borders,
+ *      links, and button fills — never for large blocks of body text.
+ *   4. Status colors (red/amber/green) are saturated enough for clear
+ *      severity signaling on the light canvas.
  */
 
 :root {
   /* Backgrounds */
-  --obsidian-bg-primary: #0A0A0D;
-  --obsidian-bg-secondary: #111118;
-  --obsidian-bg-tertiary: #1E1E2E;
-  --obsidian-bg-hover: #16161F;
+  --obsidian-bg-primary: #F8F9FA;
+  --obsidian-bg-secondary: #FFFFFF;
+  --obsidian-bg-tertiary: #F1F3F5;
+  --obsidian-bg-hover: #EFF6FF;
 
-  /* Text — bright for high contrast (>= WCAG AAA on bg-primary) */
-  --obsidian-text-primary: #E8E8F0;     /* 15.5:1 on #0A0A0D  */
-  --obsidian-text-secondary: #A0A0B8;   /*  8.2:1 on #0A0A0D  */
-  --obsidian-text-tertiary: #606080;    /*  3.6:1 (AA only)   */
-  --obsidian-text-disabled: #404050;
+  /* Text — dark enough for real contrast on white/near-white surfaces */
+  --obsidian-text-primary: #1F2328;     /* ~15:1 on #FFFFFF   */
+  --obsidian-text-secondary: #57606A;   /* ~7:1 on #FFFFFF    */
+  --obsidian-text-tertiary: #6E7781;    /* ~5:1 on #FFFFFF — form labels */
+  --obsidian-text-disabled: #9CA3AF;
 
-  /* Indigo accent — used for icons, links, focus rings, active markers */
-  --obsidian-accent: #5B7EFF;
-  --obsidian-accent-light: #7B9EFF;
-  --obsidian-accent-dark: #4A6FE0;
+  /* Blue accent — used for icons, links, focus rings, active markers */
+  --obsidian-accent: #2563EB;
+  --obsidian-accent-light: #3B82F6;
+  --obsidian-accent-dark: #1D4ED8;
 
   /* Status colors — saturated for severity-first design */
-  --obsidian-success: #2DD4BF;
-  --obsidian-critical: #F87171;
-  --obsidian-warning: #FB923C;
-  --obsidian-info: #5B7EFF;
+  --obsidian-success: #16A34A;
+  --obsidian-critical: #DC2626;
+  --obsidian-warning: #D97706;
+  --obsidian-info: #2563EB;
 
   /* Severity-tinted badge surfaces */
-  --obsidian-badge-success-bg: #1A3D35;
-  --obsidian-badge-critical-bg: #3D2628;
-  --obsidian-badge-warning-bg: #3D2A18;
-  --obsidian-badge-info-bg: #1E1E3E;
-  --obsidian-badge-neutral-bg: #1E1E2E;
+  --obsidian-badge-success-bg: #DCFCE7;
+  --obsidian-badge-critical-bg: #FEE2E2;
+  --obsidian-badge-warning-bg: #FEF3C7;
+  --obsidian-badge-info-bg: #DBEAFE;
+  --obsidian-badge-neutral-bg: #F1F3F5;
 
   /* Severity left-border tint for alert cards */
-  --obsidian-alert-critical-edge: #2A1428;
-  --obsidian-alert-warning-edge: #251810;
-  --obsidian-alert-info-edge: #1E1E3E;
+  --obsidian-alert-critical-edge: #FEF2F2;
+  --obsidian-alert-warning-edge: #FFFBEB;
+  --obsidian-alert-info-edge: #EFF6FF;
 
-  --obsidian-border: #1E1E2E;
+  --obsidian-border: #E1E4E8;
 
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 /* ── Page canvas ─────────────────────────────────────────────────── */
@@ -61,7 +75,7 @@ html, body, #root {
 }
 
 ::selection {
-  background: rgba(91, 126, 255, 0.35);
+  background: rgba(37, 99, 235, 0.2);
   color: var(--obsidian-text-primary);
 }
 
@@ -86,7 +100,7 @@ html, body, #root {
 }
 
 /* ── Tailwind utility overrides ──────────────────────────────────── */
-/* Backgrounds: collapse the gray ladder into 3 obsidian surfaces.    */
+/* Backgrounds: collapse the gray ladder into 3 surfaces.             */
 .bg-white,
 .bg-gray-50 {
   background-color: var(--obsidian-bg-secondary) !important;
@@ -98,19 +112,24 @@ html, body, #root {
 .bg-gray-700,
 .bg-gray-800,
 .bg-gray-900 {
-  background-color: var(--obsidian-bg-primary) !important;
+  background-color: var(--obsidian-bg-secondary) !important;
 }
 .hover\:bg-gray-50:hover,
 .hover\:bg-gray-100:hover {
   background-color: var(--obsidian-bg-hover) !important;
 }
 .hover\:bg-gray-200:hover,
-.hover\:bg-gray-300:hover {
+.hover\:bg-gray-300:hover,
+.hover\:bg-gray-500:hover,
+.hover\:bg-gray-600:hover {
   background-color: var(--obsidian-bg-tertiary) !important;
 }
 
-/* Text colors — collapse the gray ladder into 3 BRIGHT obsidian tiers.
-   Critical: text-gray-700/800/900 -> #E8E8F0 (bright white, NOT blue). */
+/* Text colors — collapse the gray ladder into 3 legible light-theme tiers.
+   gray-700/800/900 -> darkest tier (was the "heaviest" class, stays the
+   most prominent text). gray-200/100 -> lightest-but-still-legible tier
+   (used almost entirely as form field labels in this codebase, not as
+   near-invisible fine print, so it must not be washed out). */
 .text-gray-900,
 .text-gray-800,
 .text-gray-700 {
@@ -127,11 +146,17 @@ html, body, #root {
   color: var(--obsidian-text-tertiary) !important;
 }
 
-/* `text-white` SHOULD stay white most of the time, but inside surface
-   contexts (e.g. inside cards over the void) we want our exact platinum.
-   Tailwind's text-white compiles to rgb(255 255 255 / var(--tw-text-opacity)).
-   Re-pinning to #E8E8F0 lands closer to spec without breaking anything. */
-.text-white {
+/* `text-white` is intentionally NOT overridden globally: in this codebase
+   it's used two ways that need opposite outcomes on a light theme —
+   (a) as body text inside a bg-gray-700/800/900 surface, which the rule
+   above now renders white/near-white, so text-white must flip dark too;
+   (b) as button/badge text on a saturated color fill (bg-indigo-600,
+   bg-red-600, etc.), which stays colored in light mode too, so text-white
+   must stay literally white for contrast. Only override case (a), scoped
+   to the exact element that also carries the flipped-light background. */
+.bg-gray-700.text-white,
+.bg-gray-800.text-white,
+.bg-gray-900.text-white {
   color: var(--obsidian-text-primary) !important;
 }
 
@@ -186,7 +211,86 @@ html, body, #root {
   color: var(--obsidian-accent) !important;
 }
 
-/* Brand bg-{color}-600 (button fills) — re-pin to obsidian palette */
+/* ── Opacity-modified dark tints + their paired bright accent text ───────
+ * Tailwind opacity modifiers compile to distinct class names (e.g.
+ * bg-red-900\/20) that the plain bg-red-900 selector never matches, and a
+ * large swath of this codebase (policy config forms, alert callouts,
+ * selected-state chips) leans on exactly that "dark tinted panel + bright
+ * 300/400/500 text" pairing. Matched by substring since enumerating every
+ * opacity step (10/20/.../90) per color would be enormous; matched with
+ * ~= (exact class token) for the bare text colors so this doesn't also
+ * catch e.g. hover:text-red-400 and paint it red outside of :hover. */
+[class*="bg-gray-900/"], [class*="bg-gray-800/"], [class*="bg-gray-700/"] {
+  background-color: var(--obsidian-bg-tertiary) !important;
+}
+[class*="bg-gray-900/"][class*="text-white"],
+[class*="bg-gray-800/"][class*="text-white"],
+[class*="bg-gray-700/"][class*="text-white"] {
+  color: var(--obsidian-text-primary) !important;
+}
+/* Same, but for the very common "option card" shape in this codebase,
+   where .text-white sits on a CHILD label/div instead of the element that
+   carries the tinted background (see e.g. PrinterControlPolicyForm.tsx's
+   mode radios: an outer label carries bg-gray-900/30, an inner div carries
+   text-white). Descendant form, so it also catches the plain (non-slash)
+   bg-gray-700/800/900 case in one rule. */
+[class*="bg-gray-900"] .text-white,
+[class*="bg-gray-800"] .text-white,
+[class*="bg-gray-700"] .text-white {
+  color: var(--obsidian-text-primary) !important;
+}
+[class*="bg-indigo-900"] .text-white {
+  color: var(--obsidian-accent) !important;
+}
+
+[class*="bg-green-900/"], [class*="bg-emerald-900/"] {
+  background-color: var(--obsidian-badge-success-bg) !important;
+}
+[class*="bg-red-900/"], [class*="bg-rose-900/"] {
+  background-color: var(--obsidian-badge-critical-bg) !important;
+}
+[class*="bg-yellow-900/"], [class*="bg-amber-900/"], [class*="bg-orange-900/"] {
+  background-color: var(--obsidian-badge-warning-bg) !important;
+}
+[class*="bg-blue-900/"], [class*="bg-indigo-900/"], [class*="bg-sky-900/"], [class*="bg-purple-900/"] {
+  background-color: var(--obsidian-badge-info-bg) !important;
+}
+[class*="bg-indigo-900/"][class*="text-white"] {
+  color: var(--obsidian-accent) !important;
+}
+
+[class~="text-green-300"], [class~="text-green-400"], [class~="text-green-500"],
+[class~="text-emerald-300"], [class~="text-emerald-400"] {
+  color: var(--obsidian-success) !important;
+}
+[class~="text-red-300"], [class~="text-red-400"], [class~="text-red-500"],
+[class~="text-rose-300"], [class~="text-rose-400"] {
+  color: var(--obsidian-critical) !important;
+}
+[class~="text-yellow-300"], [class~="text-yellow-400"],
+[class~="text-amber-300"], [class~="text-amber-400"],
+[class~="text-orange-300"], [class~="text-orange-400"], [class~="text-orange-500"] {
+  color: var(--obsidian-warning) !important;
+}
+[class~="text-blue-300"], [class~="text-blue-400"],
+[class~="text-indigo-200"], [class~="text-indigo-300"], [class~="text-indigo-400"], [class~="text-indigo-500"],
+[class~="text-sky-300"], [class~="text-sky-400"],
+[class~="text-purple-300"], [class~="text-purple-400"] {
+  color: var(--obsidian-accent) !important;
+}
+
+/* Same bright shades used as hover: variants -- explicit :hover so the
+ * base (non-hover) color is untouched. */
+[class~="hover:text-blue-300"]:hover, [class~="hover:text-blue-400"]:hover,
+[class~="hover:text-indigo-200"]:hover, [class~="hover:text-indigo-300"]:hover, [class~="hover:text-indigo-400"]:hover,
+[class~="hover:text-purple-300"]:hover {
+  color: var(--obsidian-accent) !important;
+}
+[class~="hover:text-red-300"]:hover, [class~="hover:text-red-400"]:hover {
+  color: var(--obsidian-critical) !important;
+}
+
+/* Brand bg-{color}-600 (button fills) — re-pin to the light-theme accent */
 .bg-blue-500, .bg-blue-600, .bg-blue-700,
 .bg-indigo-500, .bg-indigo-600, .bg-indigo-700,
 .bg-sky-500, .bg-sky-600, .bg-sky-700,
@@ -196,7 +300,7 @@ html, body, #root {
 .hover\:bg-blue-700:hover,
 .hover\:bg-indigo-700:hover,
 .hover\:bg-primary-700:hover {
-  background-color: var(--obsidian-accent-light) !important;
+  background-color: var(--obsidian-accent-dark) !important;
 }
 .bg-red-500, .bg-red-600, .bg-red-700,
 .bg-rose-500, .bg-rose-600, .bg-rose-700 {
@@ -223,7 +327,9 @@ html, body, #root {
   background-color: var(--obsidian-warning) !important;
 }
 
-/* Decorative gradients — flatten to surface */
+/* Decorative gradients — flatten to surface, matching the flat-and-dense
+   Microsoft Purview / Azure Portal look rather than SaaS-marketing-page
+   gradients. */
 .bg-gradient-to-br,
 .bg-gradient-to-r,
 .bg-gradient-to-b,
@@ -265,26 +371,24 @@ html, body, #root {
   color: var(--obsidian-success) !important;
 }
 
-/* Drop shadows — depth comes from borders */
-.shadow,
-.shadow-sm,
-.shadow-md,
-.shadow-lg,
-.shadow-xl,
+/* Drop shadows — a light enterprise UI wants its normal subtle Tailwind
+   shadows back (depth is no longer coming from borders-only, dark-void
+   design). Only the hover-lift shadows are toned down slightly so hover
+   states read as "elevated card", not "marketing site". */
 .shadow-2xl,
-.hover\:shadow-lg:hover,
-.hover\:shadow-xl:hover,
 .hover\:shadow-2xl:hover {
-  box-shadow: none !important;
+  box-shadow: 0 8px 24px -6px rgb(0 0 0 / 0.12), 0 2px 6px -2px rgb(0 0 0 / 0.06) !important;
 }
 .stats-blob {
   display: none !important;
 }
 
-/* ── Sidebar (component class lives in Sidebar.tsx) ──────────────── */
-/* Uses arbitrary Tailwind colors bg-[#1a1d1f] / bg-[#2a2d2f] which we
-   target via attribute selectors since they are emitted as escaped
-   class names in the compiled stylesheet. */
+/* ── Sidebar ─────────────────────────────────────────────────────── */
+/* Legacy arbitrary-hex selectors from the pre-token sidebar markup.
+   Sidebar.tsx now renders via bg-card / border-border / text-foreground
+   semantic classes (see src/components/Sidebar.tsx), so these no longer
+   match anything live -- kept only so a reverted/cached build doesn't
+   flash unstyled if it briefly emits the old classes. */
 aside.bg-\[\#1a1d1f\] {
   background-color: var(--obsidian-bg-secondary) !important;
   border-right: 0.5px solid var(--obsidian-border) !important;
@@ -295,35 +399,6 @@ aside.bg-\[\#1a1d1f\] {
   color: var(--obsidian-text-primary) !important;
 }
 
-/* Sidebar nav — bright text per spec.
-   Inactive: #A0A0B8. Hover: #E8E8F0. Active: #1E1E2E bg + #E8E8F0 text
-   + indigo left border + indigo icon. */
-aside nav a {
-  color: var(--obsidian-text-secondary) !important;
-}
-aside nav a:hover {
-  color: var(--obsidian-text-primary) !important;
-  background-color: var(--obsidian-bg-tertiary) !important;
-}
-/* Active nav (NavLink renders aria-current on the active anchor). */
-aside nav a[aria-current="page"] {
-  background-color: var(--obsidian-bg-tertiary) !important;
-  color: var(--obsidian-text-primary) !important;
-  border-left: 3px solid var(--obsidian-accent) !important;
-  padding-left: calc(0.75rem - 3px) !important;
-}
-aside nav a[aria-current="page"] svg {
-  color: var(--obsidian-accent) !important;
-}
-/* Sidebar logo title text */
-aside .text-xl {
-  color: var(--obsidian-text-primary) !important;
-}
-/* Sidebar footer (Version, copyright) */
-aside .text-gray-400 {
-  color: var(--obsidian-text-tertiary) !important;
-}
-
 /* ── Component-class overrides (defined in index.css) ────────────── */
 .card,
 .card-modern,
@@ -331,34 +406,36 @@ aside .text-gray-400 {
   background: var(--obsidian-bg-secondary) !important;
   border: 0.5px solid var(--obsidian-border) !important;
   border-radius: 8px !important;
-  box-shadow: none !important;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04) !important;
   color: var(--obsidian-text-primary);
 }
 .card-modern:hover {
   transform: none !important;
-  background: var(--obsidian-bg-hover) !important;
+  background: var(--obsidian-bg-secondary) !important;
   border-color: var(--obsidian-accent) !important;
+  box-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.08) !important;
 }
 
-/* Buttons — indigo accent only on borders/text, never as full fill
-   (per spec: "DO NOT apply accent color to entire elements") */
+/* Buttons — solid fill for primary (standard for a light enterprise UI;
+   the old outline-only treatment was a dark-theme restraint that reads
+   as "unfinished" on white). */
 .btn {
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease !important;
   border-radius: 6px !important;
 }
 .btn-primary {
-  background: var(--obsidian-bg-secondary) !important;
-  color: var(--obsidian-accent) !important;
+  background: var(--obsidian-accent) !important;
+  color: #FFFFFF !important;
   border: 0.5px solid var(--obsidian-accent) !important;
 }
 .btn-primary:hover {
-  background: var(--obsidian-bg-tertiary) !important;
-  color: var(--obsidian-accent-light) !important;
-  border-color: var(--obsidian-accent-light) !important;
+  background: var(--obsidian-accent-dark) !important;
+  color: #FFFFFF !important;
+  border-color: var(--obsidian-accent-dark) !important;
 }
 .btn-primary:active {
-  background: #2A2A4A !important;
-  color: var(--obsidian-accent) !important;
+  background: var(--obsidian-accent-dark) !important;
+  color: #FFFFFF !important;
 }
 .btn-secondary {
   background: var(--obsidian-bg-secondary) !important;
@@ -426,22 +503,22 @@ select:focus {
   box-shadow: 0 0 0 1px var(--obsidian-accent) !important;
 }
 ::placeholder {
-  color: var(--obsidian-text-tertiary) !important;
+  color: var(--obsidian-text-disabled) !important;
   opacity: 1;
 }
-/* Native datepicker calendar icon turns black on dark bg without this. */
+/* Native datepicker calendar icon is already legible (dark-on-light) by
+   default on a light theme -- no inversion filter needed. */
 input[type="date"]::-webkit-calendar-picker-indicator,
 input[type="datetime-local"]::-webkit-calendar-picker-indicator,
 input[type="time"]::-webkit-calendar-picker-indicator {
-  filter: invert(0.85) sepia(0.1);
   cursor: pointer;
 }
 
 /* Tables */
 .table th,
 table th {
-  background: var(--obsidian-bg-secondary) !important;
-  color: var(--obsidian-text-primary) !important;
+  background: var(--obsidian-bg-tertiary) !important;
+  color: var(--obsidian-text-secondary) !important;
   border-bottom: 0.5px solid var(--obsidian-border) !important;
   font-weight: 600 !important;
 }
@@ -453,11 +530,11 @@ table td {
 }
 .table tr:hover,
 table tbody tr:hover {
-  background: var(--obsidian-bg-secondary) !important;
+  background: var(--obsidian-bg-hover) !important;
 }
 .table tr:hover td,
 table tbody tr:hover td {
-  background: var(--obsidian-bg-secondary) !important;
+  background: var(--obsidian-bg-hover) !important;
 }
 
 /* ── Modal & overlay ─────────────────────────────────────────────── */
@@ -467,10 +544,10 @@ table tbody tr:hover td {
 .bg-black\/60,
 .bg-black\/70,
 .bg-black\/80 {
-  background-color: rgba(0, 0, 0, 0.85) !important;
+  background-color: rgba(15, 23, 42, 0.5) !important;
 }
 
-/* Live-pulse — tweak to obsidian success */
+/* Live-pulse — tweak to accent success */
 .live-dot,
 .live-dot::after {
   background-color: var(--obsidian-success) !important;
@@ -488,9 +565,10 @@ table tbody tr:hover td {
 }
 .recharts-tooltip-wrapper .recharts-default-tooltip {
   background: var(--obsidian-bg-secondary) !important;
-  border: 0.5px solid var(--obsidian-accent) !important;
+  border: 0.5px solid var(--obsidian-border) !important;
   border-radius: 6px !important;
   color: var(--obsidian-text-primary) !important;
+  box-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.1) !important;
 }
 .recharts-tooltip-label,
 .recharts-tooltip-item {
@@ -522,7 +600,7 @@ hr {
   background: var(--obsidian-bg-secondary) !important;
   color: var(--obsidian-text-primary) !important;
   border: 0.5px solid var(--obsidian-border) !important;
-  box-shadow: none !important;
+  box-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.1) !important;
 }
 
 /* Code/mono pills used for IDs, IPs */
@@ -531,9 +609,11 @@ code {
   color: var(--obsidian-text-primary) !important;
 }
 
-/* Login decorative blobs — barely visible on the void */
+/* Login decorative blobs -- LoginForm.tsx was rewritten directly onto
+   semantic tokens and no longer uses .animate-blob; rule kept as a no-op
+   safety net in case any other page still references it. */
 .animate-blob {
-  opacity: 0.12 !important;
+  opacity: 0.15 !important;
 }
 
 /* Disabled */
@@ -548,14 +628,15 @@ code {
   color: var(--obsidian-critical) !important;
 }
 
-/* ===== RECHARTS — OBSIDIAN VAULT OVERRIDES =====
+/* ===== RECHARTS — LIGHT THEME OVERRIDES =====
  *
- * Recharts ships with light-theme defaults (white tooltip, gray axis
- * text, white hover backgrounds). The block below makes those defaults
- * legible on the void without touching the chart components themselves.
+ * Recharts ships with light-theme defaults already, but a few of ours
+ * (grid opacity tuned for a dark canvas, tooltip shadow) still need
+ * adjusting so charts look intentional rather than just "not broken".
  * Component-level styles set via the `tick`, `contentStyle`, and `cursor`
  * props are intentionally overridden here so charts look right even
- * before each call site is migrated to the new chart theme tokens.
+ * before each call site is migrated to the chart theme tokens in
+ * src/styles/charts.ts.
  */
 
 .recharts-text,
@@ -573,12 +654,12 @@ code {
 
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line {
-  stroke: var(--obsidian-bg-tertiary) !important;
-  opacity: 0.5 !important;
+  stroke: var(--obsidian-border) !important;
+  opacity: 0.8 !important;
 }
 
 .recharts-cartesian-axis-line {
-  stroke: var(--obsidian-bg-tertiary) !important;
+  stroke: var(--obsidian-border) !important;
 }
 
 /* Default tooltip wrapper (no <CustomTooltip /> in use). Charts that
@@ -590,10 +671,10 @@ code {
 
 .recharts-default-tooltip {
   background: var(--obsidian-bg-secondary) !important;
-  border: 0.5px solid var(--obsidian-bg-tertiary) !important;
+  border: 0.5px solid var(--obsidian-border) !important;
   border-radius: 6px !important;
   padding: 12px !important;
-  box-shadow: none !important;
+  box-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.1) !important;
 }
 
 .recharts-tooltip-label {
@@ -622,8 +703,8 @@ code {
   margin: 4px 0 !important;
 }
 
-/* Bar / pie hover — replace the default white wash with a subtle
- * brightness lift so colors stay legible. */
+/* Bar / pie hover — replace the brightness-lift (tuned for a dark canvas)
+ * with a soft opacity dip, which reads better on white. */
 .recharts-bar-rectangle,
 .recharts-bar {
   transition: opacity 0.2s ease, filter 0.2s ease !important;
@@ -631,7 +712,7 @@ code {
 
 .recharts-bar-rectangle:hover {
   opacity: 0.85 !important;
-  filter: brightness(1.1) !important;
+  filter: none !important;
 }
 
 .recharts-pie-sector {
@@ -639,18 +720,17 @@ code {
 }
 
 .recharts-pie-sector:hover {
-  filter: drop-shadow(0 0 10px rgba(91, 126, 255, 0.4)) brightness(1.1) !important;
+  filter: drop-shadow(0 2px 6px rgba(37, 99, 235, 0.35)) brightness(1.05) !important;
 }
 
 /* Cursor (the line / fill that follows the mouse over the chart). */
 .recharts-cursor {
   stroke: var(--obsidian-accent) !important;
-  opacity: 0.5 !important;
+  opacity: 0.3 !important;
 }
 
-/* Catch any stray white rect (e.g. CartesianGrid background fills).
- * Recharts emits these in a few corners; matching by attribute keeps
- * the override surgical. */
+/* Catch any stray white rect (e.g. CartesianGrid background fills) —
+ * this is now a no-op on a white canvas but kept for safety. */
 .recharts-wrapper rect[fill="white"],
 .recharts-wrapper rect[fill="#fff"],
 .recharts-wrapper rect[fill="#ffffff"] {

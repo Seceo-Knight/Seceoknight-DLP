@@ -484,8 +484,7 @@ export default function PolicyCreatorModal({
       open={isOpen}
       onClose={handleClose}
       size="2xl"
-      bodyClassName="p-0 bg-gray-800"
-      className="!bg-gray-800 !border-gray-700"
+      bodyClassName="p-0 bg-card"
       label={editingPolicy ? 'Edit Policy' : 'Create New Policy'}
       header={
         <ModalHeader
@@ -503,7 +502,7 @@ export default function PolicyCreatorModal({
           {step > 1 && (
             <button
               onClick={handleBack}
-              className="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-xl transition-colors flex items-center gap-2"
+              className="px-6 py-3 bg-muted hover:bg-muted/70 text-foreground font-semibold rounded-xl transition-colors flex items-center gap-2"
             >
               <ChevronLeft className="w-5 h-5" />
               Back
@@ -516,7 +515,7 @@ export default function PolicyCreatorModal({
             <button
               onClick={handleNext}
               disabled={step === 1 ? !canProceedFromStep1 : !canProceedFromStep2}
-              className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white font-semibold rounded-xl transition-colors flex items-center gap-2"
+              className="px-6 py-3 bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground text-white font-semibold rounded-xl transition-colors flex items-center gap-2"
             >
               Next
               <ChevronRight className="w-5 h-5" />
@@ -525,7 +524,7 @@ export default function PolicyCreatorModal({
             <button
               onClick={handleSave}
               disabled={!canSave}
-              className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 disabled:from-gray-700 disabled:to-gray-700 disabled:text-muted-foreground text-white font-semibold rounded-xl transition-all"
+              className="px-6 py-3 bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground text-white font-semibold rounded-xl transition-all"
             >
               {editingPolicy ? 'Update Policy' : 'Create Policy'}
             </button>
@@ -533,7 +532,7 @@ export default function PolicyCreatorModal({
 
           <button
             onClick={handleClose}
-            className="px-6 py-3 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-xl transition-colors"
+            className="px-6 py-3 bg-muted hover:bg-muted/70 text-foreground font-semibold rounded-xl transition-colors"
           >
             Cancel
           </button>

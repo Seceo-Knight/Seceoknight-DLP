@@ -48,7 +48,7 @@ export default function FileTransferPolicyForm({ config, onChange }: Props) {
 
       <div>
         <label className="block text-sm font-medium text-gray-200 mb-1">Events</label>
-        <div className="grid grid-cols-2 gap-2 text-sm text-white">
+        <div className="grid grid-cols-2 gap-2 text-sm text-foreground">
           {(['create', 'modify', 'delete', 'move'] as const).map(key => (
             <label key={key} className="flex items-center gap-2">
               <input

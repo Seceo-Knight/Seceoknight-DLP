@@ -87,14 +87,13 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
       open={isOpen}
       onClose={handleClose}
       size="md"
-      className="!bg-gray-800 !border-gray-700"
       label="Import Policies"
       header={<ModalHeader title="Import Policies" onClose={handleClose} />}
       footer={
         <ModalFooter>
           <button
             onClick={handleClose}
-            className="px-4 py-2 text-muted-foreground/70 hover:text-white transition-colors"
+            className="px-4 py-2 text-muted-foreground hover:text-foreground transition-colors"
           >
             {result ? 'Close' : 'Cancel'}
           </button>
@@ -127,7 +126,7 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full flex flex-col items-center justify-center gap-2 p-8 border-2 border-dashed border-gray-600 rounded-xl hover:border-indigo-500 transition-colors text-muted-foreground/70 hover:text-white"
+                className="w-full flex flex-col items-center justify-center gap-2 p-8 border-2 border-dashed border-border rounded-xl hover:border-primary transition-colors text-muted-foreground hover:text-foreground"
               >
                 <Upload className="w-8 h-8" />
                 <span className="text-sm">{fileName || 'Click to choose a .json file'}</span>

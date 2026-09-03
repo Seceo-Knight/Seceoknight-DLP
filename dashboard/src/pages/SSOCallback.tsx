@@ -133,16 +133,16 @@ export default function SSOCallback() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-slate-900 to-black flex items-center justify-center p-4">
-        <div className="bg-gray-800/80 backdrop-blur-sm border border-red-500/30 rounded-xl p-8 max-w-md w-full text-center">
-          <div className="text-red-400 text-5xl mb-4">!</div>
-          <h2 className="text-xl font-semibold text-white mb-2">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white border border-red-200 rounded-xl p-8 max-w-md w-full text-center shadow-xl shadow-slate-200/60">
+          <div className="text-red-500 text-5xl mb-4">!</div>
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">
             SSO Login Failed
           </h2>
-          <p className="text-muted-foreground/70 mb-6">{error}</p>
+          <p className="text-muted-foreground mb-6">{error}</p>
           <a
             href="/login"
-            className="inline-block px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors"
+            className="inline-block px-6 py-2 bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors"
           >
             Go to Login Page
           </a>
@@ -153,13 +153,13 @@ export default function SSOCallback() {
 
   // Loading state while exchange is in progress
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-slate-900 to-black flex items-center justify-center p-4">
-      <div className="bg-gray-800/80 backdrop-blur-sm border border-gray-700/50 rounded-xl p-8 max-w-md w-full text-center">
-        <div className="inline-block w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4" />
-        <h2 className="text-lg font-semibold text-white mb-1">
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="bg-white border border-gray-200 rounded-xl p-8 max-w-md w-full text-center shadow-xl shadow-slate-200/60">
+        <div className="inline-block w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin mb-4" />
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">
           Signing you in...
         </h2>
-        <p className="text-muted-foreground/70 text-sm">
+        <p className="text-muted-foreground text-sm">
           Verifying SSO credentials with the server
         </p>
       </div>

@@ -3,68 +3,69 @@
 @tailwind utilities;
 
 /* ── Design tokens ─────────────────────────────────────────────────────
- * Single source of truth for the theme. Values are the same "obsidian
- * vault" dark palette the app already used, now expressed as native CSS
- * custom properties (shadcn/ui convention) instead of a global
- * !important override layer fighting Tailwind's gray scale. RGB triples
- * (not hex, not hsl()) so Tailwind's opacity modifiers work, e.g.
- * bg-primary/10.
+ * Single source of truth for the theme. Light, corporate "Microsoft
+ * Purview / Azure Portal" palette (September 2026 redesign) — white/
+ * near-white surfaces, dark slate text, a restrained blue accent, dense
+ * data-table styling. Expressed as native CSS custom properties
+ * (shadcn/ui convention) instead of a global !important override layer
+ * fighting Tailwind's gray scale. RGB triples (not hex, not hsl()) so
+ * Tailwind's opacity modifiers work, e.g. bg-primary/10.
  *
  * src/styles/obsidian-vault.css remains loaded (it only targets literal
  * Tailwind gray-scale classes such as bg-gray-100 and text-gray-700,
- * which never collide with these new semantic bg-background /
- * text-foreground classes, so both systems coexist safely). Every
- * routed page has been migrated onto the semantic tokens above; the
- * policy-type config forms under src/components/policies/*PolicyForm.tsx
- * and LoginForm.tsx are the one remaining pocket of the app that still
- * render via this override file (bg-gray-800/900, border-gray-700/800,
- * text-gray-200/300/400 — a bespoke dark modal styling, not the old
- * light-mode-on-dark-background bug this file was originally written to
- * paper over). Migrate those, then this file can be deleted.
+ * which never collide with these semantic bg-background / text-foreground
+ * classes, so both systems coexist safely). Every routed page has been
+ * migrated onto the semantic tokens above; the policy-type config forms
+ * under src/components/policies/*PolicyForm.tsx and LoginForm.tsx are the
+ * one remaining pocket of the app that still render via that override
+ * file (bg-gray-800/900, border-gray-700/800, text-gray-200/300/400) —
+ * its own :root tokens were retuned to the same light palette as part of
+ * this redesign so both layers produce one consistent look. Migrate those
+ * files onto the semantic tokens directly and this file can be deleted.
  * ────────────────────────────────────────────────────────────────────── */
 @layer base {
   :root {
-    --background: 10 10 13;           /* #0A0A0D — the void */
-    --foreground: 232 232 240;        /* #E8E8F0 — platinum, 15.5:1 on bg */
+    --background: 248 249 250;        /* #F8F9FA — soft canvas, not stark white */
+    --foreground: 32 31 30;           /* #201F1E — near-black slate */
 
-    --card: 17 17 24;                 /* #111118 */
-    --card-foreground: 232 232 240;
+    --card: 255 255 255;              /* #FFFFFF */
+    --card-foreground: 32 31 30;
 
-    --popover: 17 17 24;
-    --popover-foreground: 232 232 240;
+    --popover: 255 255 255;
+    --popover-foreground: 32 31 30;
 
-    --primary: 91 126 255;            /* #5B7EFF — indigo accent */
+    --primary: 37 99 235;             /* #2563EB — Azure-esque blue accent */
     --primary-foreground: 255 255 255;
 
-    --secondary: 30 30 46;            /* #1E1E2E */
-    --secondary-foreground: 232 232 240;
+    --secondary: 243 244 246;         /* #F3F4F6 */
+    --secondary-foreground: 32 31 30;
 
-    --muted: 30 30 46;
-    --muted-foreground: 160 160 184;  /* #A0A0B8, 8.2:1 on bg */
+    --muted: 243 244 246;             /* #F3F4F6 */
+    --muted-foreground: 100 106 115;  /* #646A73, ~5.7:1 on bg */
 
-    --accent: 22 22 31;               /* #16161F — hover surface */
-    --accent-foreground: 232 232 240;
+    --accent: 239 246 255;            /* #EFF6FF — faint blue hover surface */
+    --accent-foreground: 32 31 30;
 
-    --destructive: 248 113 113;       /* #F87171 */
+    --destructive: 220 38 38;         /* #DC2626 */
     --destructive-foreground: 255 255 255;
 
-    --border: 30 30 46;               /* #1E1E2E */
-    --input: 30 30 46;
-    --ring: 91 126 255;
+    --border: 225 228 232;            /* #E1E4E8 */
+    --input: 209 213 219;             /* #D1D5DB */
+    --ring: 37 99 235;
 
     /* DLP severity palette — soft tinted-bg + saturated-text badges */
-    --success: 45 212 191;            /* #2DD4BF teal */
-    --success-bg: 26 61 53;           /* #1A3D35 */
-    --warning: 251 146 60;            /* #FB923C */
-    --warning-bg: 61 42 24;           /* #3D2A18 */
-    --critical: 248 113 113;          /* #F87171 */
-    --critical-bg: 61 38 40;          /* #3D2628 */
-    --info: 91 126 255;               /* #5B7EFF */
-    --info-bg: 30 30 62;              /* #1E1E3E */
+    --success: 22 163 74;             /* #16A34A green */
+    --success-bg: 220 252 231;        /* #DCFCE7 */
+    --warning: 217 119 6;             /* #D97706 amber */
+    --warning-bg: 254 243 199;        /* #FEF3C7 */
+    --critical: 220 38 38;            /* #DC2626 red */
+    --critical-bg: 254 226 226;       /* #FEE2E2 */
+    --info: 37 99 235;                /* #2563EB */
+    --info-bg: 219 234 254;           /* #DBEAFE */
 
     --radius: 0.625rem;
 
-    color-scheme: dark;
+    color-scheme: light;
 
     /* ── "cs-*" compatibility layer ─────────────────────────────────
      * ThreatIntelligence.tsx and IpAllowlistSection.tsx (ported from the
@@ -74,13 +75,13 @@
      * every one of those classes generated no CSS rule, so both pages
      * were being rendered with unstyled/invisible text. Rather than
      * rewrite those two files, alias the tokens they already reference
-     * onto the same obsidian palette so they render correctly. These are
+     * onto the same light palette so they render correctly. These are
      * real CSS color values (not bare RGB triples) because the source
      * files also use them directly inside color-mix(). */
-    --cs-panel: rgb(17 17 24);
-    --cs-ink: rgb(232 232 240);
-    --cs-crit: rgb(248 113 113);
-    --cs-med: rgb(251 146 60);
+    --cs-panel: rgb(255 255 255);
+    --cs-ink: rgb(32 31 30);
+    --cs-crit: rgb(220 38 38);
+    --cs-med: rgb(217 119 6);
   }
 }
 
@@ -158,7 +159,8 @@
 
   /* Semantic gradient text utilities. Used on metric values to push
      visual hierarchy without leaning on a giant accent color block.
-     Lightened/shifted for readability against a dark surface. */
+     Tokens are saturated enough to stay legible against the light
+     surface too. */
   .text-gradient-indigo {
     @apply bg-clip-text text-transparent
            bg-gradient-to-br from-primary to-info;

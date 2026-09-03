@@ -8,6 +8,67 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Redesign: dashboard UI, dark "obsidian vault" -> light enterprise theme (September 3, 2026)
+
+Full-pass redesign of the dashboard (all 18 pages) from the dark "obsidian vault" palette to a light,
+Microsoft Purview / Azure Portal-style enterprise look -- white/near-white surfaces, dark slate text, a
+restrained blue accent (#2563EB), dense data tables, subtle borders/shadows instead of a flat dark-void
+aesthetic. Kept the current SeceoKnight logo; only the color system changed.
+
+**Architecture.** The app has two theme layers: `src/index.css`'s semantic CSS custom properties
+(`--background`, `--card`, `--primary`, etc., shadcn/ui convention) which every routed page already used,
+and `src/styles/obsidian-vault.css`, an `!important` override layer that targets literal Tailwind
+gray/color-scale classes for the pages/components never migrated onto the semantic tokens (policy config
+forms under `src/components/policies/*PolicyForm.tsx`, and a long tail of similar dark-hardcoded spots).
+Both layers were retuned to the same light palette rather than deleting either -- deleting the override
+layer would have left ~150+ still-unmigrated class usages (`bg-gray-900/50`, `text-white`, `text-indigo-400`,
+etc.) rendering dark on an otherwise light app.
+
+**What changed:**
+- `src/index.css` -- semantic tokens repointed to light values (white/`#F8F9FA` surfaces, `#1F2328` text,
+  `#2563EB` accent, light-tinted severity badges).
+- `src/styles/obsidian-vault.css` -- retuned to the same light palette, plus new rules to catch opacity-
+  modified classes (`bg-gray-900/50`, `bg-indigo-900/30`, `text-red-400`, etc.) that the plain-class
+  selectors never matched -- these are pervasive throughout the policy config forms and were the main
+  source of "dark card floating on a light page" regressions during this pass.
+- `src/styles/charts.ts` -- Recharts color tokens (plain TS constants, not CSS vars) rewritten to light
+  equivalents; `src/pages/Dashboard.tsx` had its own duplicate hardcoded palette fixed too.
+- `src/App.tsx` -- `react-hot-toast` inline hex styles fixed (only inline-style spot in the app, doesn't
+  follow CSS variables).
+- `src/pages/Login.tsx` + `src/components/auth/LoginForm.tsx` -- rewritten directly (not left to the CSS
+  override) since the old dark glassmorphism design used gradients, translucent dark inputs, and a
+  purple/pink brand gradient that don't map cleanly onto a class-level light/dark flip. Now a clean white
+  card on a soft light backdrop, matching a Microsoft/Azure sign-in page.
+- `src/pages/SSOCallback.tsx`, `src/pages/AuditTrail.tsx`, `src/pages/Reports.tsx` -- migrated onto
+  semantic tokens directly (same reasoning: too much bespoke dark styling for the generic override to
+  safely reach, including opacity-slash classes and one arbitrary-hex `bg-[#1e2124]` island in AuditTrail).
+- `src/pages/Policies.tsx`, `src/components/policies/PolicyCreatorModal.tsx` -- the gradient "Create
+  Policy" CTA buttons switched to a solid primary-blue fill (a flattened gradient read as an odd plain
+  button; a solid fill reads as an intentional primary action).
+- `src/components/policies/ExportPoliciesModal.tsx`, `ImportPoliciesModal.tsx`,
+  `src/components/policies/PolicyCreatorModal.tsx` -- removed `!bg-gray-800 !border-gray-700` modal
+  overrides (Tailwind's `!important`-variant syntax escapes plain class selectors, so these three modals
+  were the one place the CSS override layer structurally couldn't reach).
+- `src/components/google-drive/ProtectedFolderSelector.tsx`,
+  `src/components/onedrive/ProtectedFolderSelector.tsx` -- fixed `group-hover:text-white` (a Tailwind
+  conditional-variant class the plain-class override can't target either).
+- `src/components/Header.tsx` -- the notification bell button had no behavior at all (no dropdown, no
+  unread state). Wired it to the same `getAlerts()` call `pages/Alerts.tsx` uses: shows the 5 most recent
+  alerts with severity + relative time, an unread-count badge, and a link to the full Alerts page.
+
+**Verified:** `npx tsc --noEmit` shows only pre-existing type errors (none introduced by this pass, cross-
+checked file-by-file against the diff), and `npx vite build` completes cleanly. Not yet verified against a
+live render -- the dashboard runs on a private LAN the sandbox can't reach, so this needs a visual pass
+against the deployed instance.
+
+**If revisited:** `src/components/policies/*PolicyForm.tsx` and a handful of other files (~20 total) still
+render through the `obsidian-vault.css` override layer rather than the semantic tokens directly -- see the
+comment above `:root` in `src/index.css`. Migrating them onto semantic tokens directly would let that
+override file be deleted; low priority since the override layer now produces a correct, consistent light
+result for all of them.
+
+---
+
 ## Removed: File Access Control (GDPR) policy type (September 3, 2026)
 
 Pulled entirely -- server endpoint, dashboard UI, and Windows agent enforcement code -- after field testing
