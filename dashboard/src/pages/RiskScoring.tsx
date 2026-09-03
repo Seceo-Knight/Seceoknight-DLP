@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import Modal, { ModalHeader } from '@/components/ui/Modal'
 import { DataPagination } from '@/components/ui/pagination'
-import { cn } from '@/lib/utils'
+import { cn, formatDateTimeIST } from '@/lib/utils'
 
 // SeceoKnight-original -- not ported from CyberSentinel-DLP (task #120).
 // See risk_scoring_service.py's module docstring for the full rationale:
@@ -44,7 +44,15 @@ const LEVEL_VARIANT: Record<RiskLevel, 'success' | 'warning' | 'critical'> = {
   critical: 'critical',
 }
 
-const fmt = (s?: string | null) => (s ? new Date(s).toLocaleString() : '—')
+// IST, not the viewer's own machine/browser timezone -- the off-hours
+// business rule below (and the backend's identical _is_off_hours) is
+// defined in the deployment's local time (09:30-18:30, Asia/Kolkata).
+// new Date(s).toLocaleString() would render in whatever OS timezone the
+// analyst happens to be viewing from, so an off-hours event can display
+// a clock time that looks like the middle of the workday to someone
+// reading it from a different timezone. formatDateTimeIST matches the
+// convention already used for timestamps elsewhere (Events.tsx etc).
+const fmt = (s?: string | null) => (s ? formatDateTimeIST(s) : '—')
 
 function TrendIcon({ trend }: { trend: UserRiskScore['trend'] }) {
   if (trend === 'rising') return <ArrowUp className="h-3.5 w-3.5 text-critical" />
