@@ -103,14 +103,19 @@ export const listDevices = async (): Promise<DeviceListResponse> => {
 
 export const seenDevices = async (
   includeDismissed = false,
+  limit?: number,
 ): Promise<{
   devices: SeenDevice[]
   count: number
   dismissed_count: number
   include_dismissed: boolean
+  truncated: boolean
 }> => {
+  const params: Record<string, unknown> = {}
+  if (includeDismissed) params.include_dismissed = true
+  if (limit) params.limit = limit
   const { data } = await apiClient.get('/usb-devices/seen', {
-    params: includeDismissed ? { include_dismissed: true } : undefined,
+    params: Object.keys(params).length ? params : undefined,
   })
   return data
 }

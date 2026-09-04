@@ -372,6 +372,7 @@ async def seen_devices(
     # vendor_id/product_id — those older events simply won't have a serial and
     # are excluded here, same as CyberSentinel's own "no serial => can't
     # sanction" handling).
+    capped_limit = max(1, min(limit, 1000))
     mongo = get_mongodb()["dlp_events"]
     pipeline = [
         {"$match": {"event_type": "usb", "serial_number": {"$nin": [None, ""]}}},
@@ -385,10 +386,18 @@ async def seen_devices(
             "agent_id": {"$first": "$agent_id"},
             "last_seen": {"$first": "$timestamp"},
         }},
-        {"$limit": max(1, min(limit, 1000))},
+        {"$limit": capped_limit},
     ]
     out: List[dict] = []
+    # Distinct from len(out): the $limit above caps how many *distinct
+    # serials ever seen* get considered, before approved/dismissed rows are
+    # filtered back out below -- so hitting the cap doesn't necessarily mean
+    # len(out) == capped_limit. Track it separately so the UI can warn that
+    # older not-yet-decided serials may be missing from the triage queue,
+    # the same silent-fetch-cap class of bug fixed on Rules/Policies.
+    raw_seen_count = 0
     async for r in mongo.aggregate(pipeline):
+        raw_seen_count += 1
         serial = r.get("serial_number")
         if serial in approved:
             continue
@@ -435,6 +444,7 @@ async def seen_devices(
         "count": len(out),
         "dismissed_count": len(dismissed),
         "include_dismissed": include_dismissed,
+        "truncated": raw_seen_count >= capped_limit,
     }
 
 
