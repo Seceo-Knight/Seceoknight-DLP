@@ -82,7 +82,7 @@ export default function FileIdentityDenylistPolicyForm({ config: rawConfig, onCh
 
   return (
     <div className="space-y-6">
-      <div className="p-4 bg-amber-900/20 border border-amber-500/30 rounded-lg text-sm text-amber-200/90">
+      <div className="p-4 bg-warning/10 border border-warning/30 rounded-lg text-sm text-warning">
         Blocks files by <strong>what they are</strong> -- extension or exact-content hash -- independent of
         DLP content classification. Matches against file system, file transfer, USB transfer, and print events.
         At least one extension or hash is required.
@@ -90,7 +90,7 @@ export default function FileIdentityDenylistPolicyForm({ config: rawConfig, onCh
 
       {/* Extensions */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-foreground/90 mb-3">
           Denied Extensions
         </label>
 
@@ -103,8 +103,8 @@ export default function FileIdentityDenylistPolicyForm({ config: rawConfig, onCh
                 onClick={() => handleToggleExtension(ext)}
                 className={`px-3 py-1 rounded-lg border-2 text-sm font-mono transition-all ${
                   isSelected
-                    ? 'border-red-500 bg-red-900/30 text-white'
-                    : 'border-gray-600 bg-gray-900/30 text-muted-foreground/70 hover:border-gray-500'
+                    ? 'border-critical bg-critical/10 text-foreground'
+                    : 'border-border bg-muted/30 text-muted-foreground hover:border-primary/40'
                 }`}
               >
                 {ext}
@@ -115,17 +115,17 @@ export default function FileIdentityDenylistPolicyForm({ config: rawConfig, onCh
 
         {config.extensions && config.extensions.length > 0 && (
           <div className="mb-3">
-            <div className="text-xs text-muted-foreground/70 mb-2">Denied:</div>
+            <div className="text-xs text-muted-foreground mb-2">Denied:</div>
             <div className="flex flex-wrap gap-2">
               {config.extensions.map((ext) => (
                 <div
                   key={ext}
-                  className="flex items-center gap-2 px-3 py-1 bg-red-900/30 border border-red-500/50 rounded-lg text-sm"
+                  className="flex items-center gap-2 px-3 py-1 bg-critical/10 border border-critical/30 rounded-lg text-sm"
                 >
-                  <code className="text-red-300">{ext}</code>
+                  <code className="text-critical">{ext}</code>
                   <button
                     onClick={() => handleRemoveExtension(ext)}
-                    className="text-muted-foreground/70 hover:text-red-400 transition-colors"
+                    className="text-muted-foreground hover:text-critical transition-colors"
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -142,11 +142,11 @@ export default function FileIdentityDenylistPolicyForm({ config: rawConfig, onCh
             onChange={(e) => setNewExtension(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleAddCustomExtension()}
             placeholder="e.g., .custom or custom"
-            className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+            className="flex-1 px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
           />
           <button
             onClick={handleAddCustomExtension}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center gap-2"
+            className="px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
             Add
@@ -156,10 +156,10 @@ export default function FileIdentityDenylistPolicyForm({ config: rawConfig, onCh
 
       {/* Hashes */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-foreground/90 mb-3">
           Denied File Hashes (SHA-256)
         </label>
-        <p className="text-xs text-muted-foreground/70 mb-3">
+        <p className="text-xs text-muted-foreground mb-3">
           Exact-content match -- blocks this file no matter what it&apos;s named or where it&apos;s encountered.
           Copy a hash from an Events row&apos;s File Hash field.
         </p>
@@ -169,12 +169,12 @@ export default function FileIdentityDenylistPolicyForm({ config: rawConfig, onCh
             {config.hashes.map((hash) => (
               <div
                 key={hash}
-                className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg border border-gray-700"
+                className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border border-border"
               >
-                <code className="text-sm text-red-300 flex-1 break-all">{hash}</code>
+                <code className="text-sm text-critical flex-1 break-all">{hash}</code>
                 <button
                   onClick={() => handleRemoveHash(hash)}
-                  className="ml-3 p-1 text-muted-foreground/70 hover:text-red-400 transition-colors"
+                  className="ml-3 p-1 text-muted-foreground hover:text-critical transition-colors"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -193,52 +193,52 @@ export default function FileIdentityDenylistPolicyForm({ config: rawConfig, onCh
             }}
             onKeyPress={(e) => e.key === 'Enter' && handleAddHash()}
             placeholder="64-character SHA-256 hex hash"
-            className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+            className="flex-1 px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
           />
           <button
             onClick={handleAddHash}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center gap-2"
+            className="px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
             Add
           </button>
         </div>
-        {hashError && <p className="text-xs text-red-400 mt-2">{hashError}</p>}
+        {hashError && <p className="text-xs text-critical mt-2">{hashError}</p>}
       </div>
 
       {/* Action Selection */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-foreground/90 mb-3">
           Action When a Denied File Is Encountered
         </label>
         <div className="space-y-2">
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="file-identity-denylist-action"
               value="block"
               checked={config.action === 'block'}
               onChange={() => onChange({ ...config, action: 'block', quarantinePath: undefined })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div>
-              <div className="text-white font-medium text-sm">Block</div>
-              <div className="text-muted-foreground/70 text-xs">Delete/cancel the file or job immediately</div>
+              <div className="text-foreground font-medium text-sm">Block</div>
+              <div className="text-muted-foreground text-xs">Delete/cancel the file or job immediately</div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="file-identity-denylist-action"
               value="quarantine"
               checked={config.action === 'quarantine'}
               onChange={() => onChange({ ...config, action: 'quarantine' })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div className="flex-1">
-              <div className="text-white font-medium text-sm">Quarantine</div>
-              <div className="text-muted-foreground/70 text-xs">Move the file to a quarantine folder instead of deleting it</div>
+              <div className="text-foreground font-medium text-sm">Quarantine</div>
+              <div className="text-muted-foreground text-xs">Move the file to a quarantine folder instead of deleting it</div>
             </div>
           </label>
 
@@ -249,38 +249,38 @@ export default function FileIdentityDenylistPolicyForm({ config: rawConfig, onCh
                 value={config.quarantinePath || ''}
                 onChange={(e) => onChange({ ...config, quarantinePath: e.target.value })}
                 placeholder="e.g., C:\\ProgramData\\SeceoKnight\\quarantine"
-                className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+                className="w-full px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
               />
             </div>
           )}
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="file-identity-denylist-action"
               value="alert"
               checked={config.action === 'alert'}
               onChange={() => onChange({ ...config, action: 'alert', quarantinePath: undefined })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div>
-              <div className="text-white font-medium text-sm">Alert</div>
-              <div className="text-muted-foreground/70 text-xs">Send alert notification, don&apos;t touch the file</div>
+              <div className="text-foreground font-medium text-sm">Alert</div>
+              <div className="text-muted-foreground text-xs">Send alert notification, don&apos;t touch the file</div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="file-identity-denylist-action"
               value="log"
               checked={config.action === 'log'}
               onChange={() => onChange({ ...config, action: 'log', quarantinePath: undefined })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div>
-              <div className="text-white font-medium text-sm">Log Only</div>
-              <div className="text-muted-foreground/70 text-xs">Record matches without blocking</div>
+              <div className="text-foreground font-medium text-sm">Log Only</div>
+              <div className="text-muted-foreground text-xs">Record matches without blocking</div>
             </div>
           </label>
         </div>

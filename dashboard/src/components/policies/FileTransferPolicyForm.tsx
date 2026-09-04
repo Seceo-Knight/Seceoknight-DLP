@@ -15,9 +15,9 @@ export default function FileTransferPolicyForm({ config, onChange }: Props) {
   return (
     <div className="space-y-4">
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-1">Protected paths</label>
+        <label className="block text-sm font-medium text-foreground/90 mb-1">Protected paths</label>
         <textarea
-          className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-sm text-white"
+          className="w-full bg-muted/30 border border-border rounded-lg p-2 text-sm text-foreground"
           rows={3}
           placeholder="One path per line (e.g. C:\Sensitive or /opt/data)"
           value={config.protectedPaths.join('\n')}
@@ -26,9 +26,9 @@ export default function FileTransferPolicyForm({ config, onChange }: Props) {
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-1">Destination paths to monitor</label>
+        <label className="block text-sm font-medium text-foreground/90 mb-1">Destination paths to monitor</label>
         <textarea
-          className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-sm text-white"
+          className="w-full bg-muted/30 border border-border rounded-lg p-2 text-sm text-foreground"
           rows={3}
           placeholder="One path per line (e.g. D:\Staging or /mnt/share)"
           value={config.monitoredDestinations.join('\n')}
@@ -37,9 +37,9 @@ export default function FileTransferPolicyForm({ config, onChange }: Props) {
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-1">File extensions (optional)</label>
+        <label className="block text-sm font-medium text-foreground/90 mb-1">File extensions (optional)</label>
         <input
-          className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-sm text-white"
+          className="w-full bg-muted/30 border border-border rounded-lg p-2 text-sm text-foreground"
           placeholder=".txt, .pdf, .docx"
           value={(config.fileExtensions || []).join(', ')}
           onChange={(e) => update({ fileExtensions: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
@@ -47,7 +47,7 @@ export default function FileTransferPolicyForm({ config, onChange }: Props) {
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-1">Events</label>
+        <label className="block text-sm font-medium text-foreground/90 mb-1">Events</label>
         <div className="grid grid-cols-2 gap-2 text-sm text-foreground">
           {(['create', 'modify', 'delete', 'move'] as const).map(key => (
             <label key={key} className="flex items-center gap-2">
@@ -64,9 +64,9 @@ export default function FileTransferPolicyForm({ config, onChange }: Props) {
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-200 mb-1">Action</label>
+          <label className="block text-sm font-medium text-foreground/90 mb-1">Action</label>
           <select
-            className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-sm text-white"
+            className="w-full bg-muted/30 border border-border rounded-lg p-2 text-sm text-foreground"
             value={config.action}
             onChange={(e) => update({ action: e.target.value as FileTransferConfig['action'] })}
           >
@@ -78,9 +78,9 @@ export default function FileTransferPolicyForm({ config, onChange }: Props) {
 
         {config.action === 'quarantine' && (
           <div>
-            <label className="block text-sm font-medium text-gray-200 mb-1">Quarantine path</label>
+            <label className="block text-sm font-medium text-foreground/90 mb-1">Quarantine path</label>
             <input
-              className="w-full bg-gray-900 border border-gray-700 rounded-lg p-2 text-sm text-white"
+              className="w-full bg-muted/30 border border-border rounded-lg p-2 text-sm text-foreground"
               placeholder="C:\Quarantine or /quarantine"
               value={config.quarantinePath || ''}
               onChange={(e) => update({ quarantinePath: e.target.value })}

@@ -166,7 +166,7 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
     <div className="space-y-6">
       {/* Monitored Directories */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-foreground/90 mb-3">
           Monitored Directories *
         </label>
         
@@ -176,12 +176,12 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
             {config.monitoredPaths.map((path, index) => (
               <div
                 key={index}
-                className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg border border-gray-700"
+                className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border border-border"
               >
-                <code className="text-sm text-indigo-300 flex-1">{path}</code>
+                <code className="text-sm text-primary flex-1">{path}</code>
                 <button
                   onClick={() => handleRemovePath(index)}
-                  className="ml-3 p-1 text-muted-foreground/70 hover:text-red-400 transition-colors"
+                  className="ml-3 p-1 text-muted-foreground hover:text-critical transition-colors"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -198,27 +198,27 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
             onChange={(e) => setNewPath(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleAddPath()}
             placeholder="e.g., C:\\Users\\%USERNAME%\\Documents or /home/$USER/Documents"
-            className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+            className="flex-1 px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
           />
           <button
             onClick={handleAddPath}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center gap-2"
+            className="px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
             Add
           </button>
         </div>
-        <p className="text-xs text-muted-foreground/70 mt-2">
+        <p className="text-xs text-muted-foreground mt-2">
           Supports environment variables: %USERNAME%, $USER, etc.
         </p>
       </div>
 
       {/* File Extensions */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-foreground/90 mb-3">
           File Extensions (Optional)
         </label>
-        <p className="text-xs text-muted-foreground/70 mb-3">
+        <p className="text-xs text-muted-foreground mb-3">
           Leave empty to monitor all file types
         </p>
 
@@ -233,8 +233,8 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
                 onClick={() => handleToggleExtension(ext)}
                 className={`px-3 py-1 rounded-lg border-2 text-sm font-mono transition-all ${
                   isSelected
-                    ? 'border-indigo-500 bg-indigo-900/30 text-white'
-                    : 'border-gray-600 bg-gray-900/30 text-muted-foreground/70 hover:border-gray-500'
+                    ? 'border-primary bg-primary/10 text-white'
+                    : 'border-border bg-muted/30 text-muted-foreground hover:border-primary/40'
                 }`}
               >
                 {ext}
@@ -246,17 +246,17 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
         {/* Selected Extensions */}
         {config.fileExtensions && config.fileExtensions.length > 0 && (
           <div className="mb-3">
-            <div className="text-xs text-muted-foreground/70 mb-2">Selected Extensions:</div>
+            <div className="text-xs text-muted-foreground mb-2">Selected Extensions:</div>
             <div className="flex flex-wrap gap-2">
               {config.fileExtensions.map((ext) => (
                 <div
                   key={ext}
-                  className="flex items-center gap-2 px-3 py-1 bg-indigo-900/30 border border-indigo-500/50 rounded-lg text-sm"
+                  className="flex items-center gap-2 px-3 py-1 bg-primary/10 border border-primary/30 rounded-lg text-sm"
                 >
-                  <code className="text-indigo-300">{ext}</code>
+                  <code className="text-primary">{ext}</code>
                   <button
                     onClick={() => handleRemoveExtension(ext)}
-                    className="text-muted-foreground/70 hover:text-red-400 transition-colors"
+                    className="text-muted-foreground hover:text-critical transition-colors"
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -274,11 +274,11 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
             onChange={(e) => setNewExtension(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleAddCustomExtension()}
             placeholder="e.g., .custom or custom"
-            className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+            className="flex-1 px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
           />
           <button
             onClick={handleAddCustomExtension}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center gap-2"
+            className="px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
             Add
@@ -288,10 +288,10 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
 
       {/* Content Detection Patterns */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-foreground/90 mb-3">
           Detection Patterns (Optional)
         </label>
-        <p className="text-xs text-muted-foreground/70 mb-3">
+        <p className="text-xs text-muted-foreground mb-3">
           Checks file contents (including OCR&apos;d text from images/screenshots) against these patterns.
           Leave empty to alert/quarantine on any matching file regardless of content.
         </p>
@@ -305,8 +305,8 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
                 onClick={() => handlePredefinedToggle(pattern.id)}
                 className={`p-3 rounded-lg border-2 text-left transition-all ${
                   isSelected
-                    ? 'border-indigo-500 bg-indigo-900/30 text-white'
-                    : 'border-gray-600 bg-gray-900/30 text-muted-foreground/70 hover:border-gray-500'
+                    ? 'border-primary bg-primary/10 text-white'
+                    : 'border-border bg-muted/30 text-muted-foreground hover:border-primary/40'
                 }`}
               >
                 <div className="flex items-center justify-between">
@@ -314,7 +314,7 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
                     <div className="font-medium text-sm">{pattern.name}</div>
                     <div className="text-xs mt-1 opacity-70 font-mono">{pattern.example}</div>
                   </div>
-                  {isSelected && <Check className="w-5 h-5 text-indigo-400" />}
+                  {isSelected && <Check className="w-5 h-5 text-primary" />}
                 </div>
               </button>
             )
@@ -327,17 +327,17 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
             {config.patterns!.custom.map((custom, index) => (
               <div
                 key={index}
-                className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg border border-gray-700"
+                className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border border-border"
               >
                 <div className="flex-1">
-                  <code className="text-sm text-indigo-300">{custom.regex}</code>
+                  <code className="text-sm text-primary">{custom.regex}</code>
                   {custom.description && (
-                    <p className="text-xs text-muted-foreground/70 mt-1">{custom.description}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{custom.description}</p>
                   )}
                 </div>
                 <button
                   onClick={() => handleRemoveCustomPattern(index)}
-                  className="ml-3 p-1 text-muted-foreground/70 hover:text-red-400 transition-colors"
+                  className="ml-3 p-1 text-muted-foreground hover:text-critical transition-colors"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -346,9 +346,9 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
           </div>
         )}
 
-        <div className="space-y-3 p-4 bg-gray-900/30 rounded-lg border border-gray-700">
+        <div className="space-y-3 p-4 bg-muted/30 rounded-lg border border-border">
           <div>
-            <label className="block text-xs font-medium text-muted-foreground/50 mb-2">
+            <label className="block text-xs font-medium text-muted-foreground mb-2">
               Custom Regex Pattern
             </label>
             <div className="flex gap-2">
@@ -357,21 +357,21 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
                 value={customRegex}
                 onChange={(e) => setCustomRegex(e.target.value)}
                 placeholder="e.g., \\d{4}-\\d{4}-\\d{4}"
-                className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+                className="flex-1 px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
               />
               {regexValidation && (
-                <div className={`flex items-center px-2 ${regexValidation.valid ? 'text-green-400' : 'text-red-400'}`}>
+                <div className={`flex items-center px-2 ${regexValidation.valid ? 'text-success' : 'text-critical'}`}>
                   {regexValidation.valid ? <Check className="w-5 h-5" /> : <X className="w-5 h-5" />}
                 </div>
               )}
             </div>
             {regexValidation && !regexValidation.valid && (
-              <p className="text-xs text-red-400 mt-1">{regexValidation.error}</p>
+              <p className="text-xs text-critical mt-1">{regexValidation.error}</p>
             )}
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-muted-foreground/50 mb-2">
+            <label className="block text-xs font-medium text-muted-foreground mb-2">
               Description (Optional)
             </label>
             <input
@@ -379,12 +379,12 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
               value={customDescription}
               onChange={(e) => setCustomDescription(e.target.value)}
               placeholder="e.g., Study Report Detection"
-              className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm"
+              className="w-full px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all text-sm"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-muted-foreground/50 mb-2">
+            <label className="block text-xs font-medium text-muted-foreground mb-2">
               Test Pattern
             </label>
             <div className="flex gap-2">
@@ -393,18 +393,18 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
                 value={testText}
                 onChange={(e) => setTestText(e.target.value)}
                 placeholder="Enter sample text to test"
-                className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all text-sm"
+                className="flex-1 px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all text-sm"
               />
               <button
                 onClick={handleTestRegex}
                 disabled={!customRegex.trim() || !testText.trim()}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
+                className="px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-secondary disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
               >
                 Test
               </button>
             </div>
             {testResult !== null && (
-              <p className={`text-xs mt-2 ${testResult ? 'text-green-400' : 'text-red-400'}`}>
+              <p className={`text-xs mt-2 ${testResult ? 'text-success' : 'text-critical'}`}>
                 {testResult ? '✓ Pattern matches!' : '✗ Pattern does not match'}
               </p>
             )}
@@ -413,7 +413,7 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
           <button
             onClick={handleAddCustomPattern}
             disabled={!customRegex.trim() || (regexValidation !== null && !regexValidation.valid)}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-secondary disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
           >
             <Plus className="w-4 h-4" />
             Add Custom Pattern
@@ -423,26 +423,26 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
 
       {/* Events to Monitor */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-foreground/90 mb-3">
           Events to Monitor *
         </label>
         <div className="space-y-2">
           {Object.entries(config.events).map(([event, enabled]) => (
             <label
               key={event}
-              className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all"
+              className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all"
             >
               <input
                 type="checkbox"
                 checked={enabled}
                 onChange={() => handleToggleEvent(event as keyof FileSystemConfig['events'])}
-                className="w-4 h-4 text-indigo-400 rounded"
+                className="w-4 h-4 text-primary rounded"
               />
               <div>
-                <div className="text-white font-medium text-sm capitalize">
+                <div className="text-foreground font-medium text-sm capitalize">
                   File {event}
                 </div>
-                <div className="text-muted-foreground/70 text-xs">{`Monitor file ${event} operations`}</div>
+                <div className="text-muted-foreground text-xs">{`Monitor file ${event} operations`}</div>
               </div>
             </label>
           ))}
@@ -451,37 +451,37 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
 
       {/* Action Selection */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-foreground/90 mb-3">
           Action When Event Detected
         </label>
         <div className="space-y-2">
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="filesystem-action"
               value="block"
               checked={config.action === 'block'}
               onChange={() => onChange({ ...config, action: 'block', quarantinePath: undefined })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div>
-              <div className="text-white font-medium text-sm">Block</div>
-              <div className="text-muted-foreground/70 text-xs">Delete the file immediately when restricted content is detected</div>
+              <div className="text-foreground font-medium text-sm">Block</div>
+              <div className="text-muted-foreground text-xs">Delete the file immediately when restricted content is detected</div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="filesystem-action"
               value="quarantine"
               checked={config.action === 'quarantine'}
               onChange={() => onChange({ ...config, action: 'quarantine' })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div className="flex-1">
-              <div className="text-white font-medium text-sm">Quarantine</div>
-              <div className="text-muted-foreground/70 text-xs">Move the file to a quarantine folder instead of deleting it</div>
+              <div className="text-foreground font-medium text-sm">Quarantine</div>
+              <div className="text-muted-foreground text-xs">Move the file to a quarantine folder instead of deleting it</div>
             </div>
           </label>
 
@@ -492,41 +492,41 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
                 value={config.quarantinePath || ''}
                 onChange={(e) => onChange({ ...config, quarantinePath: e.target.value })}
                 placeholder="e.g., C:\\ProgramData\\SeceoKnight\\quarantine"
-                className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+                className="w-full px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
               />
-              <p className="text-xs text-muted-foreground/70 mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 Folder where flagged files will be moved on the agent
               </p>
             </div>
           )}
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="filesystem-action"
               value="alert"
               checked={config.action === 'alert'}
               onChange={() => onChange({ ...config, action: 'alert', quarantinePath: undefined })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div>
-              <div className="text-white font-medium text-sm">Alert</div>
-              <div className="text-muted-foreground/70 text-xs">Send alert notification, don&apos;t touch the file</div>
+              <div className="text-foreground font-medium text-sm">Alert</div>
+              <div className="text-muted-foreground text-xs">Send alert notification, don&apos;t touch the file</div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="filesystem-action"
               value="log"
               checked={config.action === 'log'}
               onChange={() => onChange({ ...config, action: 'log', quarantinePath: undefined })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div>
-              <div className="text-white font-medium text-sm">Log Only</div>
-              <div className="text-muted-foreground/70 text-xs">Record events without blocking</div>
+              <div className="text-foreground font-medium text-sm">Log Only</div>
+              <div className="text-muted-foreground text-xs">Record events without blocking</div>
             </div>
           </label>
         </div>

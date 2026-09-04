@@ -56,7 +56,7 @@ const PolicyContextMenu = forwardRef<HTMLDivElement, PolicyContextMenuProps>(
 
         <button
           onClick={onDelete}
-          className="w-full px-4 py-2 text-left text-sm text-red-400 hover:bg-red-500/10 flex items-center gap-2 transition-colors"
+          className="w-full px-4 py-2 text-left text-sm text-critical hover:bg-critical/10 flex items-center gap-2 transition-colors"
         >
           <Trash2 className="h-4 w-4" />
           Delete Policy

@@ -74,7 +74,7 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
 
   return (
     <div className="space-y-6">
-      <div className="p-4 bg-amber-900/20 border border-amber-500/30 rounded-lg text-sm text-amber-200/90">
+      <div className="p-4 bg-warning/10 border border-warning/30 rounded-lg text-sm text-warning">
         Intercepts file-picker attachments in managed messaging / thick-client apps. Alert-first by design:
         leave on <strong>Alert</strong> so enabling this policy never terminates an app until you deliberately
         opt into <strong>Block</strong>. Drag-and-drop attachments bypass the common file dialog and aren&apos;t
@@ -83,34 +83,34 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
 
       {/* Action */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">Action on Sensitive Attachment</label>
+        <label className="block text-sm font-medium text-foreground/90 mb-3">Action on Sensitive Attachment</label>
         <div className="space-y-2">
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="messaging-action"
               value="alert"
               checked={config.action === 'alert'}
               onChange={() => onChange({ ...config, action: 'alert' })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div>
-              <div className="text-white font-medium text-sm">Alert</div>
-              <div className="text-muted-foreground/70 text-xs">Log an event; the app keeps running and the attachment goes through</div>
+              <div className="text-foreground font-medium text-sm">Alert</div>
+              <div className="text-muted-foreground text-xs">Log an event; the app keeps running and the attachment goes through</div>
             </div>
           </label>
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="messaging-action"
               value="block"
               checked={config.action === 'block'}
               onChange={() => onChange({ ...config, action: 'block' })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div>
-              <div className="text-white font-medium text-sm">Block</div>
-              <div className="text-muted-foreground/70 text-xs">Terminate the app when a sensitive attachment is picked -- only enable after auditing</div>
+              <div className="text-foreground font-medium text-sm">Block</div>
+              <div className="text-muted-foreground text-xs">Terminate the app when a sensitive attachment is picked -- only enable after auditing</div>
             </div>
           </label>
         </div>
@@ -118,8 +118,8 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
 
       {/* Managed apps */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">Managed Apps</label>
-        <p className="text-xs text-muted-foreground/70 mb-3">
+        <label className="block text-sm font-medium text-foreground/90 mb-3">Managed Apps</label>
+        <p className="text-xs text-muted-foreground mb-3">
           Leave empty to use the built-in default list ({defaultApps.join(', ')}).
         </p>
 
@@ -133,8 +133,8 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
                 onClick={() => handleToggleApp(app)}
                 className={`px-3 py-1 rounded-lg border-2 text-sm font-mono transition-all ${
                   isSelected
-                    ? 'border-indigo-500 bg-indigo-900/30 text-white'
-                    : 'border-gray-600 bg-gray-900/30 text-muted-foreground/70 hover:border-gray-500'
+                    ? 'border-primary bg-primary/10 text-white'
+                    : 'border-border bg-muted/30 text-muted-foreground hover:border-primary/40'
                 }`}
               >
                 {app}
@@ -145,12 +145,12 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
 
         {config.apps && config.apps.length > 0 && (
           <div className="mb-3">
-            <div className="text-xs text-muted-foreground/70 mb-2">Selected:</div>
+            <div className="text-xs text-muted-foreground mb-2">Selected:</div>
             <div className="flex flex-wrap gap-2">
               {config.apps.map((app) => (
-                <div key={app} className="flex items-center gap-2 px-3 py-1 bg-indigo-900/30 border border-indigo-500/50 rounded-lg text-sm">
-                  <code className="text-indigo-300">{app}</code>
-                  <button type="button" onClick={() => handleRemoveApp(app)} className="text-muted-foreground/70 hover:text-red-400 transition-colors">
+                <div key={app} className="flex items-center gap-2 px-3 py-1 bg-primary/10 border border-primary/30 rounded-lg text-sm">
+                  <code className="text-primary">{app}</code>
+                  <button type="button" onClick={() => handleRemoveApp(app)} className="text-muted-foreground hover:text-critical transition-colors">
                     <X className="w-3 h-3" />
                   </button>
                 </div>
@@ -166,12 +166,12 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
             onChange={(e) => setNewApp(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleAddApp()}
             placeholder="e.g., skype.exe"
-            className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+            className="flex-1 px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
           />
           <button
             type="button"
             onClick={handleAddApp}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center gap-2"
+            className="px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
             Add
@@ -180,27 +180,27 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
       </div>
 
       {/* Typed-message inspection */}
-      <div className="border-t border-gray-700 pt-6">
-        <label className="flex items-start gap-3 p-3 rounded-lg border-2 border-amber-500/40 bg-amber-900/10 cursor-pointer hover:border-amber-500/60 transition-all">
+      <div className="border-t border-border pt-6">
+        <label className="flex items-start gap-3 p-3 rounded-lg border-2 border-warning/40 bg-warning/10 cursor-pointer hover:border-warning/60 transition-all">
           <input
             type="checkbox"
             checked={config.inspect_messages ?? false}
             onChange={(e) => onChange({ ...config, inspect_messages: e.target.checked })}
-            className="w-4 h-4 mt-0.5 text-indigo-400"
+            className="w-4 h-4 mt-0.5 text-primary"
           />
           <div>
-            <div className="text-white font-medium text-sm flex items-center gap-2">
-              <Keyboard className="w-4 h-4 text-amber-400" />
+            <div className="text-foreground font-medium text-sm flex items-center gap-2">
+              <Keyboard className="w-4 h-4 text-warning" />
               Also inspect typed messages (not just file attachments)
             </div>
-            <div className="text-muted-foreground/70 text-xs mt-1">
+            <div className="text-muted-foreground text-xs mt-1">
               A different, separate control from the attachment settings above. When on, the agent watches for
               the send key (Enter) in a managed app, reads the message box, and classifies it locally before the
               message leaves. Off by default and does not inherit from anything else on this policy -- this is a
               decision to make on purpose.
             </div>
             {(config.inspect_messages ?? false) && config.action === 'block' && (
-              <div className="text-amber-300 text-xs mt-2 font-medium">
+              <div className="text-warning text-xs mt-2 font-medium">
                 ⚠ Action is set to Block above, so this will hold and drop the send keystroke for a sensitive
                 message in a managed app. Strongly recommended: validate on Alert first (switch Action to Alert),
                 confirm detections on the dashboard look right, THEN switch to Block. Alert mode never touches
@@ -212,7 +212,7 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
 
         {(config.inspect_messages ?? false) && (
           <div className="mt-3">
-            <label className="block text-xs text-muted-foreground/70 mb-2">
+            <label className="block text-xs text-muted-foreground mb-2">
               Data types that count as sensitive in a typed message (separate from attachments -- a phone number
               typed into chat is ordinary; leave INDIAN_PHONE off unless you actually want it flagged there).
             </label>
@@ -227,8 +227,8 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
                     onClick={() => toggleDataType(type)}
                     className={`px-3 py-1 rounded-lg border-2 text-xs font-mono transition-all ${
                       isSelected
-                        ? 'border-indigo-500 bg-indigo-900/30 text-white'
-                        : 'border-gray-600 bg-gray-900/30 text-muted-foreground/70 hover:border-gray-500'
+                        ? 'border-primary bg-primary/10 text-white'
+                        : 'border-border bg-muted/30 text-muted-foreground hover:border-primary/40'
                     }`}
                   >
                     {type}
@@ -237,7 +237,7 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
               })}
             </div>
             {(config.message_data_types ?? []).length === 0 && rawConfig?.message_data_types !== undefined && (
-              <div className="text-muted-foreground/70 text-xs mt-2">
+              <div className="text-muted-foreground text-xs mt-2">
                 No data types selected -- typed-message inspection is effectively off even though the checkbox
                 above is checked.
               </div>
@@ -248,26 +248,26 @@ export default function MessagingAppControlPolicyForm({ config: rawConfig, onCha
 
       {/* Exceptions */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">Exceptions (Always Allowed)</label>
+        <label className="block text-sm font-medium text-foreground/90 mb-3">Exceptions (Always Allowed)</label>
         <div className="grid gap-3 sm:grid-cols-2">
           <div>
-            <label className="block text-xs text-muted-foreground/70 mb-1">Users</label>
+            <label className="block text-xs text-muted-foreground mb-1">Users</label>
             <input
               type="text"
               defaultValue={fromList(config.exceptions?.users)}
               onChange={(e) => setExc('users', e.target.value)}
               placeholder="DOMAIN\admin"
-              className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+              className="w-full px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
             />
           </div>
           <div>
-            <label className="block text-xs text-muted-foreground/70 mb-1">File Types</label>
+            <label className="block text-xs text-muted-foreground mb-1">File Types</label>
             <input
               type="text"
               defaultValue={fromList(config.exceptions?.file_types)}
               onChange={(e) => setExc('file_types', e.target.value)}
               placeholder="txt, log"
-              className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+              className="w-full px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
             />
           </div>
         </div>
