@@ -32,6 +32,14 @@ type PolicyStats = {
   violations: number
 }
 
+// GET /policies/ defaults to limit=100 (backend max is 1000, enforced via
+// Query(..., le=1000)) and the page never passed a limit at all, so any
+// deployment with >100 policies would silently show only the first 100 --
+// split across the Active/Inactive tables with no indication anything was
+// missing. Request the backend's actual max, and warn if even that isn't
+// enough (same pattern used for Rules.tsx and Log Explorer's exports).
+const POLICIES_FETCH_LIMIT = 1000
+
 export default function PoliciesPage() {
   const { confirm, dialog: confirmDialog } = useConfirm()
   const queryClient = useQueryClient()
@@ -52,7 +60,7 @@ export default function PoliciesPage() {
   } = useQuery({
     queryKey: ['policies'],
     queryFn: async () => {
-      const apiPolicies = await getPolicies({ enabled_only: false })
+      const apiPolicies = await getPolicies({ enabled_only: false, limit: POLICIES_FETCH_LIMIT })
       return apiPolicies.map(transformApiPolicyToFrontend)
     },
     refetchInterval: 30000, // Refresh every 30 seconds
@@ -227,6 +235,12 @@ export default function PoliciesPage() {
   const activePolicies = policies.filter(p => p.enabled)
   const inactivePolicies = policies.filter(p => !p.enabled)
 
+  // stats.total comes from a separate SQL COUNT(*) that isn't bounded by
+  // POLICIES_FETCH_LIMIT, so it stays accurate even if the list fetch above
+  // ever gets capped -- compare the two to detect and surface truncation
+  // instead of silently showing an incomplete list.
+  const isTruncated = !isStatsLoading && policies.length < stats.total
+
   if (isLoading) {
     return <LoadingSpinner size="lg" />
   }
@@ -352,6 +366,12 @@ export default function PoliciesPage() {
           </div>
         </div>
       </div>
+
+      {isTruncated && (
+        <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+          Showing {policies.length} of {stats.total} policies. Narrow this down or contact an admin to raise the fetch limit.
+        </div>
+      )}
 
       {/* Active Policies Table */}
       <PolicyTable

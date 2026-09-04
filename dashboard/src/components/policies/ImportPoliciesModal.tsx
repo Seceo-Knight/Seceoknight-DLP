@@ -101,7 +101,7 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
             <button
               onClick={handleImport}
               disabled={!bundle || importing}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
+              className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-secondary disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
             >
               <Upload className="w-4 h-4" />
               {importing ? 'Importing...' : 'Import'}
@@ -113,7 +113,7 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
         <div className="space-y-4">
           {!result && (
             <>
-              <p className="text-sm text-muted-foreground/70">
+              <p className="text-sm text-muted-foreground">
                 Select a JSON file exported from any SeceoKnight deployment&apos;s Export Policies action.
               </p>
 
@@ -133,28 +133,28 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
               </button>
 
               {parseError && (
-                <div className="flex items-start gap-2 p-3 bg-red-900/20 border border-red-500/30 rounded-lg text-sm text-red-300">
+                <div className="flex items-start gap-2 p-3 bg-critical/10 border border-critical/30 rounded-lg text-sm text-critical">
                   <XCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
                   {parseError}
                 </div>
               )}
 
               {bundle && (
-                <div className="p-4 bg-gray-900/50 rounded-lg border border-gray-700 space-y-3">
-                  <div className="flex items-center gap-2 text-sm text-white">
-                    <FileJson className="w-4 h-4 text-indigo-400" />
+                <div className="p-4 bg-muted/30 rounded-lg border border-border space-y-3">
+                  <div className="flex items-center gap-2 text-sm text-foreground">
+                    <FileJson className="w-4 h-4 text-primary" />
                     {bundle.policies.length} polic{bundle.policies.length === 1 ? 'y' : 'ies'} found
                   </div>
                   <div className="max-h-32 overflow-y-auto space-y-1">
                     {bundle.policies.map((p, i) => (
-                      <div key={i} className="text-xs text-muted-foreground/70 truncate">
+                      <div key={i} className="text-xs text-muted-foreground truncate">
                         • {p.name || '(unnamed)'}
                       </div>
                     ))}
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-200 mb-2">
+                    <label className="block text-xs font-medium text-foreground/90 mb-2">
                       If a policy name already exists:
                     </label>
                     <div className="flex gap-2">
@@ -162,8 +162,8 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
                         onClick={() => setOnConflict('skip')}
                         className={`flex-1 px-3 py-2 rounded-lg border-2 text-xs transition-all ${
                           onConflict === 'skip'
-                            ? 'border-indigo-500 bg-indigo-900/30 text-white'
-                            : 'border-gray-600 bg-gray-900/30 text-muted-foreground/70'
+                            ? 'border-primary bg-primary/10 text-foreground'
+                            : 'border-border bg-transparent text-muted-foreground'
                         }`}
                       >
                         Skip it
@@ -172,8 +172,8 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
                         onClick={() => setOnConflict('rename')}
                         className={`flex-1 px-3 py-2 rounded-lg border-2 text-xs transition-all ${
                           onConflict === 'rename'
-                            ? 'border-indigo-500 bg-indigo-900/30 text-white'
-                            : 'border-gray-600 bg-gray-900/30 text-muted-foreground/70'
+                            ? 'border-primary bg-primary/10 text-foreground'
+                            : 'border-border bg-transparent text-muted-foreground'
                         }`}
                       >
                         Import as copy
@@ -187,18 +187,18 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
 
           {result && (
             <div className="space-y-3">
-              <div className="p-4 bg-gray-900/50 rounded-lg border border-gray-700 text-sm text-white">
+              <div className="p-4 bg-muted/30 rounded-lg border border-border text-sm text-foreground">
                 {result.summary}
               </div>
 
               {result.created.length > 0 && (
                 <div>
-                  <div className="flex items-center gap-2 text-sm text-green-400 mb-2">
+                  <div className="flex items-center gap-2 text-sm text-success mb-2">
                     <CheckCircle className="w-4 h-4" /> Created
                   </div>
                   <div className="space-y-1 max-h-32 overflow-y-auto">
                     {result.created.map((c) => (
-                      <div key={c.id} className="text-xs text-muted-foreground/70">• {c.name}</div>
+                      <div key={c.id} className="text-xs text-muted-foreground">• {c.name}</div>
                     ))}
                   </div>
                 </div>
@@ -206,12 +206,12 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
 
               {result.skipped.length > 0 && (
                 <div>
-                  <div className="flex items-center gap-2 text-sm text-amber-400 mb-2">
+                  <div className="flex items-center gap-2 text-sm text-warning mb-2">
                     <AlertTriangle className="w-4 h-4" /> Skipped
                   </div>
                   <div className="space-y-1 max-h-32 overflow-y-auto">
                     {result.skipped.map((s, i) => (
-                      <div key={i} className="text-xs text-muted-foreground/70">• {s.name} -- {s.reason}</div>
+                      <div key={i} className="text-xs text-muted-foreground">• {s.name} -- {s.reason}</div>
                     ))}
                   </div>
                 </div>
@@ -219,12 +219,12 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
 
               {result.errors.length > 0 && (
                 <div>
-                  <div className="flex items-center gap-2 text-sm text-red-400 mb-2">
+                  <div className="flex items-center gap-2 text-sm text-critical mb-2">
                     <XCircle className="w-4 h-4" /> Failed
                   </div>
                   <div className="space-y-1 max-h-32 overflow-y-auto">
                     {result.errors.map((e, i) => (
-                      <div key={i} className="text-xs text-muted-foreground/70">• {e.name} -- {e.reason}</div>
+                      <div key={i} className="text-xs text-muted-foreground">• {e.name} -- {e.reason}</div>
                     ))}
                   </div>
                 </div>
