@@ -59,8 +59,22 @@ class PrinterUpdate(BaseModel):
     is_enabled: Optional[bool] = None
 
 
+SCOPE_VALUES = ("block_all", "block_network", "block_local", "allowlist")
+
+
 class EnforcementUpdate(BaseModel):
-    enabled: bool = Field(..., description="Turn printer allowlist enforcement on/off")
+    enabled: bool = Field(..., description="Turn printer control enforcement on/off")
+    scope: str = Field(
+        "allowlist",
+        description="'block_all' (no printer at all) | 'block_network' | 'block_local' | "
+                    "'allowlist' (only sanctioned-printer rows below) -- same options as the "
+                    "printer_control policy type in the general Policy Creator, since this "
+                    "endpoint finds-or-creates that same policy row.",
+    )
+    mode: str = Field(
+        "enforce",
+        description="'enforce' (actually cancel matching print jobs) or 'audit' (log only)",
+    )
 
 
 def _printer_out(p: SanctionedPrinter) -> dict:
@@ -86,9 +100,23 @@ async def _allowlist_policy(db: AsyncSession):
 
 
 async def _allowlist_status(db: AsyncSession) -> dict:
+    """Whether printer control is enforced, plus its scope/mode -- mirrors
+    the normalization agents.py's get_printer_policy() applies, so this
+    page's badge/description always describes what the agent will actually
+    do rather than assuming allowlist/enforce. A printer_control policy can
+    be created or edited through the general Policy Creator
+    (PrinterControlPolicyForm.tsx) with any of the four scopes and either
+    mode -- this reads back whatever that produced instead of guessing."""
     policy = await _allowlist_policy(db)
     enforced = bool(policy and policy.status == "active")
-    return {"enforced": enforced}
+    cfg = (policy.config or {}) if policy else {}
+    scope = str(cfg.get("scope") or "block_network").lower() if enforced else "none"
+    if scope not in SCOPE_VALUES:
+        scope = "block_network"
+    mode = str(cfg.get("mode") or "enforce").lower() if enforced else "off"
+    if mode not in ("enforce", "audit"):
+        mode = "enforce"
+    return {"enforced": enforced, "scope": scope, "mode": mode}
 
 
 @router.get("/")
@@ -215,29 +243,39 @@ async def set_enforcement(
     current_user: User = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Turn printer allowlist enforcement on/off by finding-or-creating the
-    single backing ``printer_control`` policy row (scope=allowlist).
+    """Turn printer control enforcement on/off, and set its scope/mode, by
+    finding-or-creating the single backing ``printer_control`` policy row --
+    the SAME row the general Policy Creator's PrinterControlPolicyForm edits.
 
-    This is acted on by the agent (see get_printer_policy() in agents.py and
-    ShouldBlockPrinter() in agent.cpp) -- toggling this on in allowlist scope
-    genuinely blocks any printer not on the list. Deny-decision rows are
-    enforced regardless of this toggle's scope, in every scope.
+    This used to hardcode ``scope: "allowlist"`` on every call regardless of
+    what body.scope said (the field didn't even exist), so clicking On/Off
+    here could silently clobber a block_all/block_network/block_local or
+    audit-mode configuration an admin had set up through the Policy Creator
+    -- the policy row is shared, but only this endpoint's opinion of scope
+    ever got written. Persisting the caller's actual scope/mode instead
+    means both control surfaces agree on what's enforced.
+
+    Acted on by the agent (see get_printer_policy() in agents.py and
+    ShouldBlockPrinter() in agent.cpp). Deny-decision rows are enforced
+    regardless of scope, in every scope.
     """
+    scope = body.scope if body.scope in SCOPE_VALUES else "allowlist"
+    mode = body.mode if body.mode in ("enforce", "audit") else "enforce"
     policy = await _allowlist_policy(db)
     if policy:
         policy.status = "active" if body.enabled else "inactive"
-        policy.config = {**(policy.config or {}), "scope": "allowlist"}
+        policy.config = {**(policy.config or {}), "scope": scope, "mode": mode}
         policy.updated_at = datetime.now(timezone.utc)
     else:
         policy = Policy(
             name=PRINTER_CONTROL_POLICY_NAME,
-            description="Restricts printing to printers on the sanctioned-printers allowlist.",
+            description="Restricts printing per the configured scope (all / network / local / allowlist).",
             status="active" if body.enabled else "inactive",
             priority=100,
             type=PRINTER_CONTROL_TYPE,
             domain="threat",
             severity="medium",
-            config={"scope": "allowlist"},
+            config={"scope": scope, "mode": mode},
             conditions={},
             actions={},
             compliance_tags=[],
@@ -245,5 +283,5 @@ async def set_enforcement(
         )
         db.add(policy)
     await db.commit()
-    await audit_log(current_user.id, "security.printers.enforcement", {"enabled": body.enabled})
+    await audit_log(current_user.id, "security.printers.enforcement", {"enabled": body.enabled, "scope": scope, "mode": mode})
     return await _allowlist_status(db)

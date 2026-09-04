@@ -20,6 +20,12 @@ export interface SanctionedPrinter {
   approved_at?: string | null
 }
 
+/** Same values as the printer_control policy type in the general Policy
+ *  Creator (PrinterControlPolicyForm.tsx) -- this page's quick toggle and
+ *  that full form edit the same underlying policy row. */
+export type PrinterControlScope = 'block_all' | 'block_network' | 'block_local' | 'allowlist' | 'none'
+export type PrinterControlMode = 'enforce' | 'audit' | 'off'
+
 export interface PrinterListResponse {
   printers: SanctionedPrinter[]
   count: number
@@ -27,6 +33,8 @@ export interface PrinterListResponse {
   allow_count: number
   deny_count: number
   enforced: boolean
+  scope: PrinterControlScope
+  mode: PrinterControlMode
 }
 
 export interface ApprovePrinterBody {
@@ -60,8 +68,8 @@ export const revokePrinter = async (id: string): Promise<void> => {
 }
 
 export const setPrinterEnforcement = async (
-  body: { enabled: boolean },
-): Promise<{ enforced: boolean }> => {
+  body: { enabled: boolean; scope?: Exclude<PrinterControlScope, 'none'>; mode?: Exclude<PrinterControlMode, 'off'> },
+): Promise<{ enforced: boolean; scope: PrinterControlScope; mode: PrinterControlMode }> => {
   const { data } = await apiClient.post('/printers/enforcement', body)
   return data
 }
