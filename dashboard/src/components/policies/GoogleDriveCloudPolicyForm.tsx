@@ -154,12 +154,12 @@ export default function GoogleDriveCloudPolicyForm({
       {/* Connection Selection */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <label className="block text-sm font-medium text-gray-200">
+          <label className="block text-sm font-medium text-foreground/90">
             Google Drive Account
           </label>
           <button
             onClick={loadConnections}
-            className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition-colors"
+            className="text-xs text-primary hover:text-primary flex items-center gap-1 transition-colors"
           >
             <RefreshCcw className="h-3 w-3" />
             Refresh List
@@ -167,22 +167,22 @@ export default function GoogleDriveCloudPolicyForm({
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center p-8 bg-gray-900/30 rounded-lg border border-dashed border-gray-700">
+          <div className="flex items-center justify-center p-8 bg-muted/30 rounded-lg border border-dashed border-border">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         ) : connections.length === 0 ? (
-          <div className="text-center p-8 bg-gray-900/30 rounded-lg border border-dashed border-gray-700 space-y-3">
-            <div className="inline-flex p-3 rounded-full bg-gray-800 text-muted-foreground/70">
+          <div className="text-center p-8 bg-muted/30 rounded-lg border border-dashed border-border space-y-3">
+            <div className="inline-flex p-3 rounded-full bg-muted text-muted-foreground">
               <Cloud className="h-6 w-6" />
             </div>
             <div>
-              <p className="font-medium text-muted-foreground/50">No accounts connected</p>
+              <p className="font-medium text-muted-foreground">No accounts connected</p>
               <p className="text-sm text-muted-foreground">Connect a Google Drive account to start monitoring</p>
             </div>
             <button
               onClick={handleConnect}
               disabled={connecting}
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-60 transition-colors"
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-primary hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary disabled:opacity-60 transition-colors"
             >
               {connecting ? (
                 <>
@@ -206,22 +206,22 @@ export default function GoogleDriveCloudPolicyForm({
                 className={`
                   relative rounded-lg border p-4 cursor-pointer flex items-center space-x-3 transition-all
                   ${config.connectionId === conn.id 
-                    ? 'ring-2 ring-indigo-500 border-indigo-500 bg-indigo-900/20' 
-                    : 'border-gray-700 bg-gray-800 hover:border-gray-600 hover:bg-gray-700'}
+                    ? 'ring-2 ring-primary border-primary bg-primary/10' 
+                    : 'border-border bg-muted hover:border-border hover:bg-secondary'}
                 `}
               >
                 <div className="flex-shrink-0">
                   <div className={`h-10 w-10 rounded-full flex items-center justify-center font-bold text-lg ${
                     config.connectionId === conn.id
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-gray-700 text-muted-foreground/70'
+                      ? 'bg-primary text-white'
+                      : 'bg-secondary text-muted-foreground'
                   }`}>
                     {conn.connection_name?.[0] || conn.google_user_email?.[0] || 'G'}
                   </div>
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className={`text-sm font-medium truncate ${
-                    config.connectionId === conn.id ? 'text-white' : 'text-muted-foreground/50'
+                    config.connectionId === conn.id ? 'text-foreground' : 'text-muted-foreground'
                   }`}>
                     {conn.connection_name || 'Google Drive'}
                   </p>
@@ -235,7 +235,7 @@ export default function GoogleDriveCloudPolicyForm({
                   )}
                 </div>
                 {config.connectionId === conn.id && (
-                  <div className="flex-shrink-0 text-indigo-500">
+                  <div className="flex-shrink-0 text-primary">
                     <Check className="h-5 w-5" />
                   </div>
                 )}
@@ -246,7 +246,7 @@ export default function GoogleDriveCloudPolicyForm({
             <button
               onClick={handleConnect}
               disabled={connecting}
-              className="relative rounded-lg border border-dashed border-gray-600 p-4 flex items-center justify-center space-x-2 hover:border-gray-500 hover:bg-gray-800 transition-all text-muted-foreground/70 hover:text-muted-foreground/50"
+              className="relative rounded-lg border border-dashed border-border p-4 flex items-center justify-center space-x-2 hover:border-primary/40 hover:bg-muted transition-all text-muted-foreground hover:text-foreground"
             >
               <Plus className="h-5 w-5" />
               <span className="text-sm font-medium">Add Another</span>
@@ -258,10 +258,10 @@ export default function GoogleDriveCloudPolicyForm({
       {/* Protected Folders Selection */}
       {config.connectionId && (
         <div className="space-y-3">
-          <label className="block text-sm font-medium text-gray-200">
+          <label className="block text-sm font-medium text-foreground/90">
             Protected Folders
           </label>
-          <p className="text-sm text-muted-foreground/70">
+          <p className="text-sm text-muted-foreground">
             Select the folders you want to monitor for activity.
           </p>
           
@@ -271,12 +271,12 @@ export default function GoogleDriveCloudPolicyForm({
             onChange={handleFoldersChange}
           />
 
-          <div className="mt-4 rounded-lg border border-gray-700 bg-gray-900/40 p-4 space-y-4">
+          <div className="mt-4 rounded-lg border border-border bg-muted/30 p-4 space-y-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-sm text-muted-foreground/50">
+                <p className="text-sm text-muted-foreground">
                   Monitoring since{' '}
-                  <span className="font-medium text-white">
+                  <span className="font-medium text-foreground">
                     {monitoringSince ? formatDate(monitoringSince) : 'Not initialized yet'}
                   </span>
                 </p>
@@ -288,25 +288,25 @@ export default function GoogleDriveCloudPolicyForm({
                 <button
                   onClick={() => handleResetBaseline('selected')}
                   disabled={resettingBaseline || selectedFolders.length === 0}
-                  className="px-3 py-1.5 text-xs rounded-md border border-indigo-500/50 text-indigo-300 hover:bg-indigo-900/30 disabled:opacity-50 transition-colors"
+                  className="px-3 py-1.5 text-xs rounded-md border border-primary/30 text-primary hover:bg-primary/10 disabled:opacity-50 transition-colors"
                 >
                   {resettingBaseline ? 'Updating...' : 'Reset Selected Baseline'}
                 </button>
                 <button
                   onClick={() => handleResetBaseline('connection')}
                   disabled={resettingBaseline}
-                  className="px-3 py-1.5 text-xs rounded-md border border-gray-600 text-gray-200 hover:bg-gray-800 disabled:opacity-50 transition-colors"
+                  className="px-3 py-1.5 text-xs rounded-md border border-border text-foreground/90 hover:bg-muted disabled:opacity-50 transition-colors"
                 >
                   {resettingBaseline ? 'Updating...' : 'Reset Connection Baseline'}
                 </button>
               </div>
             </div>
 
-            <div className="border border-gray-800 rounded-md overflow-hidden">
-              <div className="bg-gray-800/60 px-3 py-2 text-xs text-muted-foreground/70 flex items-center justify-between">
+            <div className="border border-border rounded-md overflow-hidden">
+              <div className="bg-muted/60 px-3 py-2 text-xs text-muted-foreground flex items-center justify-between">
                 <span>Selected Folders</span>
                 {baselineLoading && (
-                  <span className="flex items-center gap-1 text-indigo-300">
+                  <span className="flex items-center gap-1 text-primary">
                     <Loader2 className="h-3 w-3 animate-spin" />
                     Refreshing...
                   </span>
@@ -315,10 +315,10 @@ export default function GoogleDriveCloudPolicyForm({
               {selectedFolderBaselines.length === 0 ? (
                 <div className="p-4 text-xs text-muted-foreground">No folders selected yet.</div>
               ) : (
-                <div className="divide-y divide-gray-800 text-xs">
+                <div className="divide-y divide-border text-xs">
                   {selectedFolderBaselines.map((folder) => (
                     <div key={folder.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-3 py-2">
-                      <div className="text-muted-foreground/50 font-medium truncate">{folder.name}</div>
+                      <div className="text-muted-foreground font-medium truncate">{folder.name}</div>
                       <div className="text-muted-foreground mt-1 sm:mt-0">
                         {folder.baseline ? formatDate(folder.baseline) : 'Pending baseline'}
                       </div>
@@ -333,7 +333,7 @@ export default function GoogleDriveCloudPolicyForm({
 
       {/* Polling Interval */}
       <div className="space-y-3">
-        <label className="block text-sm font-medium text-gray-200">
+        <label className="block text-sm font-medium text-foreground/90">
           Polling Interval
         </label>
         <div className="flex flex-wrap gap-2">
@@ -346,8 +346,8 @@ export default function GoogleDriveCloudPolicyForm({
               }}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border ${
                 !customPolling && config.pollingInterval === interval
-                  ? 'bg-indigo-600 border-indigo-600 text-white'
-                  : 'bg-gray-800 border-gray-700 text-muted-foreground/50 hover:bg-gray-700'
+                  ? 'bg-primary border-primary text-white'
+                  : 'bg-muted border-border text-muted-foreground hover:bg-secondary'
               }`}
             >
               {interval} min
@@ -357,8 +357,8 @@ export default function GoogleDriveCloudPolicyForm({
             onClick={() => setCustomPolling(true)}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all border ${
               customPolling
-                ? 'bg-indigo-600 border-indigo-600 text-white'
-                : 'bg-gray-800 border-gray-700 text-muted-foreground/50 hover:bg-gray-700'
+                ? 'bg-primary border-primary text-white'
+                : 'bg-muted border-border text-muted-foreground hover:bg-secondary'
             }`}
           >
             Custom
@@ -373,9 +373,9 @@ export default function GoogleDriveCloudPolicyForm({
               max="1440"
               value={config.pollingInterval}
               onChange={(e) => updateConfig('pollingInterval', Math.max(1, parseInt(e.target.value) || 1))}
-              className="w-24 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+              className="w-24 px-3 py-2 bg-muted border border-border rounded-lg text-foreground placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary text-sm"
             />
-            <span className="text-sm text-muted-foreground/70">minutes</span>
+            <span className="text-sm text-muted-foreground">minutes</span>
           </div>
         )}
         
@@ -385,14 +385,14 @@ export default function GoogleDriveCloudPolicyForm({
       </div>
 
       {/* Action (Read-only for now) */}
-      <div className="rounded-lg bg-indigo-900/30 border border-indigo-500/30 p-4">
+      <div className="rounded-lg bg-primary/10 border border-primary/30 p-4">
         <div className="flex">
           <div className="flex-shrink-0">
-            <Cloud className="h-5 w-5 text-indigo-400" aria-hidden="true" />
+            <Cloud className="h-5 w-5 text-primary" aria-hidden="true" />
           </div>
           <div className="ml-3">
-            <h3 className="text-sm font-medium text-indigo-300">Log-Only Mode</h3>
-            <div className="mt-2 text-sm text-indigo-200/80">
+            <h3 className="text-sm font-medium text-primary">Log-Only Mode</h3>
+            <div className="mt-2 text-sm text-primary/90">
               <p>
                 Cloud monitoring currently supports logging activities only. Blocking capabilities require endpoint agent integration.
               </p>

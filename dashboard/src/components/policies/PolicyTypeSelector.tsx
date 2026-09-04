@@ -134,35 +134,35 @@ export default function PolicyTypeSelector({ selectedType, onSelectType }: Polic
   return (
     <div className="space-y-4">
       <div>
-        <h3 className="text-lg font-semibold text-white mb-2">Select Policy Type (v2)</h3>
-        <p className="text-sm text-muted-foreground/70">Choose the type of monitoring policy you want to create</p>
+        <h3 className="text-lg font-semibold text-foreground mb-2">Select Policy Type</h3>
+        <p className="text-sm text-muted-foreground">Choose the type of monitoring policy you want to create</p>
       </div>
-      
+
       <div className="grid grid-cols-2 gap-4">
         {policyTypes.map(({ type, label, description, icon: Icon }) => {
           const isSelected = selectedType === type
-          
+
           return (
             <button
               key={type}
               onClick={() => onSelectType(type)}
               className={`p-4 rounded-xl border-2 transition-all text-left ${
                 isSelected
-                  ? 'border-indigo-500 bg-indigo-900/30 text-white'
-                  : 'border-gray-600 bg-gray-900/30 text-muted-foreground/70 hover:border-gray-500 hover:text-muted-foreground/50'
+                  ? 'border-primary bg-primary/10'
+                  : 'border-border bg-card hover:border-primary/40 hover:bg-accent'
               }`}
             >
               <div className="flex items-start gap-3">
-                <div className={`p-2 rounded-lg ${
-                  isSelected 
-                    ? 'bg-indigo-800/50 text-indigo-300' 
-                    : 'bg-gray-800/50 text-muted-foreground'
+                <div className={`p-2 rounded-lg shrink-0 ${
+                  isSelected
+                    ? 'bg-primary/15 text-primary'
+                    : 'bg-secondary text-muted-foreground'
                 }`}>
                   <Icon className="w-5 h-5" />
                 </div>
-                <div className="flex-1">
-                  <h4 className="font-semibold text-sm mb-1">{label}</h4>
-                  <p className="text-xs opacity-70">{description}</p>
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-semibold text-sm mb-1 text-foreground">{label}</h4>
+                  <p className="text-xs text-muted-foreground">{description}</p>
                 </div>
               </div>
             </button>

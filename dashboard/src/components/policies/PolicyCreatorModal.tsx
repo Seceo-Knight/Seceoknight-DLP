@@ -547,20 +547,20 @@ export default function PolicyCreatorModal({
                 <div className="flex flex-col items-center w-full">
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all ${
                     step >= s
-                      ? 'bg-indigo-600 border-indigo-500 text-white'
-                      : 'bg-gray-700 border-gray-600 text-muted-foreground/70'
+                      ? 'bg-primary border-primary text-white'
+                      : 'bg-secondary border-border text-muted-foreground'
                   }`}>
                     {step > s ? <Check className="w-5 h-5" /> : s}
                   </div>
-                  <span className={`text-xs mt-2 ${
-                    step >= s ? 'text-white' : 'text-muted-foreground/70'
+                  <span className={`text-xs mt-2 font-medium ${
+                    step >= s ? 'text-foreground' : 'text-muted-foreground'
                   }`}>
                     {s === 1 ? 'Type' : s === 2 ? 'Config' : 'Review'}
                   </span>
                 </div>
                 {s < 3 && (
                   <div className={`h-0.5 flex-1 mx-2 ${
-                    step > s ? 'bg-indigo-600' : 'bg-gray-700'
+                    step > s ? 'bg-primary' : 'bg-border'
                   }`} />
                 )}
               </div>
@@ -583,37 +583,37 @@ export default function PolicyCreatorModal({
           {step === 2 && policyType && (
             <div className="space-y-6">
               {/* Basic Information */}
-              <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-700">
-                <h4 className="text-lg font-semibold text-white mb-4">Basic Information</h4>
+              <div className="bg-muted/30 rounded-xl p-6 border border-border">
+                <h4 className="text-lg font-semibold text-foreground mb-4">Basic Information</h4>
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-200 mb-2">Policy Name *</label>
+                    <label className="block text-sm font-medium text-foreground/90 mb-2">Policy Name *</label>
                     <input
                       type="text"
                       value={policyName}
                       onChange={(e) => setPolicyName(e.target.value)}
-                      className="w-full px-4 py-3 bg-gray-900/50 border-2 border-gray-600 rounded-xl text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all"
+                      className="input w-full"
                       placeholder="e.g., Block Sensitive Data Transfer"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-200 mb-2">Description</label>
+                    <label className="block text-sm font-medium text-foreground/90 mb-2">Description</label>
                     <textarea
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
                       rows={3}
-                      className="w-full px-4 py-3 bg-gray-900/50 border-2 border-gray-600 rounded-xl text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all resize-none"
+                      className="input w-full resize-none"
                       placeholder="Describe what this policy does..."
                     />
                   </div>
                   <div className={`grid ${policyType === 'classification_aware_policy' ? 'grid-cols-1' : 'grid-cols-2'} gap-4`}>
                     {policyType !== 'classification_aware_policy' && (
                       <div>
-                        <label className="block text-sm font-medium text-gray-200 mb-2">Severity Level</label>
+                        <label className="block text-sm font-medium text-foreground/90 mb-2">Severity Level</label>
                         <select
                           value={severity}
                           onChange={(e) => setSeverity(e.target.value as typeof severity)}
-                          className="w-full px-4 py-3 bg-gray-900/50 border-2 border-gray-600 rounded-xl text-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all"
+                          className="input w-full"
                         >
                           <option value="low">Low</option>
                           <option value="medium">Medium</option>
@@ -623,26 +623,26 @@ export default function PolicyCreatorModal({
                       </div>
                     )}
                     <div>
-                      <label className="block text-sm font-medium text-gray-200 mb-2">Priority</label>
+                      <label className="block text-sm font-medium text-foreground/90 mb-2">Priority</label>
                       <input
                         type="number"
                         value={priority}
                         onChange={(e) => setPriority(parseInt(e.target.value) || 100)}
                         min="1"
                         max="1000"
-                        className="w-full px-4 py-3 bg-gray-900/50 border-2 border-gray-600 rounded-xl text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all"
+                        className="input w-full"
                         placeholder="1-1000"
                       />
-                      <p className="text-xs text-muted-foreground/70 mt-1">Higher priority policies are evaluated first</p>
+                      <p className="text-xs text-muted-foreground mt-1">Higher priority policies are evaluated first</p>
                     </div>
                   </div>
                 {/* Agent Scope */}
                 <div className="space-y-2">
-                  <label className="block text-sm font-medium text-gray-200 mb-2">Target Agent (optional)</label>
+                  <label className="block text-sm font-medium text-foreground/90 mb-2">Target Agent (optional)</label>
                   <select
                     value={agentId}
                     onChange={(e) => setAgentId(e.target.value)}
-                    className="w-full px-4 py-3 bg-gray-900/50 border-2 border-gray-600 rounded-xl text-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all text-sm"
+                    className="input w-full text-sm"
                   >
                     <option value="">All agents</option>
                     {agents.map((agent) => (
@@ -651,7 +651,7 @@ export default function PolicyCreatorModal({
                       </option>
                     ))}
                   </select>
-                  <p className="text-xs text-muted-foreground/70">
+                  <p className="text-xs text-muted-foreground">
                     Leave empty to apply to all agents. Select one agent to scope this policy.
                   </p>
                 </div>
@@ -661,9 +661,9 @@ export default function PolicyCreatorModal({
                       id="policy-enabled"
                       checked={enabled}
                       onChange={(e) => setEnabled(e.target.checked)}
-                      className="h-4 w-4 text-indigo-400 focus:ring-indigo-500 border-gray-600 rounded bg-gray-900/50"
+                      className="h-4 w-4 text-primary focus:ring-primary border-border rounded bg-background"
                     />
-                    <label htmlFor="policy-enabled" className="text-sm font-medium text-gray-200">
+                    <label htmlFor="policy-enabled" className="text-sm font-medium text-foreground/90">
                       Enable Policy
                     </label>
                   </div>
@@ -671,8 +671,8 @@ export default function PolicyCreatorModal({
               </div>
 
               {/* Policy Type Specific Configuration */}
-              <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-700">
-                <h4 className="text-lg font-semibold text-white mb-4">Policy Configuration</h4>
+              <div className="bg-muted/30 rounded-xl p-6 border border-border">
+                <h4 className="text-lg font-semibold text-foreground mb-4">Policy Configuration</h4>
                 {policyType === 'clipboard_monitoring' && (
                   <ClipboardPolicyForm
                     config={config as ClipboardConfig}
@@ -804,69 +804,69 @@ export default function PolicyCreatorModal({
 
           {step === 3 && (
             <div className="space-y-6">
-              <div className="bg-indigo-900/20 border border-indigo-500/50 rounded-xl p-6">
-                <h4 className="text-lg font-semibold text-indigo-300 mb-4">Policy Summary</h4>
+              <div className="bg-primary/5 border border-primary/30 rounded-xl p-6">
+                <h4 className="text-lg font-semibold text-primary mb-4">Policy Summary</h4>
                 <div className="space-y-3 text-sm">
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground/70">Name:</span>
-                    <span className="text-white font-medium">{policyName || 'Not set'}</span>
+                    <span className="text-muted-foreground">Name:</span>
+                    <span className="text-foreground font-medium">{policyName || 'Not set'}</span>
                   </div>
                   {description && (
                     <div>
-                      <span className="text-muted-foreground/70">Description:</span>
-                      <p className="text-white mt-1">{description}</p>
+                      <span className="text-muted-foreground">Description:</span>
+                      <p className="text-foreground mt-1">{description}</p>
                     </div>
                   )}
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground/70">Type:</span>
-                    <span className="text-white font-medium">{policyType ? policyType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'Not set'}</span>
+                    <span className="text-muted-foreground">Type:</span>
+                    <span className="text-foreground font-medium">{policyType ? policyType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'Not set'}</span>
                   </div>
                   {policyType !== 'classification_aware_policy' && (
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground/70">Severity:</span>
-                      <span className="text-white font-medium uppercase">{severity}</span>
+                      <span className="text-muted-foreground">Severity:</span>
+                      <span className="text-foreground font-medium uppercase">{severity}</span>
                     </div>
                   )}
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground/70">Priority:</span>
-                    <span className="text-white font-medium">{priority}</span>
+                    <span className="text-muted-foreground">Priority:</span>
+                    <span className="text-foreground font-medium">{priority}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground/70">Status:</span>
-                    <span className="text-white font-medium">{enabled ? 'Enabled' : 'Disabled'}</span>
+                    <span className="text-muted-foreground">Status:</span>
+                    <span className="text-foreground font-medium">{enabled ? 'Enabled' : 'Disabled'}</span>
                   </div>
                 </div>
               </div>
 
               {/* Configuration Preview */}
               {policyType === 'classification_aware_policy' ? (
-                <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-700">
-                  <h4 className="text-lg font-semibold text-white mb-4">Policy Rules</h4>
+                <div className="bg-muted/30 rounded-xl p-6 border border-border">
+                  <h4 className="text-lg font-semibold text-foreground mb-4">Policy Rules</h4>
                   <div className="space-y-4">
                     <div>
-                      <h5 className="text-sm font-semibold text-muted-foreground/50 mb-2">Conditions ({classificationPolicy.conditions.match === 'all' ? 'Match ALL' : 'Match ANY'})</h5>
+                      <h5 className="text-sm font-semibold text-muted-foreground mb-2">Conditions ({classificationPolicy.conditions.match === 'all' ? 'Match ALL' : 'Match ANY'})</h5>
                       <div className="space-y-2">
                         {classificationPolicy.conditions.rules.map((rule, idx) => (
-                          <div key={idx} className="bg-gray-800 p-3 rounded-lg text-xs text-muted-foreground/50">
-                            <span className="text-indigo-400">{rule.field}</span>
+                          <div key={idx} className="bg-background p-3 rounded-lg text-xs text-foreground/80 border border-border">
+                            <span className="text-primary">{rule.field}</span>
                             {' '}<span className="text-muted-foreground">{rule.operator}</span>{' '}
-                            <span className="text-green-400">{JSON.stringify(rule.value)}</span>
+                            <span className="text-success">{JSON.stringify(rule.value)}</span>
                           </div>
                         ))}
                       </div>
                     </div>
                     <div>
-                      <h5 className="text-sm font-semibold text-muted-foreground/50 mb-2">Actions</h5>
-                      <pre className="bg-gray-800 p-4 rounded-lg text-xs overflow-x-auto text-muted-foreground/50">
+                      <h5 className="text-sm font-semibold text-muted-foreground mb-2">Actions</h5>
+                      <pre className="bg-background p-4 rounded-lg text-xs overflow-x-auto text-foreground/80 border border-border">
                         {JSON.stringify(classificationPolicy.actions, null, 2)}
                       </pre>
                     </div>
                   </div>
                 </div>
               ) : config && (
-                <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-700">
-                  <h4 className="text-lg font-semibold text-white mb-4">Configuration</h4>
-                  <pre className="bg-gray-800 p-4 rounded-lg text-xs overflow-x-auto text-muted-foreground/50">
+                <div className="bg-muted/30 rounded-xl p-6 border border-border">
+                  <h4 className="text-lg font-semibold text-foreground mb-4">Configuration</h4>
+                  <pre className="bg-background p-4 rounded-lg text-xs overflow-x-auto text-foreground/80 border border-border">
                     {JSON.stringify(config, null, 2)}
                   </pre>
                 </div>

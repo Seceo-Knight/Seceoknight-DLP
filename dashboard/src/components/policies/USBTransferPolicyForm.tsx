@@ -42,10 +42,10 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
     <div className="space-y-6">
       {/* Monitored Directories */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-foreground/90 mb-3">
           Monitored Directories *
         </label>
-        <p className="text-xs text-muted-foreground/70 mb-3">
+        <p className="text-xs text-muted-foreground mb-3">
           Only files from these directories will trigger this policy when copied to USB drives
         </p>
         
@@ -55,12 +55,12 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
             {config.monitoredPaths.map((path, index) => (
               <div
                 key={index}
-                className="flex items-center justify-between p-3 bg-gray-900/50 rounded-lg border border-gray-700"
+                className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border border-border"
               >
-                <code className="text-sm text-indigo-300 flex-1">{path}</code>
+                <code className="text-sm text-primary flex-1">{path}</code>
                 <button
                   onClick={() => handleRemovePath(index)}
-                  className="ml-3 p-1 text-muted-foreground/70 hover:text-red-400 transition-colors"
+                  className="ml-3 p-1 text-muted-foreground hover:text-critical transition-colors"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -77,54 +77,54 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
             onChange={(e) => setNewPath(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleAddPath()}
             placeholder="e.g., C:\\Users\\%USERNAME%\\Documents"
-            className="flex-1 px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+            className="flex-1 px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
           />
           <button
             onClick={handleAddPath}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center gap-2"
+            className="px-4 py-2 bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors flex items-center gap-2"
           >
             <Plus className="w-4 h-4" />
             Add
           </button>
         </div>
-        <p className="text-xs text-muted-foreground/70 mt-2">
+        <p className="text-xs text-muted-foreground mt-2">
           Supports environment variables: %USERNAME%, $USER, etc.
         </p>
       </div>
 
       {/* Action Selection */}
       <div>
-        <label className="block text-sm font-medium text-gray-200 mb-3">
+        <label className="block text-sm font-medium text-foreground/90 mb-3">
           Action When Transfer Detected
         </label>
         <div className="space-y-2">
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="usb-transfer-action"
               value="block"
               checked={config.action === 'block'}
               onChange={() => onChange({ ...config, action: 'block', quarantinePath: undefined })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div>
-              <div className="text-white font-medium text-sm">Block Transfer</div>
-              <div className="text-muted-foreground/70 text-xs">Delete file immediately on USB drive</div>
+              <div className="text-foreground font-medium text-sm">Block Transfer</div>
+              <div className="text-muted-foreground text-xs">Delete file immediately on USB drive</div>
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="usb-transfer-action"
               value="quarantine"
               checked={config.action === 'quarantine'}
               onChange={() => onChange({ ...config, action: 'quarantine' })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div className="flex-1">
-              <div className="text-white font-medium text-sm">Quarantine Transfer</div>
-              <div className="text-muted-foreground/70 text-xs">Move file to quarantine folder on USB drive</div>
+              <div className="text-foreground font-medium text-sm">Quarantine Transfer</div>
+              <div className="text-muted-foreground text-xs">Move file to quarantine folder on USB drive</div>
             </div>
           </label>
 
@@ -135,26 +135,26 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
                 value={config.quarantinePath || ''}
                 onChange={(e) => onChange({ ...config, quarantinePath: e.target.value })}
                 placeholder="e.g., C:\\Quarantine or /quarantine"
-                className="w-full px-3 py-2 bg-gray-900/50 border-2 border-gray-600 rounded-lg text-white placeholder-muted-foreground focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all font-mono text-sm"
+                className="w-full px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
               />
-              <p className="text-xs text-muted-foreground/70 mt-1">
+              <p className="text-xs text-muted-foreground mt-1">
                 Path on the USB drive where quarantined files will be moved
               </p>
             </div>
           )}
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-gray-600 bg-gray-900/30 cursor-pointer hover:border-gray-500 transition-all">
+          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
             <input
               type="radio"
               name="usb-transfer-action"
               value="alert"
               checked={config.action === 'alert'}
               onChange={() => onChange({ ...config, action: 'alert', quarantinePath: undefined })}
-              className="w-4 h-4 text-indigo-400"
+              className="w-4 h-4 text-primary"
             />
             <div>
-              <div className="text-white font-medium text-sm">Alert Only</div>
-              <div className="text-muted-foreground/70 text-xs">Log and alert, but don't block the transfer</div>
+              <div className="text-foreground font-medium text-sm">Alert Only</div>
+              <div className="text-muted-foreground text-xs">Log and alert, but don't block the transfer</div>
             </div>
           </label>
         </div>

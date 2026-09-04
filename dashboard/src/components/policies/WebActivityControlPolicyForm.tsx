@@ -124,7 +124,7 @@ export default function WebActivityControlPolicyForm({ config: rawConfig, onChan
 
   return (
     <div className="space-y-6">
-      <div className="p-4 bg-amber-900/20 border border-amber-500/30 rounded-lg text-sm text-amber-200/90">
+      <div className="p-4 bg-warning/10 border border-warning/30 rounded-lg text-sm text-warning">
         Detects and controls sensitive-data leakage through GenAI assistants, webmail/collaboration tools, and file
         downloads from managed cloud apps, via the browser extension. Each row below is independent — leave a row
         unset (&quot;Not configured&quot;) to take no action on that activity. &quot;Block&quot; and
@@ -144,15 +144,15 @@ export default function WebActivityControlPolicyForm({ config: rawConfig, onChan
           return (
             <div
               key={key}
-              className="p-4 rounded-lg border-2 border-gray-600 bg-gray-900/30"
+              className="p-4 rounded-lg border-2 border-border bg-muted/30"
             >
               <div className="flex items-start gap-3 mb-3">
-                <div className="p-2 rounded-lg bg-gray-800/50 text-indigo-300">
+                <div className="p-2 rounded-lg bg-secondary text-primary">
                   <Icon className="w-4 h-4" />
                 </div>
                 <div className="flex-1">
-                  <div className="text-white font-medium text-sm">{label}</div>
-                  <div className="text-muted-foreground/70 text-xs mt-0.5">{description}</div>
+                  <div className="text-foreground font-medium text-sm">{label}</div>
+                  <div className="text-muted-foreground text-xs mt-0.5">{description}</div>
                 </div>
               </div>
 
@@ -162,8 +162,8 @@ export default function WebActivityControlPolicyForm({ config: rawConfig, onChan
                   onClick={() => handleSetAction(key, '')}
                   className={`px-3 py-2 rounded-lg border-2 text-xs font-medium transition-all text-left ${
                     current === ''
-                      ? 'border-gray-400 bg-gray-700/50 text-white'
-                      : 'border-gray-700 bg-gray-900/30 text-muted-foreground/70 hover:border-gray-500'
+                      ? 'border-border bg-secondary/50 text-foreground'
+                      : 'border-border bg-muted/30 text-muted-foreground hover:border-primary/40'
                   }`}
                   title="No action configured for this activity"
                 >
@@ -177,13 +177,13 @@ export default function WebActivityControlPolicyForm({ config: rawConfig, onChan
                     className={`px-3 py-2 rounded-lg border-2 text-xs font-medium transition-all text-left ${
                       current === opt.value
                         ? opt.value === 'block'
-                          ? 'border-red-500 bg-red-900/30 text-white'
+                          ? 'border-critical bg-critical/10 text-foreground'
                           : opt.value === 'redact'
-                            ? 'border-purple-500 bg-purple-900/30 text-white'
+                            ? 'border-purple-500 bg-purple-500/10 text-foreground'
                             : opt.value === 'alert'
-                              ? 'border-amber-500 bg-amber-900/30 text-white'
-                              : 'border-green-500 bg-green-900/30 text-white'
-                        : 'border-gray-700 bg-gray-900/30 text-muted-foreground/70 hover:border-gray-500'
+                              ? 'border-warning bg-warning/10 text-foreground'
+                              : 'border-success bg-success/10 text-foreground'
+                        : 'border-border bg-muted/30 text-muted-foreground hover:border-primary/40'
                     }`}
                     title={opt.hint}
                   >
@@ -196,7 +196,7 @@ export default function WebActivityControlPolicyForm({ config: rawConfig, onChan
         })}
       </div>
 
-      <div className="p-3 bg-gray-900/40 border border-gray-700 rounded-lg text-xs text-muted-foreground/70">
+      <div className="p-3 bg-muted/30 border border-border rounded-lg text-xs text-muted-foreground">
         Requires the SeceoKnight browser extension (with Web Activity Control support) to be installed on the
         target endpoint(s). File uploads/attachments TO these destinations are covered separately by Cloud Upload
         Guard, not by this policy — the Download rows above are detection and alerting only: the download always
