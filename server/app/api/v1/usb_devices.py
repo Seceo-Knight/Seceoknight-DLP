@@ -24,6 +24,7 @@ from typing import Optional, List, Dict
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -588,6 +589,21 @@ async def set_enforcement(
     by finding-or-creating the single backing ``usb_device_control`` policy row."""
     mode = body.mode if body.mode in ("enforce", "audit") else "enforce"
     policy = await _device_control_policy(db)
+    if not policy:
+        # policies.name is globally UNIQUE, and DEVICE_CONTROL_POLICY_NAME is
+        # a fixed, reserved name for this one system-managed row -- same
+        # latent bug class fixed on the Printers page's set_enforcement: if
+        # a row under that name exists but wasn't matched above (soft-
+        # deleted via the Policies tab, or its `type` changed by editing it
+        # through the Policy Creator), blindly INSERTing a fresh row throws
+        # an uncaught IntegrityError -> bare 500. Revive/repurpose it instead.
+        policy = (await db.execute(
+            select(Policy).where(Policy.name == DEVICE_CONTROL_POLICY_NAME)
+        )).scalar_one_or_none()
+        if policy:
+            policy.type = DEVICE_CONTROL_TYPE
+            policy.domain = "access_control"
+            policy.deleted_at = None
     if policy:
         policy.status = "active" if body.enabled else "inactive"
         policy.config = {**(policy.config or {}), "mode": mode}
@@ -608,6 +624,15 @@ async def set_enforcement(
             created_by=current_user.id,
         )
         db.add(policy)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Could not update USB device enforcement -- a conflicting policy row "
+            "exists. Refresh the page and try again; if this persists, check the "
+            "Policies tab for a policy named 'USB Device Control (Allowlist)'.",
+        )
     await audit_log(current_user.id, "security.usb_devices.enforcement", {"enabled": body.enabled, "mode": mode})
     return await _device_control_status(db)
