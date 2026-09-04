@@ -26,6 +26,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
@@ -262,6 +263,23 @@ async def set_enforcement(
     scope = body.scope if body.scope in SCOPE_VALUES else "allowlist"
     mode = body.mode if body.mode in ("enforce", "audit") else "enforce"
     policy = await _allowlist_policy(db)
+    if not policy:
+        # policies.name is globally UNIQUE, and PRINTER_CONTROL_POLICY_NAME is
+        # a fixed, reserved name for this one system-managed row. If a row
+        # under that name exists but wasn't found above -- soft-deleted via
+        # the Policies tab, or its `type` got changed by editing it through
+        # the Policy Creator -- blindly INSERTing a fresh row throws
+        # IntegrityError (unique violation), which was previously uncaught
+        # and surfaced to the dashboard as a bare "Request failed with
+        # status code 500" on every scope button. Revive/repurpose that row
+        # instead of colliding with it.
+        policy = (await db.execute(
+            select(Policy).where(Policy.name == PRINTER_CONTROL_POLICY_NAME)
+        )).scalar_one_or_none()
+        if policy:
+            policy.type = PRINTER_CONTROL_TYPE
+            policy.domain = "threat"
+            policy.deleted_at = None
     if policy:
         policy.status = "active" if body.enabled else "inactive"
         policy.config = {**(policy.config or {}), "scope": scope, "mode": mode}
@@ -282,6 +300,15 @@ async def set_enforcement(
             created_by=current_user.id,
         )
         db.add(policy)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Could not update printer control enforcement -- a conflicting policy row "
+            "exists. Refresh the page and try again; if this persists, check the "
+            "Policies tab for a policy named 'Printer Control (Allowlist)'.",
+        )
     await audit_log(current_user.id, "security.printers.enforcement", {"enabled": body.enabled, "scope": scope, "mode": mode})
     return await _allowlist_status(db)
