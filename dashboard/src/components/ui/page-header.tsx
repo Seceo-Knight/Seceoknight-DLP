@@ -6,11 +6,15 @@ interface PageHeaderProps {
   description?: string
   actions?: React.ReactNode
   icon?: React.ComponentType<{ className?: string }>
+  /** Small caps-style label above the title, e.g. "Device Control". */
+  eyebrow?: string
+  /** Status chip rendered inline next to the title, e.g. an enforcement badge. */
+  badge?: React.ReactNode
   className?: string
 }
 
 /** Consistent title/description/actions row used at the top of every page. */
-export function PageHeader({ title, description, actions, icon: Icon, className }: PageHeaderProps) {
+export function PageHeader({ title, description, actions, icon: Icon, eyebrow, badge, className }: PageHeaderProps) {
   return (
     <div className={cn('flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between', className)}>
       <div className="flex items-start gap-3">
@@ -20,7 +24,11 @@ export function PageHeader({ title, description, actions, icon: Icon, className 
           </div>
         )}
         <div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">{title}</h1>
+          {eyebrow && <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-primary">{eyebrow}</p>}
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-xl font-semibold tracking-tight text-foreground">{title}</h1>
+            {badge}
+          </div>
           {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
         </div>
       </div>

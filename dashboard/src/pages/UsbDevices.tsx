@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Usb, ShieldCheck, ShieldAlert, Plus, Trash2, Check, Ban, History, Pencil, EyeOff, Undo2 } from 'lucide-react'
-import Modal, { ModalHeader } from '@/components/ui/Modal'
+import { Usb, ShieldCheck, ShieldAlert, Plus, Trash2, Check, Ban, History, Pencil, EyeOff, Undo2, AlertTriangle } from 'lucide-react'
+import Modal, { ModalHeader, useConfirm } from '@/components/ui/Modal'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { extractErrorDetail } from '@/utils/errorUtils'
+import { PageHeader } from '@/components/ui/page-header'
 import {
   listDevices, seenDevices, approveDevice, updateDevice, revokeDevice, setUsbEnforcement, deviceActivity,
   dismissSeenDevice, restoreSeenDevice,
@@ -13,6 +14,14 @@ import {
 } from '@/lib/usb-devices-api'
 import { usePagination } from '@/lib/hooks/useTableState'
 import { DataPagination } from '@/components/ui/pagination'
+
+// Matches the POLICIES_FETCH_LIMIT convention (see Policies.tsx): the seen-
+// devices endpoint defaults to a 200-row cap server-side with no indication
+// in the response of whether it was hit. Request the backend's actual hard
+// ceiling explicitly instead of relying on that silent default -- a
+// deployment with more than 200 distinct not-yet-decided serials would
+// otherwise have older ones vanish from the triage queue with no warning.
+const SEEN_DEVICES_FETCH_LIMIT = 1000
 
 // Ported from the CyberSentinel-DLP reference project (see
 // SECEOKNIGHT_VS_CYBERSENTINEL_COMPARISON.md). Strict allowlist: when
@@ -35,9 +44,10 @@ export default function UsbDevices() {
   const [showDismissed, setShowDismissed] = useState(false)
   const seenQ = useQuery({
     queryKey: ['usb-devices-seen', showDismissed],
-    queryFn: () => seenDevices(showDismissed),
+    queryFn: () => seenDevices(showDismissed, SEEN_DEVICES_FETCH_LIMIT),
   })
   const [historySerial, setHistorySerial] = useState<string | null>(null)
+  const { confirm, dialog: confirmDialog } = useConfirm()
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['usb-devices'] })
@@ -73,26 +83,33 @@ export default function UsbDevices() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="eyebrow mb-1.5">Device Control</p>
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold tracking-tight text-cs-ink">USB Devices</h1>
-          {enforced
+      <PageHeader
+        icon={Usb}
+        eyebrow="Device Control"
+        title="USB Devices"
+        badge={
+          enforced
             ? <span className="badge badge-success inline-flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" />Enforcing ({mode})</span>
-            : <span className="badge badge-warning inline-flex items-center gap-1"><ShieldAlert className="h-3.5 w-3.5" />Not enforced</span>}
+            : <span className="badge badge-warning inline-flex items-center gap-1"><ShieldAlert className="h-3.5 w-3.5" />Not enforced</span>
+        }
+        description="Strict allowlist by device serial number. When enforcement is on, any USB storage device not approved below is blocked the moment it's plugged in — no reliance on file scanning."
+      />
+
+      {seenQ.data?.truncated && (
+        <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
+          <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          Showing the most recent {SEEN_DEVICES_FETCH_LIMIT.toLocaleString()} distinct devices seen on endpoints — older,
+          not-yet-decided serials beyond that may not be listed below. Approve, disallow, or dismiss some to bring
+          the rest into view.
         </div>
-        <p className="mt-1 text-sm text-cs-ink-2">
-          Strict allowlist by device serial number. When enforcement is on, any USB storage device
-          not approved below is blocked the moment it's plugged in — no reliance on file scanning.
-        </p>
-      </div>
+      )}
 
       <div className="card">
         <div className="flex items-start gap-3">
-          <div className="p-2 bg-cs-indigo-faint rounded-cs-sm"><Usb className="h-5 w-5 text-cs-indigo" /></div>
+          <div className="p-2 bg-primary/10 rounded-lg"><Usb className="h-5 w-5 text-primary" /></div>
           <div className="flex-1">
             <h3 className="section-title">Enforcement</h3>
-            <p className="text-sm text-cs-muted">
+            <p className="text-sm text-muted-foreground">
               Enforce blocks unsanctioned devices immediately. Audit only logs what would have been
               blocked, without actually blocking anything — useful while building out the allowlist.
             </p>
@@ -133,7 +150,7 @@ export default function UsbDevices() {
           <>
             <Table headers={['', 'Serial', 'Alias', 'Device', 'VID:PID', 'Status', 'Approved', '']}>
               {sanctionedPg.pageRows.map((d) => (
-                <SanctionedRow key={d.id} d={d} onChange={invalidate} onHistory={() => setHistorySerial(d.serial_number)} />
+                <SanctionedRow key={d.id} d={d} onChange={invalidate} onHistory={() => setHistorySerial(d.serial_number)} confirm={confirm} />
               ))}
             </Table>
             <DataPagination
@@ -159,7 +176,7 @@ export default function UsbDevices() {
           <>
             <Table headers={['', 'Serial', 'Alias', 'Device', 'VID:PID', 'Status', 'Denied', '']}>
               {disallowedPg.pageRows.map((d) => (
-                <SanctionedRow key={d.id} d={d} onChange={invalidate} onHistory={() => setHistorySerial(d.serial_number)} />
+                <SanctionedRow key={d.id} d={d} onChange={invalidate} onHistory={() => setHistorySerial(d.serial_number)} confirm={confirm} />
               ))}
             </Table>
             <DataPagination
@@ -180,7 +197,7 @@ export default function UsbDevices() {
         subtitle="Devices observed connecting to an agent that aren't on the allowlist. Approve to permit them, Disallow to reject, or Dismiss to clear a triage item you've already looked at without deciding (reversible, does not authorize the device)."
       >
         {(seenQ.data?.dismissed_count ?? 0) > 0 && (
-          <label className="mb-2 flex items-center gap-2 text-xs text-cs-ink-2 cursor-pointer select-none">
+          <label className="mb-2 flex items-center gap-2 text-xs text-foreground/78 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={showDismissed}
@@ -215,6 +232,7 @@ export default function UsbDevices() {
       {historySerial && (
         <HistoryModal serial={historySerial} onClose={() => setHistorySerial(null)} />
       )}
+      {confirmDialog}
     </div>
   )
 }
@@ -225,10 +243,10 @@ function Section({ title, count, subtitle, children }: {
   return (
     <div>
       <div className="flex items-baseline gap-2 mb-2">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-cs-muted">{title}</h2>
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">{title}</h2>
         <span className="badge badge-info">{count}</span>
       </div>
-      {subtitle && <p className="text-xs text-cs-muted mb-2">{subtitle}</p>}
+      {subtitle && <p className="text-xs text-muted-foreground mb-2">{subtitle}</p>}
       {children}
     </div>
   )
@@ -251,8 +269,8 @@ function Table({ headers, children }: { headers: string[]; children: React.React
 
 function Empty({ text }: { text: string }) {
   return (
-    <div className="rounded-lg border border-border bg-card p-6 text-center text-sm text-cs-muted">
-      <Usb className="h-8 w-8 mx-auto mb-2 text-cs-muted-2" />
+    <div className="rounded-lg border border-border bg-card p-6 text-center text-sm text-muted-foreground">
+      <Usb className="h-8 w-8 mx-auto mb-2 text-muted-foreground/65" />
       {text}
     </div>
   )
@@ -289,9 +307,9 @@ function ConnectedDot({
     )
   }
   if (state === 'disconnected') {
-    return <span className="inline-block h-2.5 w-2.5 rounded-full bg-cs-muted-2" title="Disconnected" />
+    return <span className="inline-block h-2.5 w-2.5 rounded-full bg-muted-foreground/65" title="Disconnected" />
   }
-  return <span className="inline-block h-2.5 w-2.5 rounded-full bg-cs-muted-2 opacity-40" title="Not applicable / never seen" />
+  return <span className="inline-block h-2.5 w-2.5 rounded-full bg-muted-foreground/65 opacity-40" title="Not applicable / never seen" />
 }
 
 function AliasCell({ d, onChange }: { d: SanctionedDevice; onChange: () => void }) {
@@ -317,17 +335,22 @@ function AliasCell({ d, onChange }: { d: SanctionedDevice; onChange: () => void 
   }
   return (
     <button
-      className="text-xs text-cs-ink-2 hover:text-cs-ink inline-flex items-center gap-1 group"
+      className="text-xs text-foreground/78 hover:text-foreground inline-flex items-center gap-1 group"
       onClick={() => { setValue(d.alias || ''); setEditing(true) }}
       title="Click to edit alias"
     >
-      {d.alias || <span className="text-cs-muted">—</span>}
+      {d.alias || <span className="text-muted-foreground">—</span>}
       <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-60" />
     </button>
   )
 }
 
-function SanctionedRow({ d, onChange, onHistory }: { d: SanctionedDevice; onChange: () => void; onHistory: () => void }) {
+function SanctionedRow({ d, onChange, onHistory, confirm }: {
+  d: SanctionedDevice
+  onChange: () => void
+  onHistory: () => void
+  confirm: ReturnType<typeof useConfirm>['confirm']
+}) {
   const toggle = useMutation({
     mutationFn: () => updateDevice(d.id, { is_enabled: !d.is_enabled }),
     onSuccess: () => { onChange(); toast.success(d.is_enabled ? 'Device suspended' : 'Device re-enabled') },
@@ -346,31 +369,45 @@ function SanctionedRow({ d, onChange, onHistory }: { d: SanctionedDevice; onChan
   return (
     <tr>
       <td><ConnectedDot connectionState={d.connection_state} connected={d.connected} /></td>
-      <td className="num text-cs-ink">{d.serial_number}</td>
+      <td className="num text-foreground">{d.serial_number}</td>
       <td><AliasCell d={d} onChange={onChange} /></td>
-      <td className="text-cs-ink-2">{d.product_name || '—'}{d.manufacturer ? ` (${d.manufacturer})` : ''}</td>
-      <td className="num text-cs-muted">{vidpid(d.vendor_id, d.product_id)}</td>
+      <td className="text-foreground/78">{d.product_name || '—'}{d.manufacturer ? ` (${d.manufacturer})` : ''}</td>
+      <td className="num text-muted-foreground">{vidpid(d.vendor_id, d.product_id)}</td>
       <td>
         {d.is_enabled
           ? <span className="badge badge-success">Enabled</span>
           : <span className="badge badge-warning">Suspended</span>}
       </td>
-      <td className="text-cs-muted text-xs">{fmt(d.approved_at)}</td>
+      <td className="text-muted-foreground text-xs">{fmt(d.approved_at)}</td>
       <td className="text-right whitespace-nowrap">
-        <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
+        <button className="text-xs text-foreground/78 hover:text-foreground mr-3 inline-flex items-center gap-1"
           onClick={onHistory} title="View insertion history">
           <History className="h-3.5 w-3.5" />History
         </button>
-        <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
+        <button className="text-xs text-foreground/78 hover:text-foreground mr-3 inline-flex items-center gap-1"
           disabled={flip.isPending} onClick={() => flip.mutate()}>
           {d.decision === 'deny' ? <><Check className="h-3.5 w-3.5" />Allow</> : <><Ban className="h-3.5 w-3.5" />Disallow</>}
         </button>
-        <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
+        <button className="text-xs text-foreground/78 hover:text-foreground mr-3 inline-flex items-center gap-1"
           disabled={toggle.isPending} onClick={() => toggle.mutate()}>
           {d.is_enabled ? <><Ban className="h-3.5 w-3.5" />Suspend</> : <><Check className="h-3.5 w-3.5" />Enable</>}
         </button>
         <button className="text-xs text-critical hover:underline inline-flex items-center gap-1"
-          disabled={revoke.isPending} onClick={() => revoke.mutate()}>
+          disabled={revoke.isPending}
+          onClick={async () => {
+            const ok = await confirm({
+              title: 'Revoke this device?',
+              confirmLabel: 'Revoke approval',
+              children: (
+                <>
+                  This removes <span className="num font-medium text-foreground">{d.serial_number}</span> from
+                  the allowlist entirely{d.alias ? <> ({d.alias})</> : null}. If enforcement is on, this device
+                  will be blocked the next time it's plugged in.
+                </>
+              ),
+            })
+            if (ok) revoke.mutate()
+          }}>
           <Trash2 className="h-3.5 w-3.5" />Revoke
         </button>
       </td>
@@ -406,30 +443,30 @@ function SeenRow({ s, onApproved, onHistory }: { s: SeenDevice; onApproved: () =
   return (
     <tr className={s.dismissed ? 'opacity-60' : undefined}>
       <td><ConnectedDot connectionState={s.connection_state} connected={s.connected} /></td>
-      <td className="num text-cs-ink">
+      <td className="num text-foreground">
         {s.serial_number}
         {s.dismissed && <span className="badge badge-info ml-2 text-[10px]">Dismissed</span>}
       </td>
-      <td className="text-cs-ink-2">{s.product_name || '—'}</td>
-      <td className="num text-cs-muted">{vidpid(s.vendor_id, s.product_id)}</td>
-      <td className="text-cs-muted text-xs">{fmt(s.last_seen)}</td>
-      <td className="text-cs-muted text-xs">
+      <td className="text-foreground/78">{s.product_name || '—'}</td>
+      <td className="num text-muted-foreground">{vidpid(s.vendor_id, s.product_id)}</td>
+      <td className="text-muted-foreground text-xs">{fmt(s.last_seen)}</td>
+      <td className="text-muted-foreground text-xs">
         {s.agent_name
           ? `${s.agent_name}${s.agent_code ? ` (#${String(s.agent_code).padStart(3, '0')})` : ''}`
           : (s.agent_id ? <span className="num">{s.agent_id}</span> : '—')}
       </td>
       <td className="text-right whitespace-nowrap">
-        <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
+        <button className="text-xs text-foreground/78 hover:text-foreground mr-3 inline-flex items-center gap-1"
           onClick={onHistory} title="View insertion history">
           <History className="h-3.5 w-3.5" />History
         </button>
         {s.dismissed ? (
-          <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
+          <button className="text-xs text-foreground/78 hover:text-foreground mr-3 inline-flex items-center gap-1"
             disabled={restore.isPending} onClick={() => restore.mutate()} title="Return to the active triage queue">
             <Undo2 className="h-3.5 w-3.5" />Restore
           </button>
         ) : (
-          <button className="text-xs text-cs-ink-2 hover:text-cs-ink mr-3 inline-flex items-center gap-1"
+          <button className="text-xs text-foreground/78 hover:text-foreground mr-3 inline-flex items-center gap-1"
             disabled={dismiss.isPending} onClick={() => dismiss.mutate()}
             title="Clear from the queue without approving or denying it -- reversible">
             <EyeOff className="h-3.5 w-3.5" />Dismiss
@@ -468,7 +505,7 @@ function HistoryModal({ serial, onClose }: { serial: string; onClose: () => void
           {q.isLoading ? (
             <LoadingSpinner />
           ) : (q.data?.events.length || 0) === 0 ? (
-            <p className="text-cs-muted text-center py-6">No connect/disconnect activity recorded for this serial yet.</p>
+            <p className="text-muted-foreground text-center py-6">No connect/disconnect activity recorded for this serial yet.</p>
           ) : (
             <ul className="space-y-2">
               {q.data!.events.map((e: DeviceActivityEvent, i: number) => (
@@ -477,14 +514,14 @@ function HistoryModal({ serial, onClose }: { serial: string; onClose: () => void
                     <span className={`badge ${e.event === 'connect' ? 'badge-success' : 'badge-info'}`}>
                       {e.event === 'connect' ? 'Connected' : 'Disconnected'}
                     </span>
-                    <span className="text-cs-ink-2">
+                    <span className="text-foreground/78">
                       {e.agent_name
                         ? `${e.agent_name}${e.agent_code ? ` (#${String(e.agent_code).padStart(3, '0')})` : ''}`
                         : (e.agent_id || '—')}
                     </span>
-                    {e.drive_letter && <span className="text-xs text-cs-muted num">{e.drive_letter}</span>}
+                    {e.drive_letter && <span className="text-xs text-muted-foreground num">{e.drive_letter}</span>}
                   </div>
-                  <span className="text-xs text-cs-muted">{fmt(e.timestamp)}</span>
+                  <span className="text-xs text-muted-foreground">{fmt(e.timestamp)}</span>
                 </li>
               ))}
             </ul>
@@ -504,17 +541,17 @@ function ApproveForm({ onDone }: { onDone: () => void }) {
   })
   return (
     <div className="card">
-      <div className="flex items-center gap-2 text-sm font-semibold text-cs-ink mb-3">
-        <Plus className="h-4 w-4 text-cs-indigo" /> Approve a device by serial
+      <div className="flex items-center gap-2 text-sm font-semibold text-foreground mb-3">
+        <Plus className="h-4 w-4 text-primary" /> Approve a device by serial
       </div>
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex-1 min-w-[220px]">
-          <label className="text-xs text-cs-ink-2 mb-1 block">Serial number</label>
+          <label className="text-xs text-foreground/78 mb-1 block">Serial number</label>
           <input className="input text-sm num" value={serial} onChange={(e) => setSerial(e.target.value)}
             placeholder="e.g. 0123456789ABCDEF" />
         </div>
         <div className="flex-1 min-w-[180px]">
-          <label className="text-xs text-cs-ink-2 mb-1 block">Label (optional)</label>
+          <label className="text-xs text-foreground/78 mb-1 block">Label (optional)</label>
           <input className="input text-sm" value={label} onChange={(e) => setLabel(e.target.value)}
             placeholder="e.g. Finance dept #3" />
         </div>
