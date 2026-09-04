@@ -66,15 +66,57 @@ def _transform_clipboard_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any],
     custom = patterns.get("custom", [])
     action = config.get("action", "log")
 
-    # Predefined pattern regexes
+    # Predefined pattern regexes.
+    #
+    # IMPORTANT: this dict must cover every pattern `id` offered by the
+    # frontend picker (dashboard/src/utils/policyUtils.ts's
+    # `predefinedPatterns` array -- ClipboardPolicyForm.tsx renders every
+    # entry in that array as a checkbox with no filtering). Previously this
+    # dict only had 7 of the 17 ids the UI actually offers -- selecting any
+    # of the other 10 (all the Indian-identifier types: aadhaar, pan, ifsc,
+    # indian_bank_account, indian_phone, upi_id, micr, indian_dob, plus
+    # source_code_content and api_key_in_code/database_connection_string)
+    # silently produced ZERO enforcement rules for that pattern (the lookup
+    # below just skips ids that aren't in this dict -- no error, no warning).
+    # A user who ticked "Aadhaar Number" or "PAN Number" thinking their
+    # clipboard policy would catch it got a policy that matched nothing.
+    #
+    # Also fixes several regexes that were simply wrong (kept in sync with
+    # the same fixes applied to server/data/default_rules.json and
+    # main.py's _patch_default_rule_patterns() for the classification-rules
+    # engine -- these are a separate enforcement path but the same bug
+    # classes applied):
+    #   - credit_card: was 16-digits-only, could never match a real Amex
+    #     (15 digits) or Diners Club (14 digits) card.
+    #   - email: `[A-Z|a-z]` included a literal `|` in the character class.
+    #   - api_key: was a bare `\b[A-Za-z0-9_-]{32,}\b` -- matches almost
+    #     any long token, hash, or UUID pasted into the clipboard. Replaced
+    #     with known vendor key formats (AWS/GitHub/Slack/Stripe/Google) plus
+    #     a labeled `api_key: "..."`-style fallback, so it stops firing on
+    #     arbitrary long strings that merely happen to be 32+ characters.
+    #   - private_key: missed encrypted PEM keys and PGP private key blocks.
     predefined_patterns = {
         "ssn": r"\b\d{3}-\d{2}-\d{4}\b",
-        "credit_card": r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b",
-        "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+        "credit_card": r"\b(?:(?:\d{4}[\s-]?){3}\d{4}|3[47]\d{2}[\s-]?\d{6}[\s-]?\d{5}|3(?:0[0-5]\d|[68]\d{2})[\s-]?\d{6}[\s-]?\d{4})\b",
+        "email": r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b",
         "phone": r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b",
-        "api_key": r"\b[A-Za-z0-9_-]{32,}\b",
-        "private_key": r"-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----",
+        "api_key": r"(?i)(?:AKIA|ASIA|AROA|AIDA)[0-9A-Z]{16}|gh[oprsu]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|xox[baprs]-[0-9A-Za-z-]{10,72}|(?:sk|rk)_live_[0-9A-Za-z]{24,}|AIza[0-9A-Za-z_-]{35}|(?:api[_-]?key|apikey|access[_-]?token|secret[_-]?key)[\"']?\s*[:=]\s*[\"']?[A-Za-z0-9_-]{20,}[\"']?",
+        "private_key": r"-----BEGIN (RSA |DSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----|-----BEGIN PGP PRIVATE KEY BLOCK-----",
         "password": r"(?i)(password|pwd|passwd)\s*[:=]\s*\S+",
+        # Indian identifiers -- previously entirely unenforced despite being
+        # selectable in the UI.
+        "aadhaar": r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b",
+        "pan": r"\b[A-Z]{3}[PCHABGJLFT][A-Z]\d{4}[A-Z]\b",
+        "ifsc": r"\b[A-Z]{4}0[A-Z0-9]{6}\b",
+        "indian_bank_account": r"\b\d{9,18}\b",
+        "indian_phone": r"\b(\+91|91|0)?[6-9]\d{9}\b",
+        "upi_id": r"\b[\w.-]+@(paytm|phonepe|ybl|okaxis|okhdfcbank|oksbi|okicici)\b",
+        "micr": r"\b\d{9}\b",
+        "indian_dob": r"\b(0[1-9]|[12][0-9]|3[01])[/-](0[1-9]|1[0-2])[/-](19|20)\d{2}\b",
+        # Source code / secrets-in-code -- also previously unenforced.
+        "source_code_content": r"\b(function|def|class|public|private|protected|static|import|from|require|include|using|package|const|let|var|int|string|float|bool)\s+\w+",
+        "api_key_in_code": r"(?i)(?:AKIA|ASIA|AROA|AIDA)[0-9A-Z]{16}|gh[oprsu]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|api[_-]?key[\"']?\s*[:=]\s*[\"']?[a-zA-Z0-9_-]{32,}[\"']?",
+        "database_connection_string": r"(jdbc:(mysql|postgresql|oracle|sqlserver)://|mongodb://|mongodb\+srv://|redis://|rediss://|postgres(?:ql)?://|mysql://|amqp://|amqps://)",
     }
 
     rules = []

@@ -442,6 +442,12 @@ export const getSeverityColor = (severity: string): string => {
 
 /**
  * Get severity color classes (light theme - Dashboard style)
+ *
+ * Same critical=red/high=orange/medium=yellow/low=blue ladder used across
+ * Events, Alerts, Risk Scoring, Log Explorer and Rules -- this used to map
+ * 'low' to green, which collides with the app-wide meaning of green
+ * ("active"/"success"/"enabled") and was the odd one out among every other
+ * severity display in the dashboard.
  */
 export const getSeverityColorLight = (severity: string): {
   bg: string
@@ -469,15 +475,15 @@ export const getSeverityColorLight = (severity: string): {
       }
     case 'low':
       return {
-        bg: 'bg-green-100',
-        icon: 'text-green-600',
-        badge: 'badge-success'
+        bg: 'bg-blue-100',
+        icon: 'text-blue-600',
+        badge: 'badge-info'
       }
     default:
       return {
         bg: 'bg-gray-100',
         icon: 'text-gray-600',
-        badge: 'badge-info'
+        badge: 'bg-secondary text-muted-foreground'
       }
   }
 }
@@ -703,43 +709,49 @@ const getDefaultConfig = (type: PolicyType): any => {
 
 /**
  * Predefined pattern definitions
+ *
+ * NOTE: these regexes are for the picker UI's preview/"Test Pattern" only.
+ * The patterns actually enforced live in a separate copy on the backend --
+ * see server/app/utils/policy_transformer.py's predefined_patterns dict for
+ * clipboard_monitoring policies. Both copies are kept in sync by hand; if
+ * you change a regex here, change it there too.
  */
 export const predefinedPatterns = [
-  { 
-    id: 'ssn', 
-    name: 'Social Security Number (SSN)', 
+  {
+    id: 'ssn',
+    name: 'Social Security Number (SSN)',
     example: '123-45-6789',
     regex: '\\b\\d{3}-\\d{2}-\\d{4}\\b'
   },
-  { 
-    id: 'credit_card', 
-    name: 'Credit Card Number', 
-    example: '4111-1111-1111-1111',
-    regex: '\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b'
+  {
+    id: 'credit_card',
+    name: 'Credit Card Number',
+    example: '4111-1111-1111-1111 (Visa/Mastercard/Discover), 3782-822463-10005 (Amex)',
+    regex: '\\b(?:(?:\\d{4}[\\s-]?){3}\\d{4}|3[47]\\d{2}[\\s-]?\\d{6}[\\s-]?\\d{5}|3(?:0[0-5]\\d|[68]\\d{2})[\\s-]?\\d{6}[\\s-]?\\d{4})\\b'
   },
-  { 
-    id: 'email', 
-    name: 'Email Address', 
+  {
+    id: 'email',
+    name: 'Email Address',
     example: 'user@example.com',
-    regex: '\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b'
+    regex: '\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b'
   },
-  { 
-    id: 'phone', 
-    name: 'Phone Number', 
+  {
+    id: 'phone',
+    name: 'Phone Number',
     example: '+1-555-123-4567',
     regex: '\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b'
   },
-  { 
-    id: 'api_key', 
-    name: 'API Key', 
-    example: 'sk_live_...',
-    regex: '\\b[A-Za-z0-9_-]{32,}\\b'
+  {
+    id: 'api_key',
+    name: 'API Key',
+    example: 'AKIA..., ghp_..., sk_live_..., or api_key="..."',
+    regex: '(?i)(?:AKIA|ASIA|AROA|AIDA)[0-9A-Z]{16}|gh[oprsu]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|xox[baprs]-[0-9A-Za-z-]{10,72}|(?:sk|rk)_live_[0-9A-Za-z]{24,}|AIza[0-9A-Za-z_-]{35}|(?:api[_-]?key|apikey|access[_-]?token|secret[_-]?key)["\']?\\s*[:=]\\s*["\']?[A-Za-z0-9_-]{20,}["\']?'
   },
-  { 
-    id: 'private_key', 
-    name: 'Private Key', 
+  {
+    id: 'private_key',
+    name: 'Private Key',
     example: '-----BEGIN PRIVATE KEY-----',
-    regex: '-----BEGIN (RSA|DSA|EC|OPENSSH) PRIVATE KEY-----'
+    regex: '-----BEGIN (RSA |DSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----|-----BEGIN PGP PRIVATE KEY BLOCK-----'
   },
   // Indian identifiers
   { 
@@ -748,11 +760,11 @@ export const predefinedPatterns = [
     example: '1234 5678 9012',
     regex: '\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b'
   },
-  { 
-    id: 'pan', 
-    name: 'PAN Number', 
-    example: 'ABCDE1234F',
-    regex: '\\b[A-Z]{5}\\d{4}[A-Z]{1}\\b'
+  {
+    id: 'pan',
+    name: 'PAN Number',
+    example: 'ABCPD1234E',
+    regex: '\\b[A-Z]{3}[PCHABGJLFT][A-Z]\\d{4}[A-Z]\\b'
   },
   { 
     id: 'ifsc', 
@@ -797,16 +809,16 @@ export const predefinedPatterns = [
     example: 'function myFunction()',
     regex: '\\b(function|def|class|public|private|protected|static|import|from|require|include|using|package|const|let|var|int|string|float|bool)\\s+\\w+'
   },
-  { 
-    id: 'api_key_in_code', 
-    name: 'API Keys in Source Code', 
-    example: 'api_key: "sk_live_..."',
-    regex: '(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|api[_-]?key["\']?\\s*[:=]\\s*["\']?[a-zA-Z0-9_\\-]{32,}["\']?)'
+  {
+    id: 'api_key_in_code',
+    name: 'API Keys in Source Code',
+    example: 'AKIA..., ghp_..., github_pat_..., or api_key: "..."',
+    regex: '(?i)((?:AKIA|ASIA|AROA|AIDA)[0-9A-Z]{16}|gh[oprsu]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}|api[_-]?key["\']?\\s*[:=]\\s*["\']?[a-zA-Z0-9_-]{32,}["\']?)'
   },
-  { 
-    id: 'database_connection_string', 
-    name: 'Database Connection Strings', 
-    example: 'jdbc:mysql://localhost:3306/mydb',
-    regex: '(jdbc:(mysql|postgresql|oracle|sqlserver)://|mongodb://|mongodb\\+srv://|redis://|rediss://)'
+  {
+    id: 'database_connection_string',
+    name: 'Database Connection Strings',
+    example: 'jdbc:mysql://localhost:3306/mydb, postgres://user:pass@host/db',
+    regex: '(jdbc:(mysql|postgresql|oracle|sqlserver)://|mongodb://|mongodb\\+srv://|redis://|rediss://|postgres(?:ql)?://|mysql://|amqp://|amqps://)'
   }
 ]

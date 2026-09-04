@@ -82,7 +82,7 @@ export default function ExportPoliciesModal({ isOpen, onClose, policies }: Expor
           <button
             onClick={handleExport}
             disabled={exporting || selected.size === 0}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
+            className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/90 disabled:bg-secondary disabled:text-muted-foreground text-white rounded-lg transition-colors text-sm font-medium"
           >
             <Download className="w-4 h-4" />
             {exporting ? 'Exporting...' : `Export ${selected.size} Polic${selected.size === 1 ? 'y' : 'ies'}`}
@@ -91,14 +91,14 @@ export default function ExportPoliciesModal({ isOpen, onClose, policies }: Expor
       }
     >
         <div className="space-y-4">
-          <p className="text-sm text-muted-foreground/70">
+          <p className="text-sm text-muted-foreground">
             Downloads a JSON file that can be imported into any other SeceoKnight deployment.
             Agent scoping is not included -- imported policies apply to all agents until re-scoped.
           </p>
 
           <button
             onClick={toggleAll}
-            className="flex items-center gap-2 text-sm text-indigo-300 hover:text-indigo-200 transition-colors"
+            className="flex items-center gap-2 text-sm text-primary hover:text-primary/80 transition-colors"
           >
             {allSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
             {allSelected ? 'Deselect all' : 'Select all'}
@@ -106,22 +106,22 @@ export default function ExportPoliciesModal({ isOpen, onClose, policies }: Expor
 
           <div className="space-y-2 max-h-80 overflow-y-auto">
             {policies.length === 0 && (
-              <p className="text-sm text-muted-foreground/70 py-4 text-center">No policies to export</p>
+              <p className="text-sm text-muted-foreground py-4 text-center">No policies to export</p>
             )}
             {policies.map((policy) => (
               <label
                 key={policy.id}
-                className="flex items-center gap-3 p-3 rounded-lg border border-gray-700 bg-gray-900/50 cursor-pointer hover:border-gray-600 transition-all"
+                className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all"
               >
                 <input
                   type="checkbox"
                   checked={selected.has(policy.id)}
                   onChange={() => toggleOne(policy.id)}
-                  className="w-4 h-4 text-indigo-400 rounded"
+                  className="w-4 h-4 text-primary rounded"
                 />
                 <div className="flex-1 min-w-0">
-                  <div className="text-white text-sm font-medium truncate">{policy.name}</div>
-                  <div className="text-xs text-muted-foreground/70">
+                  <div className="text-foreground text-sm font-medium truncate">{policy.name}</div>
+                  <div className="text-xs text-muted-foreground">
                     {policy.type ? getPolicyTypeLabel(policy.type) : 'Classification-aware'}
                   </div>
                 </div>

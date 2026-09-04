@@ -961,10 +961,21 @@ async def get_policy_stats(
     # Augment violations count using MongoDB alerts (last 24 hours)
     # Count alerts rather than blocked events — policies that alert (not block)
     # still generate violations and should be counted here.
+    #
+    # BUG FIX: `created_at` is stored as a native BSON Date (see
+    # alerts.py's `isinstance(alert_dict[dt_field], datetime)` normalization
+    # -- it only converts to a string for the API *response*, the stored
+    # value is a real datetime). Comparing it against `lookback.isoformat()`
+    # (a Python string) was a cross-type Mongo comparison: BSON sorts Date
+    # strictly greater than String regardless of value, so `$gte` against a
+    # string matched *every* Date-valued document in the collection, not
+    # just the last 24h. This "Violations (last 24h)" stat was silently
+    # counting all-time violations. Passing the raw datetime fixes the
+    # comparison to actually be type-matched and time-bounded.
     mongo = get_mongodb()
     lookback = datetime.utcnow() - timedelta(hours=24)
     violations = await mongo.get_collection("alerts").count_documents(
-        {"created_at": {"$gte": lookback.isoformat()}}
+        {"created_at": {"$gte": lookback}}
     )
     stats["violations"] = violations
 
