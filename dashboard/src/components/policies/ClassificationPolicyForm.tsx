@@ -144,7 +144,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
   return (
     <div className="space-y-6">
       {/* Info Box */}
-      <div className="bg-primary/10 border border-primary/30 rounded-xl p-4">
+      <div className="bg-primary/10 border border-primary/30 rounded-lg p-4">
         <div className="flex items-start gap-3">
           <Info className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
           <div className="text-sm text-primary/90">
@@ -431,7 +431,7 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
       </div>
 
       {/* Example Scenarios */}
-      <div className="bg-muted/30 border border-border rounded-xl p-4">
+      <div className="bg-muted/30 border border-border rounded-lg p-4">
         <h6 className="text-sm font-semibold text-muted-foreground mb-2">💡 Example Scenarios</h6>
         <div className="text-xs text-muted-foreground space-y-1">
           <p>• <strong>Block USB with Restricted Data:</strong> classification_level = "Restricted" AND destination_type = "removable_drive"</p>

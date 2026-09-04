@@ -146,7 +146,7 @@ export default function PolicyTypeSelector({ selectedType, onSelectType }: Polic
             <button
               key={type}
               onClick={() => onSelectType(type)}
-              className={`p-4 rounded-xl border-2 transition-all text-left ${
+              className={`p-4 rounded-lg border-2 transition-all text-left ${
                 isSelected
                   ? 'border-primary bg-primary/10'
                   : 'border-border bg-card hover:border-primary/40 hover:bg-accent'

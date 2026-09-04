@@ -1,6 +1,8 @@
 import { Policy } from '@/types/policy'
 import PolicyRow from './PolicyRow'
 import { Shield } from 'lucide-react'
+import { Card } from '@/components/ui/card'
+import { EmptyState } from '@/components/ui/empty-state'
 
 interface PolicyTableProps {
   title: string
@@ -24,7 +26,7 @@ export default function PolicyTable({
   onDelete,
 }: PolicyTableProps) {
   return (
-    <div className="card p-0">
+    <Card className="p-0 overflow-hidden">
       {/* Table Header */}
       <div className="px-6 py-4 border-b border-border">
         <h3 className="font-semibold text-foreground">{title}</h3>
@@ -36,10 +38,7 @@ export default function PolicyTable({
       {/* Table Body */}
       <div className="divide-y divide-border">
         {policies.length === 0 ? (
-          <div className="p-12 text-center">
-            <Shield className="h-12 w-12 text-muted-foreground/70 mx-auto mb-3" />
-            <p className="text-muted-foreground font-medium">{emptyMessage}</p>
-          </div>
+          <EmptyState icon={Shield} title={emptyMessage} />
         ) : (
           policies.map((policy) => (
             <PolicyRow
@@ -54,7 +53,7 @@ export default function PolicyTable({
           ))
         )}
       </div>
-    </div>
+    </Card>
   )
 }
 

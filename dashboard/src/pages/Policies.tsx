@@ -8,6 +8,9 @@ import PolicyDetailsModal from '@/components/policies/PolicyDetailsModal'
 import ExportPoliciesModal from '@/components/policies/ExportPoliciesModal'
 import ImportPoliciesModal from '@/components/policies/ImportPoliciesModal'
 import { useConfirm } from '@/components/ui/Modal'
+import { PageHeader } from '@/components/ui/page-header'
+import { Button } from '@/components/ui/button'
+import StatsCard from '@/components/StatsCard'
 import { Policy } from '@/types/policy'
 import {
   getPolicies,
@@ -259,119 +262,81 @@ export default function PoliciesPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">DLP Policies</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Create and manage data loss prevention policies
-        </p>
-      </div>
-
-      {/* Header Actions */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div className="flex-1" />
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setShowImportModal(true)}
-            className="flex items-center gap-2 border border-border text-foreground px-4 py-3 rounded-xl hover:bg-accent"
-          >
-            <Upload className="w-4 h-4" />
-            Import
-          </button>
-          <button
-            onClick={() => setShowExportModal(true)}
-            className="flex items-center gap-2 border border-border text-foreground px-4 py-3 rounded-xl hover:bg-accent"
-          >
-            <Download className="w-4 h-4" />
-            Export
-          </button>
-          <button
-            onClick={() => refreshBundlesMutation.mutate()}
-            disabled={refreshBundlesMutation.isPending}
-            className="flex items-center gap-2 border border-border text-foreground px-4 py-3 rounded-xl hover:bg-accent disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            <RefreshCw className={`w-4 h-4 ${refreshBundlesMutation.isPending ? 'animate-spin' : ''}`} />
-            {refreshBundlesMutation.isPending ? 'Refreshing…' : 'Refresh Bundles'}
-          </button>
-          <button
-            onClick={handleCreatePolicy}
-            className="flex items-center gap-2 bg-primary text-white px-6 py-3 rounded-xl hover:bg-primary/90 shadow-sm hover:shadow-md transition-all"
-          >
-            <Plus className="w-5 h-5" />
-            Create Policy
-          </button>
-        </div>
-        {lastRefreshAt && (
-          <p className="w-full text-sm text-muted-foreground">
-            Last refresh triggered {formatDistanceToNow(lastRefreshAt, { addSuffix: true })}
-          </p>
-        )}
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="card">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Total Policies</p>
-              <p className="mt-2 text-3xl font-semibold text-foreground">
-                {isStatsLoading ? '—' : stats.total}
+      <PageHeader
+        icon={Shield}
+        title="DLP Policies"
+        description="Create and manage data loss prevention policies"
+        actions={
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => setShowImportModal(true)}>
+                <Upload className="h-4 w-4" />
+                Import
+              </Button>
+              <Button variant="outline" onClick={() => setShowExportModal(true)}>
+                <Download className="h-4 w-4" />
+                Export
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => refreshBundlesMutation.mutate()}
+                disabled={refreshBundlesMutation.isPending}
+              >
+                <RefreshCw className={`h-4 w-4 ${refreshBundlesMutation.isPending ? 'animate-spin' : ''}`} />
+                {refreshBundlesMutation.isPending ? 'Refreshing…' : 'Refresh Bundles'}
+              </Button>
+              <Button onClick={handleCreatePolicy}>
+                <Plus className="h-4 w-4" />
+                Create Policy
+              </Button>
+            </div>
+            {lastRefreshAt && (
+              <p className="text-xs text-muted-foreground">
+                Last refresh triggered {formatDistanceToNow(lastRefreshAt, { addSuffix: true })}
               </p>
-            </div>
-            <div className="p-3 rounded-lg bg-blue-500/15 text-blue-400">
-              <Shield className="h-6 w-6" />
-            </div>
+            )}
           </div>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Active Policies</p>
-              <p className="mt-2 text-3xl font-semibold text-foreground">
-                {isStatsLoading ? '—' : stats.active}
-              </p>
-            </div>
-            <div className="p-3 rounded-lg bg-green-500/15 text-green-400">
-              <CheckCircle className="h-6 w-6" />
-            </div>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Inactive Policies</p>
-              <p className="mt-2 text-3xl font-semibold text-foreground">
-                {isStatsLoading ? '—' : stats.inactive}
-              </p>
-            </div>
-            <div className="p-3 rounded-lg bg-secondary text-muted-foreground">
-              <XCircle className="h-6 w-6" />
-            </div>
-          </div>
-        </div>
-
-        <div className="card md:col-span-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-muted-foreground">Violations (last 24h)</p>
-              <p className="mt-2 text-3xl font-semibold text-foreground">
-                {isStatsLoading ? '—' : stats.violations}
-              </p>
-            </div>
-            <div className="p-3 rounded-lg bg-red-500/15 text-red-400">
-              <Shield className="h-6 w-6" />
-            </div>
-          </div>
-        </div>
-      </div>
+        }
+      />
 
       {isTruncated && (
-        <div className="rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
+        <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-foreground">
           Showing {policies.length} of {stats.total} policies. Narrow this down or contact an admin to raise the fetch limit.
         </div>
       )}
+
+      {/* Stats -- all four in one row, matching the StatsCard grid used on
+          every other tab (Rules, Log Explorer, Alerts, etc). Previously
+          the first three tiles were hand-rolled 'card' divs in a 3-col
+          grid and Violations forced itself onto its own full-width row
+          via md:col-span-3 -- inconsistent with the rest of the app and
+          the reason this row didn't read as "one row" of stats. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatsCard
+          title="Total Policies"
+          value={isStatsLoading ? '—' : stats.total}
+          icon={Shield}
+          color="indigo"
+        />
+        <StatsCard
+          title="Active Policies"
+          value={isStatsLoading ? '—' : stats.active}
+          icon={CheckCircle}
+          color="green"
+        />
+        <StatsCard
+          title="Inactive Policies"
+          value={isStatsLoading ? '—' : stats.inactive}
+          icon={XCircle}
+          color="gray"
+        />
+        <StatsCard
+          title="Violations (24h)"
+          value={isStatsLoading ? '—' : stats.violations}
+          icon={Shield}
+          color="red"
+        />
+      </div>
 
       {/* Active Policies Table */}
       <PolicyTable

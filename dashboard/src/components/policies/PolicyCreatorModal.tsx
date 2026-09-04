@@ -500,11 +500,8 @@ export default function PolicyCreatorModal({
       footer={
         <ModalFooter>
           {step > 1 && (
-            <button
-              onClick={handleBack}
-              className="px-6 py-3 bg-muted hover:bg-muted/70 text-foreground font-semibold rounded-xl transition-colors flex items-center gap-2"
-            >
-              <ChevronLeft className="w-5 h-5" />
+            <button onClick={handleBack} className="btn btn-secondary">
+              <ChevronLeft className="w-4 h-4" />
               Back
             </button>
           )}
@@ -515,25 +512,18 @@ export default function PolicyCreatorModal({
             <button
               onClick={handleNext}
               disabled={step === 1 ? !canProceedFromStep1 : !canProceedFromStep2}
-              className="px-6 py-3 bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground text-white font-semibold rounded-xl transition-colors flex items-center gap-2"
+              className="btn btn-primary"
             >
               Next
-              <ChevronRight className="w-5 h-5" />
+              <ChevronRight className="w-4 h-4" />
             </button>
           ) : (
-            <button
-              onClick={handleSave}
-              disabled={!canSave}
-              className="px-6 py-3 bg-primary hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground text-white font-semibold rounded-xl transition-all"
-            >
+            <button onClick={handleSave} disabled={!canSave} className="btn btn-primary">
               {editingPolicy ? 'Update Policy' : 'Create Policy'}
             </button>
           )}
 
-          <button
-            onClick={handleClose}
-            className="px-6 py-3 bg-muted hover:bg-muted/70 text-foreground font-semibold rounded-xl transition-colors"
-          >
+          <button onClick={handleClose} className="btn btn-secondary">
             Cancel
           </button>
         </ModalFooter>
@@ -583,7 +573,7 @@ export default function PolicyCreatorModal({
           {step === 2 && policyType && (
             <div className="space-y-6">
               {/* Basic Information */}
-              <div className="bg-muted/30 rounded-xl p-6 border border-border">
+              <div className="bg-muted/30 rounded-lg p-6 border border-border">
                 <h4 className="text-lg font-semibold text-foreground mb-4">Basic Information</h4>
                 <div className="space-y-4">
                   <div>
@@ -671,7 +661,7 @@ export default function PolicyCreatorModal({
               </div>
 
               {/* Policy Type Specific Configuration */}
-              <div className="bg-muted/30 rounded-xl p-6 border border-border">
+              <div className="bg-muted/30 rounded-lg p-6 border border-border">
                 <h4 className="text-lg font-semibold text-foreground mb-4">Policy Configuration</h4>
                 {policyType === 'clipboard_monitoring' && (
                   <ClipboardPolicyForm
@@ -804,7 +794,7 @@ export default function PolicyCreatorModal({
 
           {step === 3 && (
             <div className="space-y-6">
-              <div className="bg-primary/5 border border-primary/30 rounded-xl p-6">
+              <div className="bg-primary/5 border border-primary/30 rounded-lg p-6">
                 <h4 className="text-lg font-semibold text-primary mb-4">Policy Summary</h4>
                 <div className="space-y-3 text-sm">
                   <div className="flex justify-between">
@@ -840,7 +830,7 @@ export default function PolicyCreatorModal({
 
               {/* Configuration Preview */}
               {policyType === 'classification_aware_policy' ? (
-                <div className="bg-muted/30 rounded-xl p-6 border border-border">
+                <div className="bg-muted/30 rounded-lg p-6 border border-border">
                   <h4 className="text-lg font-semibold text-foreground mb-4">Policy Rules</h4>
                   <div className="space-y-4">
                     <div>
@@ -864,7 +854,7 @@ export default function PolicyCreatorModal({
                   </div>
                 </div>
               ) : config && (
-                <div className="bg-muted/30 rounded-xl p-6 border border-border">
+                <div className="bg-muted/30 rounded-lg p-6 border border-border">
                   <h4 className="text-lg font-semibold text-foreground mb-4">Configuration</h4>
                   <pre className="bg-background p-4 rounded-lg text-xs overflow-x-auto text-foreground/80 border border-border">
                     {JSON.stringify(config, null, 2)}

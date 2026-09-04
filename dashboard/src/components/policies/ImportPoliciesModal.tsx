@@ -126,7 +126,7 @@ export default function ImportPoliciesModal({ isOpen, onClose, onImported }: Imp
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full flex flex-col items-center justify-center gap-2 p-8 border-2 border-dashed border-border rounded-xl hover:border-primary transition-colors text-muted-foreground hover:text-foreground"
+                className="w-full flex flex-col items-center justify-center gap-2 p-8 border-2 border-dashed border-border rounded-lg hover:border-primary transition-colors text-muted-foreground hover:text-foreground"
               >
                 <Upload className="w-8 h-8" />
                 <span className="text-sm">{fileName || 'Click to choose a .json file'}</span>
