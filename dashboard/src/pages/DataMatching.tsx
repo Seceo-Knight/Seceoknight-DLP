@@ -5,6 +5,10 @@ import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
 import { extractErrorDetail } from '@/utils/errorUtils'
+import { PageHeader } from '@/components/ui/page-header'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { tone, type Tone } from '@/lib/tone'
 import {
   listSources, createEdm, createFingerprint, updateSource, deleteSource,
   testContent, fileToBase64, type MatchResult,
@@ -20,6 +24,21 @@ import SharedModal, { ModalHeader, useConfirm } from '@/components/ui/Modal'
 
 const CLASSIFICATIONS = ['Restricted', 'Confidential', 'Internal']
 const utf8ToB64 = (s: string) => btoa(unescape(encodeURIComponent(s)))
+
+// Same Restricted=red/Confidential=orange/Internal=yellow scheme already
+// used by Events.tsx's EventDetailModal and LogExplorer.tsx, instead of
+// independently inventing a 4th one here -- this page previously rendered
+// every classification as the same red badge regardless of tier, which
+// both disagreed with those other pages and made the "On match" column
+// useless as a severity signal (Internal and Restricted looked identical).
+const classificationTone = (c?: string | null): Tone => {
+  switch (c) {
+    case 'Restricted': return 'red'
+    case 'Confidential': return 'orange'
+    case 'Internal': return 'yellow'
+    default: return 'gray'
+  }
+}
 
 export default function DataMatching() {
   const qc = useQueryClient()
@@ -57,31 +76,26 @@ export default function DataMatching() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="eyebrow mb-1.5">Enforce</p>
-          <h1 className="text-2xl font-bold tracking-tight text-cs-ink">Data Matching</h1>
-          <p className="mt-1 text-sm text-cs-ink-2 max-w-2xl">
-            Match content against your <strong>actual</strong> protected data -- real records
-            (Exact Data Matching) and sensitive documents (fingerprinting). Matching runs on this
-            server against <strong>keyed one-way hashes only</strong>; the uploaded data is indexed
-            and then discarded -- never stored.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button className="btn btn-secondary" onClick={() => setTestOpen(true)}>
-            <FlaskConical className="h-4 w-4" /> Test content
-          </button>
-          <button className="btn btn-primary" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" /> New source
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        icon={Fingerprint}
+        eyebrow="Enforce"
+        title="Data Matching"
+        description="Match content against your actual protected data -- real records (Exact Data Matching) and sensitive documents (fingerprinting). Matching runs on this server against keyed one-way hashes only; the uploaded data is indexed and then discarded -- never stored."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setTestOpen(true)}>
+              <FlaskConical className="h-4 w-4" /> Test content
+            </Button>
+            <Button onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" /> New source
+            </Button>
+          </>
+        }
+      />
 
       {/* Trust banner */}
-      <div className="flex items-center gap-3 rounded-cs-card border border-cs-hair bg-cs-indigo-faint px-4 py-3 text-sm text-cs-ink-2">
-        <ShieldCheck className="h-5 w-5 text-cs-indigo shrink-0" />
+      <div className="flex items-center gap-3 rounded-lg border border-border bg-primary/10 px-4 py-3 text-sm text-foreground/78">
+        <ShieldCheck className="h-5 w-5 text-primary shrink-0" />
         <span>
           Plaintext is never persisted. Each source stores only HMAC digests keyed with a
           per-deployment secret, so a stolen index cannot be reversed. EDM fires only on a
@@ -90,8 +104,8 @@ export default function DataMatching() {
       </div>
 
       {/* Table */}
-      <div className="rounded-cs-card border border-cs-hair bg-cs-panel overflow-hidden">
-        <div className="flex items-center gap-4 px-4 py-3 border-b border-cs-hair text-xs text-cs-muted">
+      <div className="rounded-lg border border-border bg-card overflow-hidden">
+        <div className="flex items-center gap-4 px-4 py-3 border-b border-border text-xs text-muted-foreground">
           <span>{list.length} source(s)</span>
           <span className="badge badge-info">{edmCount} EDM</span>
           <span className="badge badge-info">{fpCount} Fingerprint</span>
@@ -106,32 +120,36 @@ export default function DataMatching() {
             </thead>
             <tbody>
               {list.length === 0 && (
-                <tr><td colSpan={7} className="text-center text-cs-muted py-10">
+                <tr><td colSpan={7} className="text-center text-muted-foreground py-10">
                   No sources yet. Add a dataset (EDM) or a document (fingerprint) to start matching real data.
                 </td></tr>
               )}
               {sourcesPg.pageRows.map((s) => (
                 <tr key={s.id}>
                   <td>
-                    <div className="font-medium text-cs-ink">{s.name}</div>
-                    {s.description && <div className="text-xs text-cs-muted">{s.description}</div>}
+                    <div className="font-medium text-foreground">{s.name}</div>
+                    {s.description && <div className="text-xs text-muted-foreground">{s.description}</div>}
                   </td>
                   <td>
                     <span className="badge badge-info">
                       {s.source_type === 'edm' ? 'EDM' : 'Fingerprint'}
                     </span>
                   </td>
-                  <td className="text-cs-ink-2">
+                  <td className="text-foreground/78">
                     {s.source_type === 'edm'
                       ? <span><span className="num">{s.row_count ?? 0}</span> records &middot; {(s.columns || []).length} cols</span>
                       : <span><span className="num">{s.shingle_count ?? 0}</span> shingles</span>}
                   </td>
-                  <td className="text-cs-ink-2 text-xs">
+                  <td className="text-foreground/78 text-xs">
                     {s.source_type === 'edm'
                       ? <>&ge; <span className="num">{s.min_fields}</span> fields / record</>
                       : <>&ge; <span className="num">{s.min_shingles}</span> shingles or <span className="num">{Math.round(s.min_containment * 100)}%</span></>}
                   </td>
-                  <td><span className="badge badge-danger">{s.classification}</span></td>
+                  <td>
+                    <span className={cn('rounded border px-2 py-0.5 text-xs font-medium', tone(classificationTone(s.classification)))}>
+                      {s.classification}
+                    </span>
+                  </td>
                   <td>
                     <span className={s.enabled ? 'badge badge-success' : 'badge badge-warning'}>
                       {s.enabled ? 'Active' : 'Disabled'}
@@ -140,14 +158,14 @@ export default function DataMatching() {
                   <td>
                     <div className="flex items-center justify-end gap-1">
                       <button
-                        className="p-1.5 rounded-cs-sm hover:bg-cs-hair-2 text-cs-muted"
+                        className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground"
                         title={s.enabled ? 'Disable' : 'Enable'}
                         onClick={() => toggle.mutate({ id: s.id, enabled: !s.enabled })}
                       >
                         {s.enabled ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
                       </button>
                       <button
-                        className="p-1.5 rounded-cs-sm hover:bg-cs-hair-2 text-cs-crit"
+                        className="p-1.5 rounded-lg hover:bg-accent text-critical"
                         title="Delete"
                         onClick={async () => {
                           if (await confirm({
@@ -167,7 +185,7 @@ export default function DataMatching() {
           </table>
         </div>
         {list.length > 0 && (
-          <div className="px-4 py-3 border-t border-cs-hair">
+          <div className="px-4 py-3 border-t border-border">
             <DataPagination
               page={sourcesPg.page}
               pageSize={sourcesPg.pageSize}
@@ -223,10 +241,10 @@ function CreateModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
 
   return (
     <Modal title="New data-match source" onClose={onClose}>
-      <div className="flex gap-1 mb-4 border-b border-cs-hair">
+      <div className="flex gap-1 mb-4 border-b border-border">
         {(['edm', 'fingerprint'] as const).map((t) => (
           <button key={t}
-            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${tab === t ? 'border-cs-indigo text-cs-indigo' : 'border-transparent text-cs-muted'}`}
+            className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px ${tab === t ? 'border-primary text-primary' : 'border-transparent text-muted-foreground'}`}
             onClick={() => setTab(t)}>
             {t === 'edm' ? 'Exact Data Match (records)' : 'Fingerprint (document)'}
           </button>
@@ -250,7 +268,7 @@ function CreateModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
                 <input type="number" min={1} max={20} className="input" value={minFields} onChange={(e) => setMinFields(Number(e.target.value) || 2)} />
               </Field>
             </div>
-            <p className="text-xs text-cs-muted">A record fires only when this many of its fields appear together -- the combination rule that stops random look-alikes.</p>
+            <p className="text-xs text-muted-foreground">A record fires only when this many of its fields appear together -- the combination rule that stops random look-alikes.</p>
           </>
         ) : (
           <>
@@ -260,7 +278,7 @@ function CreateModal({ onClose, onSaved }: { onClose: () => void; onSaved: () =>
               <Field label="Min overlapping shingles"><input type="number" min={1} className="input" value={minShingles} onChange={(e) => setMinShingles(Number(e.target.value) || 4)} /></Field>
               <Field label="...or containment"><input type="number" step={0.05} min={0.01} max={1} className="input" value={minContainment} onChange={(e) => setMinContainment(Number(e.target.value) || 0.25)} /></Field>
             </div>
-            <p className="text-xs text-cs-muted">Catches partial and lightly-edited copies, not just byte-identical files.</p>
+            <p className="text-xs text-muted-foreground">Catches partial and lightly-edited copies, not just byte-identical files.</p>
           </>
         )}
 
@@ -292,7 +310,7 @@ function TestModal({ onClose }: { onClose: () => void }) {
   })
   return (
     <Modal title="Test content against sources" onClose={onClose}>
-      <p className="text-sm text-cs-ink-2 mb-3">Paste text to see what it would match. Nothing is stored and no event is created.</p>
+      <p className="text-sm text-foreground/78 mb-3">Paste text to see what it would match. Nothing is stored and no event is created.</p>
       <textarea className="input text-sm" rows={6} value={content} onChange={(e) => setContent(e.target.value)} placeholder="Paste an email body, a record, a document excerpt..." />
       <div className="flex justify-end mt-3">
         <button className="btn btn-primary" disabled={run.isPending || !content.trim()} onClick={() => run.mutate()}>
@@ -300,19 +318,21 @@ function TestModal({ onClose }: { onClose: () => void }) {
         </button>
       </div>
       {result && (
-        <div className="mt-4 rounded-cs-sm border border-cs-hair p-3">
-          <div className={`font-medium mb-2 ${result.matched ? 'text-cs-crit' : 'text-cs-ok'}`}>
+        <div className="mt-4 rounded-lg border border-border p-3">
+          <div className={`font-medium mb-2 ${result.matched ? 'text-critical' : 'text-success'}`}>
             {result.matched ? `Matched ${result.match_count} source(s)` : 'No match'}
           </div>
           <ul className="space-y-1 text-sm">
             {result.matches.map((m) => (
               <li key={m.source_id} className="flex items-center gap-2">
                 <span className="badge badge-info">{m.type === 'edm' ? 'EDM' : 'FP'}</span>
-                <span className="font-medium text-cs-ink">{m.name}</span>
-                <span className="text-cs-muted text-xs">
+                <span className="font-medium text-foreground">{m.name}</span>
+                <span className="text-muted-foreground text-xs">
                   {m.type === 'edm' ? `${m.matched_rows} record(s)` : `overlap ${m.overlap}, containment ${Math.round((m.containment || 0) * 100)}%`}
                 </span>
-                <span className="badge badge-danger ml-auto">{m.classification}</span>
+                <span className={cn('ml-auto rounded border px-2 py-0.5 text-xs font-medium', tone(classificationTone(m.classification)))}>
+                  {m.classification}
+                </span>
               </li>
             ))}
           </ul>
@@ -326,7 +346,7 @@ function TestModal({ onClose }: { onClose: () => void }) {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="block text-xs font-medium text-cs-ink-2 mb-1">{label}</span>
+      <span className="block text-xs font-medium text-foreground/78 mb-1">{label}</span>
       {children}
     </label>
   )
@@ -350,7 +370,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
         <ModalHeader
           title={
             <span className="flex items-center gap-2">
-              <Fingerprint className="h-5 w-5 text-cs-indigo" />
+              <Fingerprint className="h-5 w-5 text-primary" />
               {title}
             </span>
           }
