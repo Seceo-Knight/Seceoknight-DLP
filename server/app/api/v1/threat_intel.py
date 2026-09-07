@@ -91,17 +91,30 @@ async def list_iocs(
     current_user=Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(IOC).order_by(IOC.created_at.desc())
+    filters = []
     if ioc_type:
-        stmt = stmt.where(IOC.ioc_type == ioc_type)
+        filters.append(IOC.ioc_type == ioc_type)
     if source:
-        stmt = stmt.where(IOC.source == source)
+        filters.append(IOC.source == source)
     if shared is not None:
-        stmt = stmt.where(IOC.is_shared == shared)
+        filters.append(IOC.is_shared == shared)
     if q:
-        stmt = stmt.where(IOC.value.ilike(f"%{q}%"))
+        filters.append(IOC.value.ilike(f"%{q}%"))
+
+    stmt = select(IOC).order_by(IOC.created_at.desc())
+    count_stmt = select(func.count(IOC.id))
+    for f in filters:
+        stmt = stmt.where(f)
+        count_stmt = count_stmt.where(f)
+
+    # `total` is the true count of matching rows in the DB, independent of
+    # `limit` -- the dashboard used to treat len(returned rows) as "the
+    # total", so once a deployment accumulated more than the 200-row
+    # default (e.g. a few TAXII feed polls), everything past #200 went
+    # silently invisible with no indication anything was cut off.
+    total = (await db.execute(count_stmt)).scalar_one()
     rows = (await db.execute(stmt.limit(min(limit, 1000)))).scalars().all()
-    return {"iocs": [_ioc_out(r) for r in rows], "count": len(rows)}
+    return {"iocs": [_ioc_out(r) for r in rows], "count": len(rows), "total": total}
 
 
 @router.post("/iocs", status_code=status.HTTP_201_CREATED)

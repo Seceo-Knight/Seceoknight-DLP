@@ -944,9 +944,14 @@ export type SharingConfig = {
   updated_at: string | null
 }
 
-export const getIocs = async (params?: { ioc_type?: string; shared?: boolean; q?: string }): Promise<IOC[]> => {
-  const { data } = await apiClient.get('/threat-intel/iocs', { params })
-  return data?.iocs || []
+export const getIocs = async (
+  params?: { ioc_type?: string; shared?: boolean; q?: string },
+): Promise<{ iocs: IOC[]; total: number }> => {
+  // limit defaults to the backend's max (1000) rather than its own
+  // default of 200 -- see threat_intel.py's list_iocs for the `total`
+  // field this now also returns, used to detect when even 1000 isn't enough.
+  const { data } = await apiClient.get('/threat-intel/iocs', { params: { limit: 1000, ...params } })
+  return { iocs: data?.iocs || [], total: typeof data?.total === 'number' ? data.total : (data?.iocs || []).length }
 }
 export const getIocStats = async (): Promise<IocStats> => {
   const { data } = await apiClient.get('/threat-intel/stats')
