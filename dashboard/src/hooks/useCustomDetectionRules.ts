@@ -16,31 +16,48 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+// JS's RegExp doesn't support Python/PCRE-style inline mode modifiers like
+// `(?i)` -- `new RegExp('(?i)foo')` throws "Invalid group". Rules imported
+// or hand-written with one baked into `pattern` would otherwise fail the
+// validateRegex() check below and silently vanish from the picker for a
+// reason that isn't visible anywhere in the UI. Stripping a leading one
+// just downgrades that one rule to case-sensitive matching instead of
+// making it disappear entirely.
+function stripLeadingInlineFlags(pattern: string): string {
+  return pattern.replace(/^\(\?[a-zA-Z]+\)/, '')
+}
+
 /**
  * Derive a single regex pattern from a custom Rule (Rules tab) so it can be
  * used exactly like a built-in predefined pattern -- a policy's
  * `patterns.custom` list only stores {regex, description} pairs, there's no
  * separate flags/keywords/dictionary concept on the policy side.
  *
- * - regex-type rules use their pattern as-is, prefixed with `(?i)` when the
- *   rule is case-insensitive -- the same inline-flag convention the built-in
- *   "API Key" predefined pattern already uses (see utils/policyUtils.ts).
+ * IMPORTANT: this does NOT try to translate Rule.case_sensitive into an
+ * `(?i)` prefix. Rule.case_sensitive defaults to `false` at the DB column
+ * level (see app/models/rule.py) for any row that didn't explicitly set
+ * it -- which in practice is nearly every seeded default rule. An earlier
+ * version of this function prefixed `(?i)` whenever case_sensitive was
+ * false, which is invalid JS regex syntax (see stripLeadingInlineFlags
+ * above) and made validateRegex() reject almost every rule, silently
+ * emptying this picker down to just the one rule that happened to have
+ * case_sensitive=true. Case-sensitivity just isn't preserved here --
+ * there's nowhere to put a separate flag in `patterns.custom`'s shape.
+ *
+ * - regex-type rules use their pattern as-is (minus any leading inline
+ *   flag group).
  * - keyword-type rules become an escaped word-boundary alternation.
  * - dictionary-type rules reference an external wordlist file with no
  *   single-regex equivalent, so they're not selectable here.
  */
 function ruleToPattern(rule: Rule): DetectionPattern | null {
   if (rule.type === 'regex' && rule.pattern) {
-    const caseInsensitive = rule.case_sensitive === false || (rule.regex_flags || []).includes('i')
-    const regex = caseInsensitive && !rule.pattern.startsWith('(?i)') ? `(?i)${rule.pattern}` : rule.pattern
-    return { regex, description: rule.name }
+    return { regex: stripLeadingInlineFlags(rule.pattern), description: rule.name }
   }
   if (rule.type === 'keyword' && rule.keywords && rule.keywords.length > 0) {
     const escaped = rule.keywords.filter(Boolean).map(escapeRegExp)
     if (escaped.length === 0) return null
-    const body = `\\b(?:${escaped.join('|')})\\b`
-    const regex = rule.case_sensitive === false ? `(?i)${body}` : body
-    return { regex, description: rule.name }
+    return { regex: `\\b(?:${escaped.join('|')})\\b`, description: rule.name }
   }
   return null
 }
