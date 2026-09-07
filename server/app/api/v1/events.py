@@ -409,6 +409,38 @@ async def create_event(
                 matched_rules=len(classification_result.matched_rules),
                 block=block_decision,
             )
+
+            # Persist this authoritative, server-computed classification onto
+            # the event doc we just inserted at Step 2, instead of leaving it
+            # holding whatever classification_level/classification_category
+            # the agent guessed (or "Public"/None if the agent sent nothing).
+            # Previously this classification_result was used ONLY to decide
+            # block_decision above and then discarded -- the stored event
+            # doc had to wait for _process_event_background (a fire-and-forget
+            # background task with its own retry/backoff) to eventually
+            # correct it. For clipboard events specifically that's unnecessary:
+            # we already did the real classification inline, synchronously,
+            # right here. Writing it back now closes the window where
+            # Log Explorer / Events / Alerts could read the same event at
+            # slightly different times and see different classification
+            # values, entirely eliminating it for clipboard events (the
+            # background task still runs afterward as a second pass, e.g.
+            # to attach policy match details, but it will compute the same
+            # classification and so is a no-op on this field).
+            rule_labels = [
+                label
+                for rule in classification_result.matched_rules
+                for label in rule.get("classification_labels", [])
+            ]
+            await events_collection.update_one(
+                {"id": event.event_id},
+                {"$set": {
+                    "classification_level": classification_result.classification,
+                    "classification_category": classification_result.classification,
+                    "classification_score": classification_result.confidence_score,
+                    "classification_labels": rule_labels,
+                }},
+            )
         except Exception as _sync_err:
             logger.warning(
                 "Clipboard sync block check failed (non-fatal)",

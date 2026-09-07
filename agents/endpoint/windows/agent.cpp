@@ -7564,9 +7564,31 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             description += "\nDetected sensitive data:" + detectedSummary;
             description += "\nMatched policies: " + std::to_string(classification.matchedPolicies.size());
             
-            // Determine classification level from confidence score
+            // Rough LOCAL estimate of classification tier -- used ONLY to
+            // pick a human-readable description below (preciseDesc), never
+            // sent to the server as classification_level/_score/_category
+            // (see the JSON build below). This heuristic only recognizes a
+            // small hardcoded list of built-in data-type names
+            // (credit_card/ssn/aadhaar/private_key/aws_key/pan/ifsc/
+            // bank_account/email/phone) and has no idea what Weight a
+            // Rules-tab custom rule (e.g. "Study Report") was configured
+            // with -- anything outside that whitelist falls through to a
+            // generic totalMatches*0.3 guess that has nothing to do with
+            // the server's actual confidence/weight-based scoring. Sending
+            // that guess to the server as this event's authoritative
+            // classification_level/_category (which is what this code used
+            // to do) meant Log Explorer could show a materially different,
+            // agent-invented tier than what Events/Alerts showed once the
+            // server's real classification (full rule engine + context
+            // analysis + custom rules, see app/services/
+            // classification_engine.py) came back -- sometimes higher,
+            // sometimes lower, since the two classifiers are unrelated.
+            // The server is already the sole authority for the block/allow
+            // decision here (see the "Server-only keyword rules... the
+            // server is the authority for blocking" comment on the Public
+            // path above) -- it's the authority for the classification
+            // *label* too now, for the same reason.
             float classScore = std::min(1.0f, (float)totalMatches * 0.3f);
-            // Boost score based on severity of detected types
             for (const auto& dt : detectedTypes) {
                 std::string lower = ToLower(dt);
                 if (lower == "credit_card" || lower == "ssn" || lower == "aadhaar" ||
@@ -7578,7 +7600,6 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                     classScore = std::max(classScore, 0.4f);
                 }
             }
-            // Map score to classification level
             std::string classLevel;
             if (classScore >= 0.8f) classLevel = "Restricted";
             else if (classScore >= 0.6f) classLevel = "Confidential";
@@ -7618,9 +7639,20 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
             json.AddString("severity", classification.severity);
             json.AddString("action", classification.suggestedAction);
             json.AddString("content", content);
-            json.AddString("classification_level", classLevel);
-            json.AddDouble("classification_score", classScore);
-            json.AddString("classification_category", classLevel);
+            // classification_level/_score/_category are intentionally NOT
+            // sent here. The server now runs its own real classification
+            // (full rule engine + weights + context analysis + custom
+            // Rules-tab rules) synchronously for every clipboard event as
+            // soon as it's received (see the "Synchronous block check for
+            // clipboard events" step in POST /events) and writes the
+            // authoritative value onto the event immediately -- sending our
+            // own local classLevel/classScore guess here would just get
+            // overwritten a moment later, and briefly (or, if the server
+            // classification step ever throws, permanently) show a
+            // different, agent-invented tier in Log Explorer than what
+            // Events/Alerts display for the same event. content/severity/
+            // action/detected data types are still sent below since those
+            // drive the LOCAL enforcement decision, which stays agent-side.
             json.AddArray("classification_labels", detectedTypes);
             json.AddArray("classification_rules_matched", detectedTypes);
             json.AddString("detected_content", detectedSummary);
