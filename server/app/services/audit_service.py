@@ -43,15 +43,18 @@ class AuditService:
 
     async def get_logs_with_email(
         self, skip=0, limit=100, user_id=None, action=None, start_date=None, end_date=None,
-    ) -> List[Tuple[AuditLog, Optional[str]]]:
+    ) -> List[Tuple[AuditLog, Optional[str], Optional[str]]]:
         """Same as get_logs, but LEFT-joined against users so the caller gets
-        a human-readable email alongside each row instead of a bare user_id
-        UUID -- the audit trail's whole job is to answer "who did this", and
-        a raw UUID doesn't do that for anyone reviewing it. LEFT (not INNER)
-        because a user can be deleted after the fact and the audit row must
-        still show, just with no resolvable email."""
+        a human-readable display name (+ email) alongside each row instead of
+        a bare user_id UUID -- the audit trail's whole job is to answer "who
+        did this", and a raw UUID doesn't do that for anyone reviewing it.
+        full_name is the same identity string User Management lists users by
+        (it covers AGENT-role service accounts too, e.g. a machine/agent
+        name, not just people), with email as the secondary line. LEFT (not
+        INNER) because a user can be deleted after the fact and the audit
+        row must still show, just with nothing resolvable."""
         query = (
-            select(AuditLog, User.email)
+            select(AuditLog, User.email, User.full_name)
             .select_from(outerjoin(AuditLog, User, AuditLog.user_id == User.id))
         )
         filters = []
@@ -67,7 +70,7 @@ class AuditService:
             query = query.where(and_(*filters))
         query = query.order_by(AuditLog.created_at.desc()).offset(skip).limit(limit)
         result = await self.db.execute(query)
-        return [(row[0], row[1]) for row in result.all()]
+        return [(row[0], row[1], row[2]) for row in result.all()]
 
     async def count_logs(self, user_id=None, action=None, start_date=None, end_date=None) -> int:
         query = select(func.count(AuditLog.id))

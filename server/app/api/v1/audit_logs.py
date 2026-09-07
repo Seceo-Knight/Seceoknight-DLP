@@ -24,6 +24,7 @@ class AuditLogOut(BaseModel):
     id: str
     user_id: Optional[str] = None
     user_email: Optional[str] = None
+    user_name: Optional[str] = None
     action: str
     details: Optional[dict] = None
     created_at: datetime
@@ -73,11 +74,12 @@ async def list_audit_logs(
                 id=str(log.id),
                 user_id=str(log.user_id) if log.user_id else None,
                 user_email=email,
+                user_name=full_name,
                 action=log.action,
                 details=log.details,
                 created_at=log.created_at,
             )
-            for log, email in rows
+            for log, email, full_name in rows
         ],
         "total": total,
     }

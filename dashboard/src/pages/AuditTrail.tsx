@@ -18,6 +18,20 @@ const ACTION_COLORS: Record<string, string> = {
   logout: 'bg-muted text-muted-foreground',
 }
 
+// "security.printers.enforcement" -> "Security Printers Enforcement" --
+// the raw dot/underscore-namespaced action code is precise but not
+// something a reviewer reads at a glance; the badge shows this humanized
+// form and keeps the raw code as a title tooltip for anyone who needs
+// the exact identifier (e.g. to grep server logs).
+function humanizeAction(action: string): string {
+  if (!action) return '-'
+  return action
+    .split(/[._]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ')
+}
+
 export default function AuditTrail() {
   const [logs, setLogs] = useState<any[]>([])
   const [total, setTotal] = useState(0)
@@ -99,11 +113,16 @@ export default function AuditTrail() {
                 <tr key={log.id || i} className="border-b border-border/50">
                   <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{log.created_at || log.timestamp ? formatDateTimeIST(log.created_at || log.timestamp) : '-'}</td>
                   <td className="px-4 py-3">
-                    {log.user_email ? (
-                      <span className="text-foreground">{log.user_email}</span>
+                    {log.user_name || log.user_email ? (
+                      <div>
+                        <div className="font-medium text-foreground">{log.user_name || log.user_email}</div>
+                        {log.user_name && log.user_email && (
+                          <div className="text-xs text-muted-foreground mt-0.5">{log.user_email}</div>
+                        )}
+                      </div>
                     ) : log.user_id || log.user ? (
                       // Falls back to the raw UUID only when the user row is
-                      // gone (deleted account) or the log predates email
+                      // gone (deleted account) or the log predates name/email
                       // resolution -- shown muted + monospace so it still
                       // reads as "un-resolvable ID", not a normal name.
                       <span className="font-mono text-xs text-muted-foreground" title={log.user_id || log.user}>{log.user_id || log.user}</span>
@@ -111,7 +130,9 @@ export default function AuditTrail() {
                       <span className="text-muted-foreground">System</span>
                     )}
                   </td>
-                  <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-medium ${color}`}>{log.action}</span></td>
+                  <td className="px-4 py-3">
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${color}`} title={log.action}>{humanizeAction(log.action)}</span>
+                  </td>
                   <td className="px-4 py-3">
                     <button onClick={() => setExpandedRow(expanded ? null : i)} className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs">
                       {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
