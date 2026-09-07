@@ -1,8 +1,13 @@
-import { useState, useRef, useEffect } from 'react'
-import { MoreVertical, Shield } from 'lucide-react'
+import { Eye, Edit, Copy, Power, Trash2, MoreVertical } from 'lucide-react'
 import { Policy } from '@/types/policy'
 import { getPolicyTypeIcon, getPolicyTypeLabel, formatPolicyConfig, getSeverityColorLight } from '@/utils/policyUtils'
-import PolicyContextMenu from './PolicyContextMenu'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
 
 interface PolicyRowProps {
   policy: Policy
@@ -21,31 +26,8 @@ export default function PolicyRow({
   onToggleStatus,
   onDelete,
 }: PolicyRowProps) {
-  const [showMenu, setShowMenu] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const buttonRef = useRef<HTMLButtonElement>(null)
-
   const Icon = getPolicyTypeIcon(policy.type)
   const severityColor = getSeverityColorLight(policy.severity)
-
-  // Close menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        menuRef.current &&
-        buttonRef.current &&
-        !menuRef.current.contains(event.target as Node) &&
-        !buttonRef.current.contains(event.target as Node)
-      ) {
-        setShowMenu(false)
-      }
-    }
-
-    if (showMenu) {
-      document.addEventListener('mousedown', handleClickOutside)
-      return () => document.removeEventListener('mousedown', handleClickOutside)
-    }
-  }, [showMenu])
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString)
@@ -115,44 +97,52 @@ export default function PolicyRow({
           </div>
         </div>
 
-        {/* Actions Menu */}
-        <div className="relative">
-          <button
-            ref={buttonRef}
-            onClick={() => setShowMenu(!showMenu)}
-            className="p-2 rounded-lg hover:bg-accent transition-colors"
-            aria-label="Policy actions"
-          >
-            <MoreVertical className="h-5 w-5 text-muted-foreground/70" />
-          </button>
-
-          {showMenu && (
-            <PolicyContextMenu
-              ref={menuRef}
-              policy={policy}
-              onViewDetails={() => {
-                setShowMenu(false)
-                onViewDetails(policy)
-              }}
-              onEdit={() => {
-                setShowMenu(false)
-                onEdit(policy)
-              }}
-              onDuplicate={() => {
-                setShowMenu(false)
-                onDuplicate(policy)
-              }}
-              onToggleStatus={() => {
-                setShowMenu(false)
-                onToggleStatus(policy)
-              }}
-              onDelete={() => {
-                setShowMenu(false)
-                onDelete(policy)
-              }}
-            />
-          )}
-        </div>
+        {/* Actions Menu -- Radix DropdownMenu (components/ui/dropdown-menu.tsx)
+            instead of a hand-rolled absolute-positioned div. That version
+            opened downward with no collision detection and lived inside
+            PolicyTable's `overflow-hidden` Card, so for the last row(s) in
+            a list the menu -- and "Delete Policy" specifically, since it
+            was the last item -- got clipped and was impossible to click.
+            Radix's Content portals to document.body and auto-flips to stay
+            in the viewport, which fixes both the container-clipping and
+            the near-bottom-of-page case at once. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              className="p-2 rounded-lg hover:bg-accent transition-colors"
+              aria-label="Policy actions"
+            >
+              <MoreVertical className="h-5 w-5 text-muted-foreground/70" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem onClick={() => onViewDetails(policy)}>
+              <Eye className="h-4 w-4" />
+              View Details
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onEdit(policy)}>
+              <Edit className="h-4 w-4" />
+              Edit Policy
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onDuplicate(policy)}>
+              <Copy className="h-4 w-4" />
+              Duplicate Policy
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => onToggleStatus(policy)}>
+              <Power className="h-4 w-4" />
+              {policy.enabled ? 'Deactivate' : 'Activate'}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => onDelete(policy)}
+              className="text-critical focus:bg-critical/10 focus:text-critical"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete Policy
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   )
