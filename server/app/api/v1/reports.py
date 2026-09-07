@@ -11,11 +11,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_role
 from app.core.config import settings
 from app.core.observability import StructuredLogger
 from app.models.report import Report
@@ -88,6 +88,15 @@ class ReportResponse(BaseModel):
         from_attributes = True
 
 
+class ReportListResponse(BaseModel):
+    """Wraps the page of reports with the *filtered* total count so the
+    frontend can build real pagination (Showing X-Y of Z / page N of M)
+    instead of guessing from a flat, unlabeled array -- matching the
+    {items, total} shape already used by /events and /alerts."""
+    reports: List[ReportResponse]
+    total: int
+
+
 def _report_to_response(r: Report) -> ReportResponse:
     return ReportResponse(
         id=str(r.id),
@@ -119,7 +128,7 @@ def _report_to_response(r: Report) -> ReportResponse:
 async def generate_report(
     body: GenerateReportRequest,
     background_tasks: BackgroundTasks,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -127,6 +136,12 @@ async def generate_report(
 
     The report is generated asynchronously via Celery. Returns the report ID
     immediately so the frontend can poll /reports/{id} for status.
+
+    Requires analyst (the same read floor gating events/alerts/incidents
+    elsewhere in the API) since a report is just a packaged export of data
+    the caller can already query directly -- but VIEWER, the lowest role,
+    must not be able to spin up Celery jobs or (via download below) pull
+    compliance reports (GDPR/HIPAA/PCI) out of the system unescorted.
     """
     # Validate report_types
     valid_types = {
@@ -199,36 +214,45 @@ async def generate_report(
     }
 
 
-@router.get("/", response_model=List[ReportResponse])
+@router.get("/", response_model=ReportListResponse)
 async def list_reports(
     status: Optional[str] = Query(None, regex="^(pending|generating|completed|failed)$"),
     report_type: Optional[str] = Query(None),
     frequency: Optional[str] = Query(None, regex="^(daily|weekly|monthly|custom)$"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
-    """List generated reports with optional filters."""
-    query = select(Report).order_by(desc(Report.created_at))
-
+    """List generated reports with optional filters, with the total count of
+    matching rows (not just the current page) so the frontend can paginate
+    accurately instead of silently truncating at whatever `limit` it sent."""
+    filters = []
     if status:
-        query = query.where(Report.status == status)
+        filters.append(Report.status == status)
     if report_type:
-        query = query.where(Report.report_type == report_type)
+        filters.append(Report.report_type == report_type)
     if frequency:
-        query = query.where(Report.frequency == frequency)
+        filters.append(Report.frequency == frequency)
+
+    query = select(Report).order_by(desc(Report.created_at))
+    count_query = select(func.count(Report.id))
+    for f in filters:
+        query = query.where(f)
+        count_query = count_query.where(f)
+
+    total = (await db.execute(count_query)).scalar_one()
 
     query = query.offset(offset).limit(limit)
     result = await db.execute(query)
     reports = result.scalars().all()
 
-    return [_report_to_response(r) for r in reports]
+    return ReportListResponse(reports=[_report_to_response(r) for r in reports], total=total)
 
 
 @router.get("/summary")
 async def get_reports_summary(
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -266,7 +290,7 @@ async def get_reports_summary(
 @router.get("/{report_id}", response_model=ReportResponse)
 async def get_report(
     report_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
     """Get a single report by ID (use for polling generation status)."""
@@ -287,12 +311,15 @@ async def get_report(
 async def download_report(
     report_id: str,
     fmt: str,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(require_role("analyst")),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Download a completed report file.
     fmt must be 'pdf' or 'csv'.
+
+    Requires analyst -- these files can contain GDPR/HIPAA/PCI compliance
+    detail, so a VIEWER must not be able to pull them unescorted.
     """
     if fmt not in ("pdf", "csv"):
         raise HTTPException(status_code=400, detail="Format must be 'pdf' or 'csv'")
@@ -337,15 +364,10 @@ async def download_report(
 @router.delete("/{report_id}", status_code=204)
 async def delete_report(
     report_id: str,
-    current_user: dict = Depends(get_current_user),
+    current_user=Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a report record and its associated files."""
-    # Only admins can delete reports
-    user_role = str(getattr(current_user.role, "value", current_user.role)).upper()
-    if user_role != "ADMIN":
-        raise HTTPException(status_code=403, detail="Admin access required")
-
+    """Delete a report record and its associated files. Requires admin."""
     try:
         uid = uuid.UUID(report_id)
     except ValueError:

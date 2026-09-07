@@ -14,6 +14,11 @@ import {
   Calendar,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { PageHeader } from '@/components/ui/page-header'
+import { Button } from '@/components/ui/button'
+import StatsCard from '@/components/StatsCard'
+import { DataPagination } from '@/components/ui/pagination'
+import { EmptyState } from '@/components/ui/empty-state'
 import Modal, { ModalHeader, ModalFooter, useConfirm } from '@/components/ui/Modal'
 import {
   getReports,
@@ -71,11 +76,15 @@ const REPORT_TYPES = [
   { value: 'pci_scope', label: 'PCI DSS Scope Report' },
 ]
 
+// Semantic status tokens -- matches the warning/info/success/critical
+// vocabulary used everywhere else in the app (Alerts, Incidents, Events)
+// instead of literal yellow-700/blue-700/green-700/red-700, which don't
+// track theme/contrast tuning done centrally in index.css.
 const STATUS_CONFIG = {
-  pending:    { icon: Clock,       color: 'text-yellow-700', bg: 'bg-yellow-500/10 border-yellow-500/20', label: 'Pending' },
-  generating: { icon: Loader2,     color: 'text-blue-700',   bg: 'bg-blue-500/10 border-blue-500/20',   label: 'Generating' },
-  completed:  { icon: CheckCircle, color: 'text-green-700',  bg: 'bg-green-500/10 border-green-500/20', label: 'Completed' },
-  failed:     { icon: AlertCircle, color: 'text-red-700',    bg: 'bg-red-500/10 border-red-500/20',     label: 'Failed' },
+  pending:    { icon: Clock,       color: 'text-warning',  bg: 'bg-warning/10 border-warning/30',   label: 'Pending' },
+  generating: { icon: Loader2,     color: 'text-info',      bg: 'bg-info/10 border-info/30',        label: 'Generating' },
+  completed:  { icon: CheckCircle, color: 'text-success',  bg: 'bg-success/10 border-success/30',   label: 'Completed' },
+  failed:     { icon: AlertCircle, color: 'text-critical', bg: 'bg-critical/10 border-critical/30', label: 'Failed' },
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -109,15 +118,6 @@ function defaultEndDate() {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div className="bg-card border border-border rounded-lg p-4">
-      <p className="text-xs text-muted-foreground/70 uppercase tracking-wide mb-1">{label}</p>
-      <p className={`text-3xl font-bold ${color}`}>{value}</p>
-    </div>
-  )
-}
-
 function StatusBadge({ status }: { status: Report['status'] }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.pending
   const Icon = cfg.icon
@@ -138,6 +138,7 @@ export default function Reports() {
 
   // Data state
   const [reports, setReports] = useState<Report[]>([])
+  const [total, setTotal] = useState(0)
   const [summary, setSummary] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -145,6 +146,13 @@ export default function Reports() {
   // Filters
   const [filterStatus, setFilterStatus] = useState('')
   const [filterType, setFilterType] = useState('')
+
+  // Pagination -- real server-side paging (the backend now returns the
+  // filtered total alongside the page, matching Events/Alerts) instead of
+  // the old flat `limit: 100` fetch with no way to see or reach anything
+  // past the 101st report.
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
 
   // Generate form
   const [showForm, setShowForm] = useState(false)
@@ -167,14 +175,15 @@ export default function Reports() {
     if (!silent) setLoading(true)
     else setRefreshing(true)
     try {
-      const params: any = { limit: 100 }
+      const params: any = { limit: pageSize, offset: (page - 1) * pageSize }
       if (filterStatus) params.status = filterStatus
       if (filterType) params.report_type = filterType
       const [list, summ] = await Promise.all([
         getReports(params),
         getReportsSummary().catch(() => null),
       ])
-      setReports(Array.isArray(list) ? list : [])
+      setReports(Array.isArray(list?.reports) ? list.reports : [])
+      setTotal(typeof list?.total === 'number' ? list.total : 0)
       if (summ) setSummary(summ)
     } catch {
       toast.error('Failed to load reports')
@@ -182,11 +191,15 @@ export default function Reports() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [filterStatus, filterType])
+  }, [filterStatus, filterType, page, pageSize])
 
   useEffect(() => { fetchAll() }, [fetchAll])
 
-  // Auto-refresh while any report is pending/generating
+  // Changing a filter invalidates the current page -- jump back to page 1
+  // so we don't land on an out-of-range page for the new, narrower result set.
+  useEffect(() => { setPage(1) }, [filterStatus, filterType])
+
+  // Auto-refresh while any report on the current page is pending/generating
   useEffect(() => {
     const hasPending = reports.some(r => r.status === 'pending' || r.status === 'generating')
     if (!hasPending) return
@@ -217,6 +230,7 @@ export default function Reports() {
       toast.success('Report queued — it will appear below when ready')
       setShowForm(false)
       setForm({ name: '', report_types: ['summary'], start_date: defaultStartDate(), end_date: defaultEndDate(), formats: ['pdf'], recipients: '' })
+      setPage(1)
       await fetchAll()
     } catch (e: any) {
       toast.error(e?.response?.data?.detail || 'Failed to queue report')
@@ -225,23 +239,23 @@ export default function Reports() {
     }
   }
 
-  const handleDownload = async (report: Report, fmt: 'pdf' | 'csv') => {
-    const key = `${report.id}-${fmt}`
+  const handleDownload = async (report: Report, fmtKey: 'pdf' | 'csv') => {
+    const key = `${report.id}-${fmtKey}`
     setDownloading(key)
     try {
-      const response = await downloadReportBlob(report.id, fmt)
+      const response = await downloadReportBlob(report.id, fmtKey)
       const blob = new Blob([response.data], {
-        type: fmt === 'pdf' ? 'application/pdf' : 'text/csv',
+        type: fmtKey === 'pdf' ? 'application/pdf' : 'text/csv',
       })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
       const period = report.period_start ? `_${fmtDate(report.period_start).replace(/\//g, '-')}` : ''
-      a.download = `${report.name.replace(/\s+/g, '_')}${period}.${fmt}`
+      a.download = `${report.name.replace(/\s+/g, '_')}${period}.${fmtKey}`
       a.click()
       URL.revokeObjectURL(url)
     } catch (e: any) {
-      toast.error(e?.response?.data?.detail || `Failed to download ${fmt.toUpperCase()}`)
+      toast.error(e?.response?.data?.detail || `Failed to download ${fmtKey.toUpperCase()}`)
     } finally {
       setDownloading('')
     }
@@ -257,6 +271,7 @@ export default function Reports() {
       await deleteReport(id)
       toast.success('Report deleted')
       setReports(prev => prev.filter(r => r.id !== id))
+      setTotal(prev => Math.max(0, prev - 1))
     } catch {
       toast.error('Failed to delete report')
     }
@@ -292,41 +307,32 @@ export default function Reports() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <BarChart2 className="w-6 h-6 text-primary" />
-          <div>
-            <h1 className="text-xl font-bold text-foreground">Reports &amp; Compliance</h1>
-            <p className="text-sm text-muted-foreground/70">Generate and download compliance reports</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => fetchAll(true)}
-            disabled={refreshing}
-            className="flex items-center gap-2 px-3 py-2 text-sm bg-muted hover:bg-muted/70 text-muted-foreground/50 rounded-lg transition-colors"
-          >
-            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
-          <button
-            onClick={() => setShowForm(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            Generate Report
-          </button>
-        </div>
-      </div>
+      <PageHeader
+        icon={BarChart2}
+        eyebrow="Compliance"
+        title="Reports"
+        description="Generate and download compliance reports"
+        actions={
+          <>
+            <Button variant="outline" onClick={() => fetchAll(true)} disabled={refreshing}>
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+            <Button onClick={() => setShowForm(true)}>
+              <Plus className="w-4 h-4" />
+              Generate Report
+            </Button>
+          </>
+        }
+      />
 
       {/* Stats */}
       {summary && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <StatCard label="Total" value={summary.total} color="text-foreground" />
-          <StatCard label="Completed" value={summary.completed} color="text-green-600" />
-          <StatCard label="Generating" value={summary.pending + summary.generating} color="text-blue-600" />
-          <StatCard label="Failed" value={summary.failed} color="text-red-600" />
+          <StatsCard title="Total" value={summary.total} icon={BarChart2} color="indigo" />
+          <StatsCard title="Completed" value={summary.completed} icon={CheckCircle} color="green" />
+          <StatsCard title="Generating" value={summary.pending + summary.generating} icon={Loader2} color="indigo" />
+          <StatsCard title="Failed" value={summary.failed} icon={AlertCircle} color="red" />
         </div>
       )}
 
@@ -335,7 +341,7 @@ export default function Reports() {
         <select
           value={filterStatus}
           onChange={e => setFilterStatus(e.target.value)}
-          className="bg-card border border-border text-muted-foreground/50 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-primary"
+          className="bg-card border border-border text-muted-foreground text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-primary"
         >
           <option value="">All Statuses</option>
           <option value="completed">Completed</option>
@@ -346,131 +352,141 @@ export default function Reports() {
         <select
           value={filterType}
           onChange={e => setFilterType(e.target.value)}
-          className="bg-card border border-border text-muted-foreground/50 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-primary"
+          className="bg-card border border-border text-muted-foreground text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-primary"
         >
           <option value="">All Types</option>
           {REPORT_TYPES.map(t => (
             <option key={t.value} value={t.value}>{t.label}</option>
           ))}
         </select>
-        <span className="text-sm text-muted-foreground/70">{reports.length} report{reports.length !== 1 ? 's' : ''}</span>
+        <span className="text-sm text-muted-foreground">{total} report{total !== 1 ? 's' : ''}</span>
       </div>
 
       {/* Reports Table */}
-      <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
         {reports.length === 0 ? (
-          <div className="text-center py-16">
-            <BarChart2 className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
-            <p className="text-muted-foreground/70 font-medium">No reports yet</p>
-            <p className="text-muted-foreground text-sm mt-1">Click "Generate Report" to create your first compliance report</p>
-          </div>
+          <EmptyState
+            icon={BarChart2}
+            title="No reports yet"
+            description={'Click "Generate Report" to create your first compliance report'}
+          />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/60">
-                  <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Report</th>
-                  <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Type</th>
-                  <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Period</th>
-                  <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Status</th>
-                  <th className="text-left px-4 py-3 text-muted-foreground/70 font-medium">Email</th>
-                  <th className="text-right px-4 py-3 text-muted-foreground/70 font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/50">
-                {reports.map(report => (
-                  <tr key={report.id} className="hover:bg-accent transition-colors">
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-foreground">{report.name}</div>
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        {fmt(report.created_at)}
-                        {report.file_size_bytes ? ` · ${fmtSize(report.file_size_bytes)}` : ''}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-block px-2 py-0.5 rounded bg-primary/10 border border-primary/20 text-primary text-xs">
-                        {REPORT_TYPES.find(t => t.value === report.report_type)?.label || report.report_type}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground/70 text-xs">
-                      <div className="flex items-center gap-1">
-                        <Calendar className="w-3 h-3" />
-                        {fmtDate(report.period_start)} – {fmtDate(report.period_end)}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={report.status} />
-                      {report.status === 'failed' && report.error_message && (
-                        <p className="text-red-600 text-xs mt-1 max-w-xs truncate" title={report.error_message}>
-                          {report.error_message}
-                        </p>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {report.email_sent === 'yes' ? (
-                        <span className="flex items-center gap-1 text-xs text-green-600">
-                          <Mail className="w-3 h-3" /> Sent
-                        </span>
-                      ) : report.email_sent === 'no' ? (
-                        <span className="text-xs text-red-600">Failed</span>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-1 justify-end">
-                        {report.status === 'completed' && report.has_pdf && (
-                          <button
-                            onClick={() => handleDownload(report, 'pdf')}
-                            disabled={downloading === `${report.id}-pdf`}
-                            title="Download PDF"
-                            className="flex items-center gap-1 px-2 py-1 text-xs bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-300 rounded transition-colors disabled:opacity-50"
-                          >
-                            {downloading === `${report.id}-pdf`
-                              ? <Loader2 className="w-3 h-3 animate-spin" />
-                              : <Download className="w-3 h-3" />}
-                            PDF
-                          </button>
-                        )}
-                        {report.status === 'completed' && report.has_csv && (
-                          <button
-                            onClick={() => handleDownload(report, 'csv')}
-                            disabled={downloading === `${report.id}-csv`}
-                            title="Download CSV"
-                            className="flex items-center gap-1 px-2 py-1 text-xs bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 text-green-300 rounded transition-colors disabled:opacity-50"
-                          >
-                            {downloading === `${report.id}-csv`
-                              ? <Loader2 className="w-3 h-3 animate-spin" />
-                              : <Download className="w-3 h-3" />}
-                            CSV
-                          </button>
-                        )}
-                        {isAdmin && (
-                          <button
-                            onClick={() => handleDelete(report.id)}
-                            title="Delete"
-                            className="p-1 text-muted-foreground hover:text-red-600 transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/60">
+                    <th className="text-left px-4 py-3 text-muted-foreground font-medium">Report</th>
+                    <th className="text-left px-4 py-3 text-muted-foreground font-medium">Type</th>
+                    <th className="text-left px-4 py-3 text-muted-foreground font-medium">Period</th>
+                    <th className="text-left px-4 py-3 text-muted-foreground font-medium">Status</th>
+                    <th className="text-left px-4 py-3 text-muted-foreground font-medium">Email</th>
+                    <th className="text-right px-4 py-3 text-muted-foreground font-medium">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-border/50">
+                  {reports.map(report => (
+                    <tr key={report.id} className="hover:bg-accent transition-colors">
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-foreground">{report.name}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {fmt(report.created_at)}
+                          {report.file_size_bytes ? ` · ${fmtSize(report.file_size_bytes)}` : ''}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="inline-block px-2 py-0.5 rounded bg-primary/10 border border-primary/20 text-primary text-xs">
+                          {REPORT_TYPES.find(t => t.value === report.report_type)?.label || report.report_type}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground text-xs">
+                        <div className="flex items-center gap-1">
+                          <Calendar className="w-3 h-3" />
+                          {fmtDate(report.period_start)} – {fmtDate(report.period_end)}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge status={report.status} />
+                        {report.status === 'failed' && report.error_message && (
+                          <p className="text-critical text-xs mt-1 max-w-xs truncate" title={report.error_message}>
+                            {report.error_message}
+                          </p>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {report.email_sent === 'yes' ? (
+                          <span className="flex items-center gap-1 text-xs text-success">
+                            <Mail className="w-3 h-3" /> Sent
+                          </span>
+                        ) : report.email_sent === 'no' ? (
+                          <span className="text-xs text-critical">Failed</span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1 justify-end">
+                          {report.status === 'completed' && report.has_pdf && (
+                            <button
+                              onClick={() => handleDownload(report, 'pdf')}
+                              disabled={downloading === `${report.id}-pdf`}
+                              title="Download PDF"
+                              className="flex items-center gap-1 px-2 py-1 text-xs bg-critical/10 hover:bg-critical/20 border border-critical/20 text-critical rounded transition-colors disabled:opacity-50"
+                            >
+                              {downloading === `${report.id}-pdf`
+                                ? <Loader2 className="w-3 h-3 animate-spin" />
+                                : <Download className="w-3 h-3" />}
+                              PDF
+                            </button>
+                          )}
+                          {report.status === 'completed' && report.has_csv && (
+                            <button
+                              onClick={() => handleDownload(report, 'csv')}
+                              disabled={downloading === `${report.id}-csv`}
+                              title="Download CSV"
+                              className="flex items-center gap-1 px-2 py-1 text-xs bg-success/10 hover:bg-success/20 border border-success/20 text-success rounded transition-colors disabled:opacity-50"
+                            >
+                              {downloading === `${report.id}-csv`
+                                ? <Loader2 className="w-3 h-3 animate-spin" />
+                                : <Download className="w-3 h-3" />}
+                              CSV
+                            </button>
+                          )}
+                          {isAdmin && (
+                            <button
+                              onClick={() => handleDelete(report.id)}
+                              title="Delete"
+                              className="p-1 text-muted-foreground hover:text-critical transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <DataPagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => { setPageSize(size); setPage(1) }}
+              pageSizeOptions={[10, 25, 50, 100, 200]}
+            />
+          </>
         )}
       </div>
 
       {/* Scheduled reports info */}
-      <div className="bg-primary/5 border border-primary/20 rounded-xl p-4">
+      <div className="bg-primary/5 border border-primary/20 rounded-lg p-4">
         <div className="flex items-start gap-3">
           <Clock className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
           <div>
             <p className="text-sm font-medium text-primary">Scheduled Reports</p>
-            <p className="text-sm text-muted-foreground/70 mt-1">
+            <p className="text-sm text-muted-foreground mt-1">
               Automated reports run on a fixed schedule: daily at 8:00 AM UTC, weekly every Monday at 9:00 AM UTC,
               and monthly on the 1st at 10:00 AM UTC. Configure recipients and SMTP settings in your <code className="text-primary">.env</code> file.
             </p>
@@ -483,7 +499,6 @@ export default function Reports() {
         open={showForm}
         onClose={() => setShowForm(false)}
         size="md"
-        className="!bg-card !border-border"
         label="Generate Report"
         header={
           <ModalHeader
@@ -498,17 +513,10 @@ export default function Reports() {
         }
         footer={
           <ModalFooter>
-            <button
-              onClick={() => setShowForm(false)}
-              className="flex-1 px-4 py-2 text-sm text-muted-foreground/50 bg-muted hover:bg-muted/70 rounded-lg transition-colors"
-            >
+            <button onClick={() => setShowForm(false)} className="btn btn-secondary flex-1">
               Cancel
             </button>
-            <button
-              onClick={handleGenerate}
-              disabled={generating}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 text-sm bg-primary hover:bg-primary/90 text-white rounded-lg transition-colors disabled:opacity-50"
-            >
+            <button onClick={handleGenerate} disabled={generating} className="btn btn-primary flex-1">
               {generating ? (
                 <><Loader2 className="w-4 h-4 animate-spin" /> Queueing...</>
               ) : (
@@ -521,19 +529,19 @@ export default function Reports() {
             <div className="space-y-5">
               {/* Name */}
               <div>
-                <label className="block text-sm font-medium text-muted-foreground/50 mb-1">Report Name</label>
+                <label className="block text-sm font-medium text-muted-foreground mb-1">Report Name</label>
                 <input
                   type="text"
                   value={form.name}
                   onChange={e => setForm(prev => ({ ...prev, name: e.target.value }))}
                   placeholder="e.g. Q2 Compliance Summary"
-                  className="w-full bg-muted border border-border text-foreground rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+                  className="input"
                 />
               </div>
 
               {/* Report types */}
               <div>
-                <label className="block text-sm font-medium text-muted-foreground/50 mb-2">Report Types</label>
+                <label className="block text-sm font-medium text-muted-foreground mb-2">Report Types</label>
                 <div className="grid grid-cols-2 gap-2">
                   {REPORT_TYPES.map(t => (
                     <label key={t.value} className="flex items-center gap-2 cursor-pointer">
@@ -541,9 +549,9 @@ export default function Reports() {
                         type="checkbox"
                         checked={form.report_types.includes(t.value)}
                         onChange={() => toggleReportType(t.value)}
-                        className="accent-indigo-500"
+                        className="accent-primary"
                       />
-                      <span className="text-sm text-muted-foreground/50">{t.label}</span>
+                      <span className="text-sm text-muted-foreground">{t.label}</span>
                     </label>
                   ))}
                 </div>
@@ -552,28 +560,28 @@ export default function Reports() {
               {/* Date range */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-muted-foreground/50 mb-1">From</label>
+                  <label className="block text-sm font-medium text-muted-foreground mb-1">From</label>
                   <input
                     type="datetime-local"
                     value={form.start_date}
                     onChange={e => setForm(prev => ({ ...prev, start_date: e.target.value }))}
-                    className="w-full bg-muted border border-border text-foreground rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+                    className="input"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-muted-foreground/50 mb-1">To</label>
+                  <label className="block text-sm font-medium text-muted-foreground mb-1">To</label>
                   <input
                     type="datetime-local"
                     value={form.end_date}
                     onChange={e => setForm(prev => ({ ...prev, end_date: e.target.value }))}
-                    className="w-full bg-muted border border-border text-foreground rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+                    className="input"
                   />
                 </div>
               </div>
 
               {/* Formats */}
               <div>
-                <label className="block text-sm font-medium text-muted-foreground/50 mb-2">Output Formats</label>
+                <label className="block text-sm font-medium text-muted-foreground mb-2">Output Formats</label>
                 <div className="flex gap-4">
                   {['pdf', 'csv'].map(f => (
                     <label key={f} className="flex items-center gap-2 cursor-pointer">
@@ -581,9 +589,9 @@ export default function Reports() {
                         type="checkbox"
                         checked={form.formats.includes(f)}
                         onChange={() => toggleFormat(f)}
-                        className="accent-indigo-500"
+                        className="accent-primary"
                       />
-                      <span className="text-sm text-muted-foreground/50 uppercase">{f}</span>
+                      <span className="text-sm text-muted-foreground uppercase">{f}</span>
                     </label>
                   ))}
                 </div>
@@ -591,7 +599,7 @@ export default function Reports() {
 
               {/* Recipients */}
               <div>
-                <label className="block text-sm font-medium text-muted-foreground/50 mb-1">
+                <label className="block text-sm font-medium text-muted-foreground mb-1">
                   Email Recipients <span className="text-muted-foreground font-normal">(optional, comma-separated)</span>
                 </label>
                 <input
@@ -599,7 +607,7 @@ export default function Reports() {
                   value={form.recipients}
                   onChange={e => setForm(prev => ({ ...prev, recipients: e.target.value }))}
                   placeholder="ciso@company.com, security@company.com"
-                  className="w-full bg-muted border border-border text-foreground rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+                  className="input"
                 />
               </div>
             </div>

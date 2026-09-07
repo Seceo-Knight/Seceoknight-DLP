@@ -800,7 +800,7 @@ export async function getReports(params?: {
   frequency?: string
   limit?: number
   offset?: number
-}) {
+}): Promise<{ reports: any[]; total: number }> {
   const { data } = await apiClient.get('/reports/', { params })
   return data
 }
