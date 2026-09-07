@@ -1,14 +1,15 @@
 """
 Audit Logging Service
 """
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from datetime import datetime
 from uuid import UUID
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, outerjoin
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
 from app.models.audit_log import AuditLog
+from app.models.user import User
 
 logger = structlog.get_logger()
 
@@ -39,6 +40,34 @@ class AuditService:
         query = query.order_by(AuditLog.created_at.desc()).offset(skip).limit(limit)
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def get_logs_with_email(
+        self, skip=0, limit=100, user_id=None, action=None, start_date=None, end_date=None,
+    ) -> List[Tuple[AuditLog, Optional[str]]]:
+        """Same as get_logs, but LEFT-joined against users so the caller gets
+        a human-readable email alongside each row instead of a bare user_id
+        UUID -- the audit trail's whole job is to answer "who did this", and
+        a raw UUID doesn't do that for anyone reviewing it. LEFT (not INNER)
+        because a user can be deleted after the fact and the audit row must
+        still show, just with no resolvable email."""
+        query = (
+            select(AuditLog, User.email)
+            .select_from(outerjoin(AuditLog, User, AuditLog.user_id == User.id))
+        )
+        filters = []
+        if user_id:
+            filters.append(AuditLog.user_id == user_id)
+        if action:
+            filters.append(AuditLog.action == action)
+        if start_date:
+            filters.append(AuditLog.created_at >= start_date)
+        if end_date:
+            filters.append(AuditLog.created_at <= end_date)
+        if filters:
+            query = query.where(and_(*filters))
+        query = query.order_by(AuditLog.created_at.desc()).offset(skip).limit(limit)
+        result = await self.db.execute(query)
+        return [(row[0], row[1]) for row in result.all()]
 
     async def count_logs(self, user_id=None, action=None, start_date=None, end_date=None) -> int:
         query = select(func.count(AuditLog.id))

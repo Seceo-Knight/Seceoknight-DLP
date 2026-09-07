@@ -1,38 +1,45 @@
 import { useState, useEffect } from 'react'
-import { ClipboardList, ChevronDown, ChevronUp, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ClipboardList, ChevronDown, ChevronUp } from 'lucide-react'
 import toast from 'react-hot-toast'
 import LoadingSpinner from '@/components/LoadingSpinner'
+import { PageHeader } from '@/components/ui/page-header'
+import { DataPagination } from '@/components/ui/pagination'
 import { getAuditLogs, getAuditActions } from '@/lib/api'
 import { formatDateTimeIST } from '@/lib/utils'
 
+// Semantic tokens instead of literal Tailwind colors (bg-green-100 etc) --
+// matches the vocabulary used everywhere else in the app (success/info/
+// critical), rather than a 4th independently-invented color scheme.
 const ACTION_COLORS: Record<string, string> = {
-  create: 'bg-green-100 text-green-700',
-  update: 'bg-blue-100 text-blue-700',
-  delete: 'bg-red-100 text-red-700',
-  login: 'bg-purple-100 text-purple-700',
+  create: 'bg-success/15 text-success',
+  update: 'bg-info/15 text-info',
+  delete: 'bg-critical/15 text-critical',
+  login: 'bg-violet-500/15 text-violet-400',
   logout: 'bg-muted text-muted-foreground',
 }
 
 export default function AuditTrail() {
   const [logs, setLogs] = useState<any[]>([])
+  const [total, setTotal] = useState(0)
   const [actions, setActions] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [filterAction, setFilterAction] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
   const [expandedRow, setExpandedRow] = useState<number | null>(null)
-  const [page, setPage] = useState(0)
-  const limit = 50
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
 
   const fetchData = async () => {
     setLoading(true)
     try {
-      const params: any = { skip: page * limit, limit }
+      const params: any = { skip: (page - 1) * pageSize, limit: pageSize }
       if (filterAction) params.action = filterAction
       if (startDate) params.start_date = startDate
       if (endDate) params.end_date = endDate
       const data = await getAuditLogs(params)
       setLogs(Array.isArray(data) ? data : data?.logs || [])
+      setTotal(Array.isArray(data) ? data.length : (typeof data?.total === 'number' ? data.total : 0))
     } catch {
       toast.error('Failed to load audit logs')
     } finally {
@@ -44,27 +51,30 @@ export default function AuditTrail() {
     getAuditActions().then((d) => setActions(Array.isArray(d) ? d : d?.actions || [])).catch(() => {})
   }, [])
 
-  useEffect(() => { fetchData() }, [page, filterAction, startDate, endDate])
+  useEffect(() => { fetchData() }, [page, pageSize, filterAction, startDate, endDate])
 
-  if (loading && page === 0) return <LoadingSpinner />
+  if (loading && page === 1 && logs.length === 0) return <LoadingSpinner />
 
   return (
-    <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
-        <ClipboardList className="h-6 w-6" /> Audit Trail
-      </h1>
+    <div className="space-y-6">
+      <PageHeader
+        icon={ClipboardList}
+        eyebrow="Security"
+        title="Audit Trail"
+        description="Immutable log of admin actions and login events across the platform."
+      />
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3">
-        <select value={filterAction} onChange={(e) => { setFilterAction(e.target.value); setPage(0) }}
-          className="px-3 py-2 bg-card border border-border rounded-lg text-foreground text-sm">
+        <select value={filterAction} onChange={(e) => { setFilterAction(e.target.value); setPage(1) }}
+          className="input w-auto">
           <option value="">All Actions</option>
           {actions.map((a) => <option key={a} value={a}>{a}</option>)}
         </select>
-        <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); setPage(0) }}
-          className="px-3 py-2 bg-card border border-border rounded-lg text-foreground text-sm" />
-        <input type="date" value={endDate} onChange={(e) => { setEndDate(e.target.value); setPage(0) }}
-          className="px-3 py-2 bg-card border border-border rounded-lg text-foreground text-sm" />
+        <input type="date" value={startDate} onChange={(e) => { setStartDate(e.target.value); setPage(1) }}
+          className="input w-auto" />
+        <input type="date" value={endDate} onChange={(e) => { setEndDate(e.target.value); setPage(1) }}
+          className="input w-auto" />
       </div>
 
       {/* Table */}
@@ -86,9 +96,21 @@ export default function AuditTrail() {
               const color = ACTION_COLORS[actionBase] || 'bg-muted text-muted-foreground'
               const expanded = expandedRow === i
               return (
-                <tr key={i} className="border-b border-border/50">
+                <tr key={log.id || i} className="border-b border-border/50">
                   <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{log.created_at || log.timestamp ? formatDateTimeIST(log.created_at || log.timestamp) : '-'}</td>
-                  <td className="px-4 py-3">{log.user_id || log.user || '-'}</td>
+                  <td className="px-4 py-3">
+                    {log.user_email ? (
+                      <span className="text-foreground">{log.user_email}</span>
+                    ) : log.user_id || log.user ? (
+                      // Falls back to the raw UUID only when the user row is
+                      // gone (deleted account) or the log predates email
+                      // resolution -- shown muted + monospace so it still
+                      // reads as "un-resolvable ID", not a normal name.
+                      <span className="font-mono text-xs text-muted-foreground" title={log.user_id || log.user}>{log.user_id || log.user}</span>
+                    ) : (
+                      <span className="text-muted-foreground">System</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded text-xs font-medium ${color}`}>{log.action}</span></td>
                   <td className="px-4 py-3">
                     <button onClick={() => setExpandedRow(expanded ? null : i)} className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs">
@@ -106,21 +128,14 @@ export default function AuditTrail() {
             })}
           </tbody>
         </table>
-      </div>
-
-      {/* Pagination */}
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-muted-foreground">Page {page + 1}</span>
-        <div className="flex gap-2">
-          <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}
-            className="px-3 py-1.5 bg-card border border-border rounded-lg text-sm text-foreground disabled:opacity-50 flex items-center gap-1">
-            <ChevronLeft className="h-4 w-4" /> Prev
-          </button>
-          <button onClick={() => setPage(page + 1)} disabled={logs.length < limit}
-            className="px-3 py-1.5 bg-card border border-border rounded-lg text-sm text-foreground disabled:opacity-50 flex items-center gap-1">
-            Next <ChevronRight className="h-4 w-4" />
-          </button>
-        </div>
+        <DataPagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => { setPageSize(size); setPage(1) }}
+          pageSizeOptions={[25, 50, 100, 200]}
+        />
       </div>
     </div>
   )

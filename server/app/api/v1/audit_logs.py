@@ -23,6 +23,7 @@ router = APIRouter()
 class AuditLogOut(BaseModel):
     id: str
     user_id: Optional[str] = None
+    user_email: Optional[str] = None
     action: str
     details: Optional[dict] = None
     created_at: datetime
@@ -52,7 +53,7 @@ async def list_audit_logs(
     VIEWERs or analysts.
     """
     svc = AuditService(db)
-    logs = await svc.get_logs(
+    rows = await svc.get_logs_with_email(
         skip=skip,
         limit=limit,
         user_id=user_id,
@@ -71,11 +72,12 @@ async def list_audit_logs(
             AuditLogOut(
                 id=str(log.id),
                 user_id=str(log.user_id) if log.user_id else None,
+                user_email=email,
                 action=log.action,
                 details=log.details,
                 created_at=log.created_at,
             )
-            for log in logs
+            for log, email in rows
         ],
         "total": total,
     }
