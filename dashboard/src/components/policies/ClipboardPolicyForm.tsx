@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { ClipboardConfig } from '@/types/policy'
 import { predefinedPatterns, validateRegex, testRegex } from '@/utils/policyUtils'
 import { Check, X, Plus, Trash2 } from 'lucide-react'
-import RuleImportPicker from './RuleImportPicker'
+import { useCustomDetectionRules, type DetectionPattern } from '@/hooks/useCustomDetectionRules'
 
 interface ClipboardPolicyFormProps {
   config: ClipboardConfig
@@ -29,6 +29,12 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
   const [customDescription, setCustomDescription] = useState('')
   const [testText, setTestText] = useState('')
   const [testResult, setTestResult] = useState<boolean | null>(null)
+
+  // Rules created in the Rules tab, shown as ordinary selectable tiles
+  // alongside the built-in SSN/Credit Card/Phone Number/etc. patterns below
+  // -- not as a separate "import" flow the admin has to figure out on top
+  // of the pattern picker they already know.
+  const { rules: customRules } = useCustomDetectionRules()
 
   const handlePredefinedToggle = (patternId: string) => {
     const newPredefined = config.patterns.predefined.includes(patternId)
@@ -66,6 +72,26 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
 
     setCustomRegex('')
     setCustomDescription('')
+  }
+
+  // Toggling a Rules-tab tile just adds/removes its derived pattern from
+  // the same `patterns.custom` list a manually-typed regex would land in
+  // -- so it's immediately usable, removable from "Existing Custom
+  // Patterns" below like anything else, and needs no new config shape or
+  // backend changes.
+  const handleRuleToggle = (pattern: DetectionPattern) => {
+    const isSelected = config.patterns.custom.some((c) => c.regex === pattern.regex)
+    const newCustom = isSelected
+      ? config.patterns.custom.filter((c) => c.regex !== pattern.regex)
+      : [...config.patterns.custom, pattern]
+
+    onChange({
+      ...config,
+      patterns: {
+        ...config.patterns,
+        custom: newCustom
+      }
+    })
   }
 
   const handleRemoveCustomPattern = (index: number) => {
@@ -128,6 +154,36 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
               </button>
             )
           })}
+
+          {/* Rules created in the Rules tab -- rendered as the exact same
+              kind of tile as the built-in patterns above, so "Study
+              Report" (or whatever the admin named it) just sits alongside
+              SSN / Credit Card / Phone Number instead of living behind a
+              separate "import" step. */}
+          {customRules.map(({ rule, pattern }) => {
+            const isSelected = config.patterns.custom.some((c) => c.regex === pattern.regex)
+            const preview = rule.type === 'keyword' ? (rule.keywords || []).join(', ') : pattern.regex
+
+            return (
+              <button
+                key={`rule-${rule.id}`}
+                onClick={() => handleRuleToggle(pattern)}
+                className={`p-3 rounded-lg border-2 text-left transition-all ${
+                  isSelected
+                    ? 'border-primary bg-primary/10 text-foreground'
+                    : 'border-border bg-card text-muted-foreground hover:border-primary/40 hover:bg-accent'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0">
+                    <div className="font-medium text-sm truncate">{rule.name}</div>
+                    <div className="text-xs mt-1 opacity-80 font-mono truncate">{preview}</div>
+                  </div>
+                  {isSelected && <Check className="w-5 h-5 text-primary shrink-0" />}
+                </div>
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -161,22 +217,6 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
             ))}
           </div>
         )}
-
-        {/* Import from Rules tab -- pulls in custom detection rules the
-            admin already defined in Rules, instead of forcing them to
-            retype the same regex/keywords here. See RuleImportPicker. */}
-        <RuleImportPicker
-          existingRegexes={config.patterns.custom.map((c) => c.regex)}
-          onImport={(pattern) =>
-            onChange({
-              ...config,
-              patterns: {
-                ...config.patterns,
-                custom: [...config.patterns.custom, pattern],
-              },
-            })
-          }
-        />
 
         {/* Add Custom Pattern */}
         <div className="space-y-3 p-4 bg-muted/30 rounded-lg border border-border">
