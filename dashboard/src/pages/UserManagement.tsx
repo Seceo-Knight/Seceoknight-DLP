@@ -6,6 +6,10 @@ import {
   Users as UsersIcon, ShieldOff,
 } from 'lucide-react'
 import SharedModal, { ModalHeader, useConfirm } from '@/components/ui/Modal'
+import { PageHeader } from '@/components/ui/page-header'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { tone, type Tone } from '@/lib/tone'
 
 import {
   adminListUsers,
@@ -59,7 +63,14 @@ export default function UserManagement() {
 
   const usersQ = useQuery({
     queryKey: ['admin-users'],
-    queryFn: () => adminListUsers({ limit: 500 }),
+    // GET /users returns a flat array (documented as kept backward-compatible
+    // for existing callers), so there's no total-count signal to detect
+    // truncation the way Reports/Threat Intel/Audit Trail now do. Requesting
+    // the backend's actual max (1000, up from 500) instead of an arbitrary
+    // lower number keeps this from silently truncating in practice, at least
+    // up to that ceiling -- a company's admin console realistically has far
+    // fewer than 1000 accounts.
+    queryFn: () => adminListUsers({ limit: 1000 }),
     enabled: canManage,
     refetchInterval: 30000,
   })
@@ -155,38 +166,31 @@ export default function UserManagement() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground flex items-center gap-3">
-            <UsersIcon className="w-8 h-8 text-indigo-400" />
-            User Management
-          </h1>
-          <p className="text-muted-foreground mt-1">
-            Create, edit, revoke, and permanently delete DLP accounts. All
-            actions are audited.
-          </p>
-        </div>
-        <button
-          onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium shadow-sm transition-colors"
-        >
-          <UserPlus className="w-5 h-5" />
-          Create User
-        </button>
-      </div>
+      <PageHeader
+        icon={UsersIcon}
+        eyebrow="Security"
+        title="User Management"
+        description="Create, edit, revoke, and permanently delete DLP accounts. All actions are audited."
+        actions={
+          <Button onClick={() => setCreateOpen(true)}>
+            <UserPlus className="w-4 h-4" />
+            Create User
+          </Button>
+        }
+      />
 
-      <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
+      <div className="bg-card rounded-lg border border-border shadow-sm overflow-hidden">
         {usersQ.isLoading ? (
           <div className="flex items-center justify-center p-12">
-            <Loader2 className="w-8 h-8 text-indigo-500 animate-spin" />
+            <Loader2 className="w-8 h-8 text-primary animate-spin" />
           </div>
         ) : usersQ.isError ? (
           <div className="p-8 text-center">
-            <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
+            <AlertCircle className="w-10 h-10 text-critical mx-auto mb-3" />
             <p className="text-foreground/90 font-medium">Failed to load users.</p>
             <button
               onClick={() => usersQ.refetch()}
-              className="mt-3 text-indigo-400 hover:underline"
+              className="mt-3 text-primary hover:underline"
             >
               Retry
             </button>
@@ -239,7 +243,7 @@ export default function UserManagement() {
                         <IconButton
                           title="Edit user + permissions"
                           onClick={() => setEditTarget(u)}
-                          color="indigo"
+                          color="primary"
                         >
                           <Edit3 className="w-4 h-4" />
                         </IconButton>
@@ -257,7 +261,7 @@ export default function UserManagement() {
                               )
                                 resetMfaMutation.mutate(u.id)
                             }}
-                            color="yellow"
+                            color="warning"
                             disabled={resetMfaMutation.isPending}
                           >
                             <ShieldOff className="w-4 h-4" />
@@ -276,7 +280,7 @@ export default function UserManagement() {
                               )
                                 deactivateMutation.mutate(u.id)
                             }}
-                            color="yellow"
+                            color="warning"
                             disabled={deactivateMutation.isPending}
                           >
                             <Power className="w-4 h-4" />
@@ -285,7 +289,7 @@ export default function UserManagement() {
                         <IconButton
                           title="Delete permanently"
                           onClick={() => setDeleteTarget(u)}
-                          color="red"
+                          color="critical"
                           disabled={hardDeleteMutation.isPending}
                         >
                           <Trash2 className="w-4 h-4" />
@@ -355,20 +359,30 @@ function Td({ children, className = '' }: any) {
   )
 }
 
+// Role -> categorical badge tone. Roles are nominal (not a severity
+// ladder), so this reuses the shared tone() palette's non-severity hues
+// the same way LogExplorer/DataMatching's classification badges do,
+// rather than 8 independently-invented literal Tailwind colors. ADMIN
+// still reads as the highest-risk-if-compromised tier (red); the other
+// admin-ish roles are visually distinct from each other but share
+// ANALYST/MANAGER's tier per the role_hierarchy in core/security.py --
+// domain admins are scoped by require_permission, not elevated above
+// ANALYST/MANAGER in the role ladder itself.
+const ROLE_TONE: Record<string, Tone> = {
+  ADMIN: 'red',
+  ANALYST: 'blue',
+  MANAGER: 'purple',
+  VIEWER: 'gray',
+  AGENT: 'green',
+  THREAT_ADMIN: 'orange',
+  DATA_PROTECTION_ADMIN: 'indigo',
+  ACCESS_CONTROL_ADMIN: 'yellow',
+}
+
 function RoleBadge({ role }: { role: string }) {
-  const colors: Record<string, string> = {
-    ADMIN:   'bg-red-500/15 text-red-300',
-    ANALYST: 'bg-blue-500/15 text-blue-300',
-    MANAGER: 'bg-purple-500/15 text-purple-300',
-    VIEWER:  'bg-secondary text-foreground',
-    AGENT:   'bg-emerald-500/15 text-emerald-300',
-    THREAT_ADMIN:           'bg-orange-500/15 text-orange-300',
-    DATA_PROTECTION_ADMIN:  'bg-teal-500/15 text-teal-300',
-    ACCESS_CONTROL_ADMIN:   'bg-indigo-500/15 text-indigo-300',
-  }
-  const cls = colors[role?.toUpperCase()] || 'bg-secondary text-foreground'
+  const t = ROLE_TONE[role?.toUpperCase()] || 'gray'
   return (
-    <span className={`inline-flex px-2 py-0.5 rounded text-xs font-semibold ${cls}`}>
+    <span className={cn('inline-flex px-2 py-0.5 rounded border text-xs font-semibold', tone(t))}>
       {role}
     </span>
   )
@@ -376,8 +390,8 @@ function RoleBadge({ role }: { role: string }) {
 
 function MfaBadge({ enabled }: { enabled: boolean }) {
   return enabled ? (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-green-500/15 text-green-300">
-      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-success/15 text-success">
+      <span className="w-1.5 h-1.5 rounded-full bg-success" />
       On
     </span>
   ) : (
@@ -390,8 +404,8 @@ function MfaBadge({ enabled }: { enabled: boolean }) {
 
 function StatusBadge({ active }: { active: boolean }) {
   return active ? (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-green-500/15 text-green-300">
-      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold bg-success/15 text-success">
+      <span className="w-1.5 h-1.5 rounded-full bg-success" />
       Active
     </span>
   ) : (
@@ -417,9 +431,9 @@ function PermissionSummary({
       title={`${effective} effective permissions (role defaults + ${direct} direct grant${direct === 1 ? '' : 's'})`}
     >
       <span className="font-medium text-foreground">{effective}</span>
-      <span className="text-muted-foreground/70"> / {total}</span>
+      <span className="text-muted-foreground"> / {total}</span>
       {direct > 0 && (
-        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/15 text-indigo-400">
+        <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-primary/15 text-primary">
           +{direct} direct
         </span>
       )}
@@ -437,13 +451,13 @@ function IconButton({
   children: React.ReactNode
   title: string
   onClick: () => void
-  color: 'indigo' | 'yellow' | 'red'
+  color: 'primary' | 'warning' | 'critical'
   disabled?: boolean
 }) {
   const colorMap: Record<string, string> = {
-    indigo: 'hover:bg-indigo-500/15 text-indigo-400',
-    yellow: 'hover:bg-yellow-500/15 text-yellow-400',
-    red:    'hover:bg-red-500/15 text-red-400',
+    primary:  'hover:bg-primary/15 text-primary',
+    warning:  'hover:bg-warning/15 text-warning',
+    critical: 'hover:bg-critical/15 text-critical',
   }
   return (
     <button
@@ -733,9 +747,9 @@ function HardDeleteDialog({
   return (
     <Modal title="Delete user permanently" onClose={onClose}>
       <div className="space-y-4">
-        <div className="flex items-start gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/30">
-          <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
-          <div className="text-sm text-red-300">
+        <div className="flex items-start gap-3 p-3 rounded-lg bg-critical/10 border border-critical/30">
+          <AlertCircle className="w-5 h-5 text-critical flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-critical">
             <p className="font-semibold">This cannot be undone.</p>
             <p className="mt-1">
               The row will be removed from the database. Audit entries they
@@ -758,7 +772,7 @@ function HardDeleteDialog({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-lg text-foreground/90 hover:bg-accent"
+            className="btn btn-secondary"
           >
             Cancel
           </button>
@@ -766,7 +780,7 @@ function HardDeleteDialog({
             type="button"
             disabled={!confirmed || isSubmitting}
             onClick={onConfirm}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            className="btn btn-danger disabled:cursor-not-allowed"
           >
             {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
             Delete permanently
@@ -911,7 +925,7 @@ function Field({
     <label className="block">
       <span className="block text-sm font-medium text-foreground/90 mb-1">
         {label}
-        {required && <span className="text-red-500 ml-1">*</span>}
+        {required && <span className="text-critical ml-1">*</span>}
       </span>
       {children}
     </label>
@@ -932,7 +946,7 @@ function DialogActions({
       <button
         type="button"
         onClick={onClose}
-        className="px-4 py-2 rounded-lg text-foreground/90 hover:bg-accent"
+        className="btn btn-secondary"
         disabled={isSubmitting}
       >
         Cancel
@@ -940,7 +954,7 @@ function DialogActions({
       <button
         type="submit"
         disabled={isSubmitting}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-medium disabled:opacity-60"
+        className="btn btn-primary"
       >
         {isSubmitting && <Loader2 className="w-4 h-4 animate-spin" />}
         {submitLabel}
