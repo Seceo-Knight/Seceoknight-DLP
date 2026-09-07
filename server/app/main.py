@@ -19,7 +19,7 @@ import structlog
 
 from app.core.config import settings
 from app.core.logging import setup_logging
-from app.core.database import init_databases, close_databases, Base
+from app.core.database import init_databases, close_databases, Base, get_mongodb
 import app.core.database as _db
 from app.core.cache import init_cache, close_cache
 from app.core.opensearch import init_opensearch, close_opensearch
@@ -574,6 +574,58 @@ async def _patch_default_rule_patterns():
         logger.warning("Rule pattern patch encountered an error", error=str(e))
 
 
+async def _backfill_event_classification_category():
+    """One-time-safe upgrade path for events whose top-level
+    `classification_category` field is stuck at "Public" despite the
+    server having later classified them correctly (user report: Log
+    Explorer showed "Public" for an event that Events/Alerts both
+    correctly showed as "Restricted").
+
+    Root cause (fixed alongside this backfill in
+    app/api/v1/events.py's _merge_processed_event()): an event document
+    gets two near-identical fields -- `classification_level` and
+    `classification_category` -- both holding the same
+    Public/Internal/Confidential/Restricted value. `classification_category`
+    is set once at event *creation*, from whatever the agent happened to
+    submit (almost always nothing, since real classification runs here,
+    server-side, async, after creation) via a fallback that resolves to
+    the literal string "Public". The async classification pass that runs
+    afterward updated `classification_level` but never touched
+    `classification_category` -- so it stayed frozen at "Public" forever.
+    LogExplorer.tsx (and its CSV export) read `classification_category ||
+    classification_level`, preferring the now-stale field, which is why
+    only Log Explorer showed the wrong value while every other tab (which
+    reads `classification_level` directly) showed the correct one.
+
+    This backfill re-syncs every already-stored event's
+    `classification_category` to match its `classification_level`
+    wherever they've drifted apart. Safe to re-run on every boot -- once
+    the two fields agree, the update matches zero documents.
+    """
+    try:
+        mongo_db = get_mongodb()
+        events_collection = mongo_db["dlp_events"]
+
+        result = await events_collection.update_many(
+            {
+                "classification_level": {"$exists": True, "$ne": None},
+                "$expr": {"$ne": ["$classification_category", "$classification_level"]},
+            },
+            [{"$set": {"classification_category": "$classification_level"}}],
+        )
+
+        if result.modified_count:
+            logger.info(
+                "Backfilled stale event classification_category",
+                modified=result.modified_count,
+            )
+        else:
+            logger.info("Event classification_category backfill: nothing to do")
+
+    except Exception as e:
+        logger.warning("Event classification_category backfill encountered an error", error=str(e))
+
+
 async def _seed_default_policies():
     """Import default blocking policies on first boot if the policies table is empty."""
     import json
@@ -668,6 +720,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         # own docstring for why this is safe to run against an
         # already-seeded table).
         await _patch_default_rule_patterns()
+
+        # Re-sync classification_category on already-stored events that
+        # drifted from classification_level (see the function's own
+        # docstring) -- fixes Log Explorer showing "Public" for events
+        # Events/Alerts already correctly showed as Restricted/Confidential.
+        await _backfill_event_classification_category()
 
         # Seed default blocking policies on first boot
         await _seed_default_policies()

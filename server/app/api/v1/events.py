@@ -896,6 +896,24 @@ def _merge_processed_event(event_doc: Dict[str, Any], processed_event: Dict[str,
         event_doc["classification_metadata"] = classification_metadata
         if classification_metadata.get("classification_level"):
             event_doc["classification_level"] = classification_metadata["classification_level"]
+            # `classification_category` is a second, older field holding the
+            # exact same Public/Internal/Confidential/Restricted value (see
+            # EventCreate's two near-identical fields above). It's set once
+            # at event creation from whatever the agent happened to submit
+            # (create_event() below: `event.classification_category or
+            # event.classification_level or "Public"`) -- agents that don't
+            # do their own local classification (which is most of them; the
+            # real classification runs here, server-side, async) submit
+            # neither, so it's baked in as the literal string "Public" and,
+            # until this line existed, was NEVER touched again.
+            # LogExplorer.tsx (and its CSV export) read
+            # `classification_category || classification_level`, preferring
+            # this now-stale field -- so an event that async classification
+            # correctly upgraded to Restricted still displayed "Public" in
+            # Log Explorer specifically, while Events/Alerts (which read
+            # classification_level directly) showed the correct value. Keep
+            # both fields in sync so every reader agrees.
+            event_doc["classification_category"] = classification_metadata["classification_level"]
 
     matched_policies = processed_event.get("matched_policies")
     if matched_policies:
