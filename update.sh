@@ -38,13 +38,22 @@
 #   cd /opt/seceoknight && sudo bash update.sh
 #
 # Or, if you don't already have this file locally:
-#   curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/update.sh | sudo INSTALL_DIR=/opt/seceoknight bash
+#   curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/update.sh | sudo INSTALL_DIR=/opt/seceoknight bash
 #
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────
 GITHUB_REPO="Seceo-Knight/Seceoknight-DLP"
-GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
+# Default branch fixed to "master" -- that's the repo's actual active
+# branch (confirmed via `git branch -vv` / .git/config: local tracks
+# origin/master, and all recent commits live there). The old "main"
+# default silently 404'd on files that only exist on master (e.g.
+# nginx/nginx.conf), and -- more importantly -- both CI workflows
+# (build-and-push.yml, ci.yml) only triggered on pushes to "main", so
+# pushes to master never rebuilt the ghcr.io images this script pulls.
+# Both workflows now also trigger on master; this default keeps the
+# raw-file re-sync consistent with that.
+GITHUB_BRANCH="${GITHUB_BRANCH:-master}"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}"
 INSTALL_DIR="${INSTALL_DIR:-$(pwd)}"
 COMPOSE_FILE="docker-compose.prod.yml"
