@@ -36,7 +36,13 @@ class PolicyService:
 
     async def get_policy_by_name(self, name: str) -> Optional[Policy]:
         """
-        Fetch policy by name
+        Fetch policy by name, ignoring soft-deleted rows.
+
+        Used to enforce name-uniqueness on create/rename/import. Must
+        exclude deleted_at rows -- otherwise a previously-deleted policy
+        permanently reserves its name and blocks anyone from ever
+        creating a new policy with that name again (matches the partial
+        unique index on the DB side, see app/models/policy.py).
 
         Args:
             name: Policy name
@@ -45,7 +51,9 @@ class PolicyService:
             Policy object or None if not found
         """
         result = await self.db.execute(
-            select(Policy).where(Policy.name == name)
+            select(Policy)
+            .where(Policy.name == name)
+            .where(Policy.deleted_at == None)  # noqa: E711
         )
         return result.scalar_one_or_none()
 
