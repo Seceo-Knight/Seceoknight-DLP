@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { FileSystemConfig } from '@/types/policy'
 import { predefinedPatterns, validateRegex, testRegex } from '@/utils/policyUtils'
 import { Plus, Trash2, X, Check } from 'lucide-react'
+import RuleImportPicker from './RuleImportPicker'
 
 interface FileSystemPolicyFormProps {
   config: FileSystemConfig
@@ -345,6 +346,22 @@ export default function FileSystemPolicyForm({ config: rawConfig, onChange }: Fi
             ))}
           </div>
         )}
+
+        {/* Import from Rules tab -- pulls in custom detection rules the
+            admin already defined in Rules, instead of forcing them to
+            retype the same regex/keywords here. See RuleImportPicker. */}
+        <RuleImportPicker
+          existingRegexes={config.patterns!.custom.map((c) => c.regex)}
+          onImport={(pattern) =>
+            onChange({
+              ...config,
+              patterns: {
+                ...config.patterns!,
+                custom: [...config.patterns!.custom, pattern],
+              },
+            })
+          }
+        />
 
         <div className="space-y-3 p-4 bg-muted/30 rounded-lg border border-border">
           <div>

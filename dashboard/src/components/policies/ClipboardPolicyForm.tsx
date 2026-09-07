@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { ClipboardConfig } from '@/types/policy'
 import { predefinedPatterns, validateRegex, testRegex } from '@/utils/policyUtils'
 import { Check, X, Plus, Trash2 } from 'lucide-react'
+import RuleImportPicker from './RuleImportPicker'
 
 interface ClipboardPolicyFormProps {
   config: ClipboardConfig
@@ -160,6 +161,22 @@ export default function ClipboardPolicyForm({ config: rawConfig, onChange }: Cli
             ))}
           </div>
         )}
+
+        {/* Import from Rules tab -- pulls in custom detection rules the
+            admin already defined in Rules, instead of forcing them to
+            retype the same regex/keywords here. See RuleImportPicker. */}
+        <RuleImportPicker
+          existingRegexes={config.patterns.custom.map((c) => c.regex)}
+          onImport={(pattern) =>
+            onChange({
+              ...config,
+              patterns: {
+                ...config.patterns,
+                custom: [...config.patterns.custom, pattern],
+              },
+            })
+          }
+        />
 
         {/* Add Custom Pattern */}
         <div className="space-y-3 p-4 bg-muted/30 rounded-lg border border-border">
