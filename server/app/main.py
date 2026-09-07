@@ -582,20 +582,26 @@ async def _backfill_event_classification_category():
     correctly showed as "Restricted").
 
     Root cause (fixed alongside this backfill in
-    app/api/v1/events.py's _merge_processed_event()): an event document
-    gets two near-identical fields -- `classification_level` and
-    `classification_category` -- both holding the same
-    Public/Internal/Confidential/Restricted value. `classification_category`
-    is set once at event *creation*, from whatever the agent happened to
-    submit (almost always nothing, since real classification runs here,
-    server-side, async, after creation) via a fallback that resolves to
-    the literal string "Public". The async classification pass that runs
-    afterward updated `classification_level` but never touched
-    `classification_category` -- so it stayed frozen at "Public" forever.
+    app/api/v1/events.py's `_process_event_background()` -- NOT
+    `_merge_processed_event()`, a confusingly-similar same-file function
+    that turned out to be dead code and was the wrong place a first pass
+    at this fix mistakenly landed): an event document gets two
+    near-identical fields -- `classification_level` and
+    `classification_category` -- both meant to hold the same
+    Public/Internal/Confidential/Restricted value. The Windows/Linux
+    agents submit their own local classification guess as BOTH fields at
+    event creation; the server's async classification pass (its own,
+    separate, more authoritative classifier, with the full rule engine +
+    context analysis + Rules-tab custom rules) later overwrote
+    `classification_level` with its result but never touched
+    `classification_category`, which stayed frozen at the agent's
+    original guess. Because the two classifiers are independent, they
+    can disagree in EITHER direction, not just go stale one way.
     LogExplorer.tsx (and its CSV export) read `classification_category ||
-    classification_level`, preferring the now-stale field, which is why
-    only Log Explorer showed the wrong value while every other tab (which
-    reads `classification_level` directly) showed the correct one.
+    classification_level`, preferring the frozen agent-side field -- so
+    Log Explorer showed the agent's guess while Events/Alerts (which read
+    `classification_level` directly) showed the server's authoritative
+    result, and the two could look like opposites of each other.
 
     This backfill re-syncs every already-stored event's
     `classification_category` to match its `classification_level`

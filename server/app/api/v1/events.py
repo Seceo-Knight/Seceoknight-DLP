@@ -495,6 +495,33 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
                 cm = processed["classification_metadata"]
                 if cm.get("classification_level"):
                     update_fields["classification_level"] = cm["classification_level"]
+                    # `classification_category` is a second, older field
+                    # holding the exact same Public/Internal/Confidential/
+                    # Restricted value (see EventCreate's two near-identical
+                    # fields in create_event() above). The Windows/Linux
+                    # agents submit their OWN local classification guess as
+                    # BOTH classification_level AND classification_category
+                    # at event-creation time (agent.cpp: `json.AddString
+                    # ("classification_level", classLevel); json.AddString
+                    # ("classification_category", classLevel);`) -- a
+                    # separate, simpler classifier from the one that runs
+                    # here, server-side, with the full rule engine + context
+                    # analysis + Rules-tab custom rules. Once this async
+                    # pass computes the authoritative result, it correctly
+                    # overwrote classification_level (right above) but never
+                    # touched classification_category, which stayed frozen
+                    # at the agent's own guess forever -- and since the two
+                    # classifiers are independent, they can disagree in
+                    # EITHER direction (agent says Restricted, server says
+                    # Public, or vice versa), not just a one-way staleness.
+                    # LogExplorer.tsx (and its CSV export) read
+                    # `classification_category || classification_level`,
+                    # preferring the stale agent-side field -- so Log
+                    # Explorer showed the agent's guess while Events/Alerts
+                    # (which read classification_level directly) showed the
+                    # server's authoritative one, and the two could look
+                    # "opposite" of each other on different test events.
+                    update_fields["classification_category"] = cm["classification_level"]
                 if cm.get("confidence_score") is not None:
                     update_fields["classification_score"] = cm["confidence_score"]
                 # The top-level classification_labels field is what the
@@ -881,6 +908,17 @@ def _build_event_title(event: EventCreate, processed_event: Dict[str, Any]) -> s
 def _merge_processed_event(event_doc: Dict[str, Any], processed_event: Dict[str, Any]) -> None:
     """
     Merge classification results, policy matches, and action summaries from the EventProcessor output.
+
+    NOTE: confirmed unused (nothing in this codebase calls this function --
+    grepped). The actual live merge for background-processed events happens
+    inline inside `_process_event_background()` below, which has its own
+    separate, slightly different field-handling logic. An earlier fix for
+    the Log Explorer classification_category bug (see that function's
+    comment) was mistakenly applied here first, where it had zero effect on
+    production since this function never runs. Left in place rather than
+    deleted since its exact historical purpose/callers aren't fully clear
+    and deleting unused code you don't fully understand is its own risk --
+    but do not assume editing this function affects live behavior.
     """
     classification = processed_event.get("classification")
     if classification:
