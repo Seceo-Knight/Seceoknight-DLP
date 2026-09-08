@@ -1115,7 +1115,22 @@ export default function Events() {
                     <span className={cn('inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-bold uppercase tracking-wide', tone(sevTone))}>
                       {event.severity}
                     </span>
-                    {event.event_subtype && (event.source === 'onedrive_cloud' || event.source === 'google_drive_cloud') && (
+                    {/* Was gated to only onedrive_cloud/google_drive_cloud sources, so a
+                        plain File System Monitoring event (event_type "file", source
+                        "agent") never showed whether it was a create/modify/delete/
+                        rename right here in the row -- the generic "file" badge below
+                        doesn't say which, so an analyst had to open every single row
+                        just to find out. getEventSubtypeIcon/Tone/Label already handle
+                        the local agent's own subtype strings ("file_created",
+                        "file_modified", "file_deleted", "file_renamed") the same way
+                        they handle the cloud ones ("created", "modified", ...) -- both
+                        substring-match on "created"/"modified"/"deleted"/"moved"/
+                        "renamed" -- so widening this to any event_type "file" (which
+                        covers local file-system, USB-file, and cloud-drive events alike;
+                        server/app/services/google_drive_event_normalizer.py and
+                        onedrive_event_normalizer.py also stamp event_type "file") needed
+                        no changes to those helpers. */}
+                    {event.event_subtype && event.event_type === 'file' && (
                       <span className={cn('inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-medium border', tone(getEventSubtypeTone(event.event_subtype)))}>
                         {getEventSubtypeIcon(event.event_subtype)}
                         {getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}
