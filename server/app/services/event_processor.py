@@ -599,7 +599,42 @@ class EventProcessor:
         """
         Evaluate event against database-backed DLP policies.
         """
-        matches = await self.policy_evaluator.evaluate_event(event)
+        agent_resolved = event.get("agent_resolved_policy")
+        if agent_resolved:
+            # The caller (events.py's _build_processor_payload(), see its
+            # comment) already resolved exactly which policy applies and
+            # what its configured action is -- e.g. File Transfer
+            # Monitoring's source->destination hash correlation, which this
+            # generic evaluator has no way to reproduce from a single
+            # event's static fields. Build one synthetic PolicyMatch from
+            # that resolved decision instead of asking the database
+            # evaluator to (mis)match this event against every policy's
+            # conditions -- everything downstream (implicit-alert
+            # guarantee, ActionExecutor, blocked/quarantined flags,
+            # severity ranking) is unchanged and just runs against this
+            # one match like it would any other.
+            from app.policies.database_policy_evaluator import PolicyMatch
+
+            resolved_action = (agent_resolved.get("action") or "alert").lower()
+            action_meta = {
+                "policy_id": agent_resolved.get("policy_id"),
+                "policy_name": agent_resolved.get("policy_name"),
+                "policy_severity": agent_resolved.get("severity"),
+            }
+            # Only the resolved action itself goes here -- the implicit-
+            # alert guarantee below still adds a separate "alert" action
+            # for block/quarantine policies, same as every other policy
+            # match, so a blocked transfer both enforces AND alerts.
+            matches = [PolicyMatch(
+                policy_id=agent_resolved.get("policy_id") or "",
+                policy_name=agent_resolved.get("policy_name") or "",
+                severity=agent_resolved.get("severity"),
+                priority=0,
+                actions=[{"type": resolved_action, "metadata": action_meta}],
+                matched_rules=[],
+            )]
+        else:
+            matches = await self.policy_evaluator.evaluate_event(event)
 
         if not matches:
             logger.debug("No policies matched event", event_id=event.get("event_id"))

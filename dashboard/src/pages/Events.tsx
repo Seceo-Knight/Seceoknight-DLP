@@ -146,24 +146,46 @@ function EventDetailModal({
   )
 
   if (isBlockedTransfer) {
-    const blocked = event.blocked !== false
-    const sourcePath = event.file_path || ''
+    const blocked = event.blocked === true
+    const quarantined = event.quarantined === true || event.action_taken === 'quarantined'
+    // Distinguishes "this policy never tries to block, it's alert-only, so
+    // nothing failed" from "this policy blocks/quarantines and that attempt
+    // failed" -- event.policy_action (the matched policy's CONFIGURED
+    // action, independent of what happened) is what File Transfer
+    // Monitoring's Windows agent sends; when absent (older events, or event
+    // types that don't send it), fall back to inferring intent from
+    // action_taken so the modal degrades gracefully instead of assuming a
+    // block was always attempted.
+    const configuredAction = (event.policy_action || '').toLowerCase()
+    const isAlertOnlyPolicy = configuredAction
+      ? configuredAction === 'alert'
+      : !blocked && !quarantined && event.action_taken !== 'block_failed' && event.action_taken !== 'quarantine_failed'
+    const sourcePath = event.file_path || event.source_path || ''
     const destPath = event.destination || ''
     const fileName = event.file_name || sourcePath.split(/[/\\]/).pop() || 'Unknown'
     const fileSize = event.file_size ? formatFileSize(event.file_size) : 'Unknown size'
     const driveLetter = getDriveLetter(destPath)
+    const outcomeTone = blocked || quarantined ? 'green' : isAlertOnlyPolicy ? 'yellow' : 'red'
+    const outcomeLabel = blocked ? 'Successfully Blocked'
+      : quarantined ? 'Quarantined'
+      : isAlertOnlyPolicy ? 'Alert Only — Not Blocked'
+      : 'Block Failed'
+    const destinationNote = blocked ? 'Blocked'
+      : quarantined ? 'Quarantined'
+      : isAlertOnlyPolicy ? 'Alert Only — File Left In Place'
+      : 'Not Blocked'
 
     return (
       <Dialog open onOpenChange={(o) => !o && onClose()}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <div className="flex items-center gap-4">
-              <div className={cn('p-3 rounded-xl border', blocked ? tone('red') : tone('orange'))}>
+              <div className={cn('p-3 rounded-xl border', blocked || quarantined ? tone('red') : tone('orange'))}>
                 <Shield className="w-8 h-8" />
               </div>
               <div>
                 <DialogTitle className="text-2xl">
-                  {blocked ? 'File Transfer Blocked' : 'Transfer Attempt Detected'}
+                  {blocked ? 'File Transfer Blocked' : quarantined ? 'File Transfer Quarantined' : 'File Transfer Detected'}
                 </DialogTitle>
                 <p className="text-muted-foreground text-sm mt-1">{formatDateTimeIST(event.timestamp)}</p>
               </div>
@@ -171,36 +193,36 @@ function EventDetailModal({
           </DialogHeader>
 
           <div className="space-y-6">
-            <div className="flex items-center gap-3">
-              <span className={cn('inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium', blocked ? tone('green') : tone('red'))}>
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className={cn('inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium', tone(outcomeTone))}>
                 <Ban className="w-4 h-4" />
-                {blocked ? 'Successfully Blocked' : 'Block Failed'}
+                {outcomeLabel}
               </span>
               <span className={cn('inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium uppercase', tone(severityTone))}>
                 {event.severity}
               </span>
             </div>
 
-            <div className={surfaceBox}>
-              <div className="flex items-center justify-between gap-4">
-                <div className="flex-1">
+            <div className={cn(surfaceBox, 'overflow-x-auto')}>
+              <div className="flex items-start justify-between gap-4 min-w-[36rem]">
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-2">
                     <File className="w-5 h-5 text-info" />
                     <label className="text-sm text-muted-foreground uppercase font-medium">Source</label>
                   </div>
                   <div className={innerBox}>
-                    <p className="text-foreground font-semibold text-lg mb-1">{fileName}</p>
-                    <p className="text-muted-foreground text-sm font-mono truncate" title={sourcePath}>{sourcePath}</p>
+                    <p className="text-foreground font-semibold text-lg mb-1 break-words">{fileName}</p>
+                    <p className="text-muted-foreground text-sm font-mono break-all" title={sourcePath}>{sourcePath}</p>
                     <p className="text-muted-foreground text-xs mt-2">{fileSize}</p>
                   </div>
                 </div>
 
-                <div className="flex flex-col items-center gap-2">
+                <div className="flex flex-col items-center gap-2 pt-8 shrink-0">
                   <ArrowRight className="w-6 h-6 text-muted-foreground" />
-                  <span className="text-xs text-muted-foreground font-medium">Copied to</span>
+                  <span className="text-xs text-muted-foreground font-medium whitespace-nowrap">Copied to</span>
                 </div>
 
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-2">
                     <HardDrive className="w-5 h-5 text-critical" />
                     <label className="text-sm text-muted-foreground uppercase font-medium">Destination</label>
@@ -210,8 +232,8 @@ function EventDetailModal({
                       <Usb className="w-4 h-4 text-critical" />
                       <p className="text-critical font-semibold">{driveLetter || 'Destination'}</p>
                     </div>
-                    <p className="text-muted-foreground text-sm font-mono truncate" title={destPath}>{destPath}</p>
-                    <p className="text-critical text-xs mt-2 font-medium">Blocked</p>
+                    <p className="text-muted-foreground text-sm font-mono break-all" title={destPath}>{destPath}</p>
+                    <p className={cn('text-xs mt-2 font-medium', isAlertOnlyPolicy ? 'text-warning' : 'text-critical')}>{destinationNote}</p>
                   </div>
                 </div>
               </div>
@@ -220,21 +242,21 @@ function EventDetailModal({
             <div className="grid grid-cols-2 gap-4">
               <div className={innerBox}>
                 <label className={labelCls}>Agent</label>
-                <p className="text-foreground font-medium" title={event.agent_id}>
+                <p className="text-foreground font-medium truncate" title={event.agent_id}>
                   {formatAgentLabel(event.agent_name, event.agent_code, null, event.agent_id)}
                 </p>
               </div>
               <div className={innerBox}>
                 <label className={labelCls}>User</label>
-                <p className="text-foreground font-medium">{event.user_email}</p>
+                <p className="text-foreground font-medium truncate" title={event.user_email}>{event.user_email}</p>
               </div>
               <div className={innerBox}>
                 <label className={labelCls}>Transfer Type</label>
-                <p className="text-foreground font-medium capitalize">{event.transfer_type || 'File Transfer'}</p>
+                <p className="text-foreground font-medium capitalize">{event.transfer_type === 'file_transfer' ? 'File Transfer Monitoring' : event.transfer_type || 'File Transfer'}</p>
               </div>
               <div className={innerBox}>
                 <label className={labelCls}>Action Taken</label>
-                <p className="text-foreground font-medium capitalize">{event.action_taken || event.action || 'Blocked'}</p>
+                <p className="text-foreground font-medium capitalize">{event.action_taken || event.action || (isAlertOnlyPolicy ? 'Alerted' : 'Logged')}</p>
               </div>
             </div>
 

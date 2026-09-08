@@ -114,6 +114,19 @@ class EventCreate(BaseModel):
     # printer above; gap-scan of CyberSentinel-DLP commit 51343a4, August
     # 26, 2026).
     channel: Optional[str] = Field(None, description="Exfil channel, e.g. USB / PRINT / MESSAGING / WEB")
+    # File Transfer Monitoring (Windows agent.cpp's HandleTransferDestinationEvent(),
+    # September 2026) sends these four keys and none of them were declared
+    # here -- same silently-stripped-by-Pydantic bug as file_hash/username/
+    # printer/channel above. file_name/file_size are needed for the event
+    # title and dashboard file details; transfer_type distinguishes this
+    # from a usb_copy transfer event (see isBlockedTransfer() on the
+    # dashboard); policy_action is the specific matched policy's configured
+    # action (block/quarantine/alert), as opposed to `action`, which is what
+    # actually happened.
+    file_name: Optional[str] = Field(None, description="File name (File Transfer Monitoring and others)")
+    file_size: Optional[int] = Field(None, description="File size in bytes")
+    transfer_type: Optional[str] = Field(None, description="Transfer channel, e.g. usb_copy / file_transfer")
+    policy_action: Optional[str] = Field(None, description="The matched policy's configured action (block/quarantine/alert), independent of what actually happened")
 
 
 class DLPEvent(BaseModel):
@@ -305,6 +318,14 @@ async def create_event(
         event_doc["event_subtype"] = event.event_subtype
     if event.description:
         event_doc["description"] = event.description
+    if event.file_name:
+        event_doc["file_name"] = event.file_name
+    if event.file_size is not None:
+        event_doc["file_size"] = event.file_size
+    if event.transfer_type:
+        event_doc["transfer_type"] = event.transfer_type
+    if event.policy_action:
+        event_doc["policy_action"] = event.policy_action
     if event.username:
         event_doc["username"] = event.username
     # printer_name is what the Windows/Linux agents actually send for print
@@ -911,6 +932,33 @@ def _build_processor_payload(event: EventCreate) -> Dict[str, Any]:
 
     if event.policy_version:
         payload["policy_version"] = event.policy_version
+
+    # File Transfer Monitoring (and anything else that resolves its own
+    # specific policy + action ahead of time, same precedent as
+    # EventCreate.policy_id's web_activity_control docstring above) has
+    # ALREADY done a source->destination hash correlation and a specific
+    # policy match on the agent -- something DatabasePolicyEvaluator
+    # fundamentally cannot re-derive from this event's static fields alone
+    # (it has no access to the endpoint's filesystem to verify a copy
+    # actually happened). Worse, re-running the generic evaluator against
+    # Downloads-style destination paths risks matching a COMPLETELY
+    # UNRELATED policy (e.g. an existing file_system_monitoring policy
+    # scoped to the same folder) and overwriting the agent's correct
+    # blocked/action decision with that unrelated policy's action -- this
+    # was a real bug: an Alert-only File Transfer Monitoring policy showed
+    # "Blocked" in the dashboard because a different policy on the same
+    # destination folder happened to also match and had action=block.
+    # evaluate_policies() below uses this to build a single synthetic
+    # PolicyMatch from the agent's own resolved decision instead of calling
+    # the generic evaluator, so blocked/quarantined/alert-creation all stay
+    # consistent with what the agent actually determined and enforced.
+    if event.policy_id and event.policy_action:
+        payload["agent_resolved_policy"] = {
+            "policy_id": event.policy_id,
+            "policy_name": event.policy_name,
+            "action": event.policy_action,
+            "severity": event.severity,
+        }
 
     # Include classification data from agent
     if event.classification_level or event.classification_score or event.classification_labels:
