@@ -201,6 +201,31 @@ function EventDetailModal({
               <span className={cn('inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium uppercase', tone(severityTone))}>
                 {event.severity}
               </span>
+              {quarantined && (
+                event.quarantine_file_id ? (
+                  <button
+                    onClick={handleDownloadQuarantine}
+                    disabled={downloadingQuarantine}
+                    title={`Download the quarantined file${event.quarantine_file_size ? ` (${formatFileSize(event.quarantine_file_size)})` : ''}`}
+                    className={cn(
+                      'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium uppercase transition-colors',
+                      'hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed',
+                      tone('blue'),
+                    )}
+                  >
+                    {downloadingQuarantine ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                    {downloadingQuarantine ? 'Downloading…' : 'Download Quarantined File'}
+                  </button>
+                ) : (
+                  <span
+                    title="The agent hasn't uploaded a downloadable copy yet — this can mean the upload is still in progress, the file was over the server's upload size limit, the network was briefly unreachable, or the retention window has expired. The file itself is still safely quarantined on the endpoint."
+                    className={cn('inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium uppercase cursor-help', tone('gray'))}
+                  >
+                    <Download className="w-3 h-3" />
+                    Quarantined — Not Downloadable
+                  </span>
+                )
+              )}
             </div>
 
             <div className={cn(surfaceBox, 'overflow-x-auto')}>

@@ -127,6 +127,16 @@ class EventCreate(BaseModel):
     file_size: Optional[int] = Field(None, description="File size in bytes")
     transfer_type: Optional[str] = Field(None, description="Transfer channel, e.g. usb_copy / file_transfer")
     policy_action: Optional[str] = Field(None, description="The matched policy's configured action (block/quarantine/alert), independent of what actually happened")
+    # Also newly declared alongside the four above -- without it,
+    # ActionExecutor.execute_quarantine()'s "if agent already quarantined,
+    # honor agent-provided metadata" short-circuit (action_executor.py) never
+    # triggers for File Transfer Monitoring's quarantine events, since
+    # _build_processor_payload() would otherwise have nothing to forward.
+    # Harmless either way (that function never touches the filesystem, it
+    # only computes a quarantine_path string for metadata), but this keeps
+    # the recorded metadata honest instead of a server-guessed path that
+    # doesn't match where the agent actually put the file.
+    quarantined: Optional[bool] = Field(None, description="Whether the agent already quarantined the file itself")
 
 
 class DLPEvent(BaseModel):
@@ -326,6 +336,12 @@ async def create_event(
         event_doc["transfer_type"] = event.transfer_type
     if event.policy_action:
         event_doc["policy_action"] = event.policy_action
+    if event.quarantined:
+        # Set at creation time too (not just via the background pass) so
+        # the dashboard shows "Quarantined" immediately rather than for a
+        # moment showing neither blocked nor quarantined between insert and
+        # the background task completing.
+        event_doc["quarantined"] = True
     if event.username:
         event_doc["username"] = event.username
     # printer_name is what the Windows/Linux agents actually send for print
@@ -926,6 +942,13 @@ def _build_processor_payload(event: EventCreate) -> Dict[str, Any]:
 
     if event.blocked is not None:
         payload["blocked"] = event.blocked
+
+    if event.quarantined:
+        # Lets ActionExecutor.execute_quarantine()'s "if agent already
+        # quarantined, honor agent-provided metadata" branch trigger
+        # instead of computing its own (server-guessed, never-actually-
+        # used-since-it-never-touches-disk) quarantine_path.
+        payload["quarantined"] = True
 
     if event.description:
         payload["description"] = event.description
