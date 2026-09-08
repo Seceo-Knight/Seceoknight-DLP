@@ -1072,8 +1072,16 @@ def _transform_usb_device_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any]
         enabled_events.append("connect")
     if events.get("disconnect"):
         enabled_events.append("disconnect")
-    if events.get("fileTransfer"):
-        enabled_events.append("file_transfer")
+    # events.fileTransfer intentionally ignored (September 2026): the
+    # dashboard form no longer offers this checkbox (see
+    # USBDevicePolicyForm.tsx's removal comment) because no Windows agent
+    # code path ever emitted a usb_event_type=="file_transfer" event under
+    # a usb_device_monitoring policy -- it was a dead condition that could
+    # never match anything. Still tolerated as a no-op here (rather than
+    # rejected) purely so any pre-existing saved policy with
+    # events.fileTransfer=true from before this fix doesn't fail to
+    # re-save; it just contributes nothing. Real USB file-transfer
+    # detection is the separate usb_file_transfer_monitoring policy type.
 
     rules = []
     if enabled_events:

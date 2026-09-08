@@ -52,18 +52,20 @@ export default function USBDevicePolicyForm({ config, onChange }: USBDevicePolic
             </div>
           </label>
 
-          <label className="flex items-center gap-3 p-3 rounded-lg border-2 border-border bg-muted/30 cursor-pointer hover:border-primary/40 transition-all">
-            <input
-              type="checkbox"
-              checked={config.events.fileTransfer}
-              onChange={() => handleToggleEvent('fileTransfer')}
-              className="w-4 h-4 text-primary rounded"
-            />
-            <div>
-              <div className="text-foreground font-medium text-sm">File Transfer</div>
-              <div className="text-muted-foreground text-xs">Monitor file transfer operations on USB devices</div>
-            </div>
-          </label>
+          {/* "File Transfer" checkbox intentionally removed (September 2026):
+              it looked like it worked -- the config saved, the server built a
+              usb_event_type=="file_transfer" condition from it -- but no code
+              path in the Windows agent ever emitted that event under a
+              usb_device_monitoring policy (HandleUsbEvent is only ever called
+              with "connect"/"disconnect"; the one function that DID check for
+              it, HandleUsbFileTransfer, depended on ScanUsbDriveForChanges,
+              which nothing ever calls, and was ALSO separately gated behind
+              hasUsbTransferPolicies -- a flag only a completely different
+              policy type, USB File Transfer Monitoring, ever sets). Checking
+              it created a false sense of coverage. Real USB file-transfer
+              detection lives entirely in the USB File Transfer Monitoring
+              policy type (source/destination hash correlation via
+              MonitorUSBTransferDirectories) -- use that policy instead. */}
         </div>
       </div>
 
