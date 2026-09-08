@@ -8937,30 +8937,41 @@ if (shouldMonitor) {
                 }
             }
 
-            // A "file_modified" that follows closely on the heels of a
-            // file_created we already reported for this SAME path is very
-            // likely just the write-completion tail of the same copy/save
-            // operation that created the file, not a separate edit --
-            // recentEvents above can't catch this itself, since it dedupes
-            // an EXACT (path, eventSubtype) match, and "file_created" vs
-            // "file_modified" are different subtypes for what a user
-            // considers one single action (e.g. copying a sensitive file
-            // into a monitored directory: Windows fires FILE_ACTION_ADDED,
-            // then FILE_ACTION_MODIFIED a moment later once the copy
-            // finishes writing). Without this, that one copy produced two
-            // separate DLP events. Checked AFTER the USB tracking block
-            // above (not before it) so monitoredFiles still gets refreshed
-            // with this event's real, post-write file size/timestamp --
-            // only the duplicate ALERT is suppressed, not that bookkeeping.
-            // 10s comfortably covers a normal multi-chunk copy's trailing
-            // write-completion notification, while still reporting a
-            // genuinely later, separate edit.
+            // A "file_modified" that follows WITHIN ~2s of a file_created we
+            // already reported for this SAME path is very likely just the
+            // write-completion tail of the same copy/save operation that
+            // created the file, not a separate edit -- recentEvents above
+            // can't catch this itself, since it dedupes an EXACT (path,
+            // eventSubtype) match, and "file_created" vs "file_modified" are
+            // different subtypes for what a user considers one single
+            // action (e.g. copying a sensitive file into a monitored
+            // directory: Windows fires FILE_ACTION_ADDED, then
+            // FILE_ACTION_MODIFIED a moment later once the copy finishes
+            // writing). Checked AFTER the USB tracking block above (not
+            // before it) so monitoredFiles still gets refreshed with this
+            // event's real, post-write file size/timestamp -- only the
+            // duplicate ALERT is suppressed, not that bookkeeping.
+            //
+            // CORRECTED from an original 10s window: real-world testing
+            // showed 10s was long enough to also swallow a genuinely
+            // separate, deliberate edit made shortly after creating/copying
+            // a file (create a file, then start editing it a few seconds
+            // later is completely normal usage) -- that's a much worse
+            // failure for a DLP tool than occasionally still showing two
+            // events for one very large/slow copy, since it means a real
+            // content change goes completely unreported rather than just
+            // noisily duplicated. 2s matches the OS-notification-pair
+            // latency this suppression actually exists for (the two
+            // notifications for one write land within tens of milliseconds
+            // to low single-digit seconds of each other in practice) while
+            // leaving room for an intentional edit moments later to be
+            // reported as its own event.
             if (eventSubtype == "file_modified") {
                 std::lock_guard<std::mutex> lock(recentCreationMutex);
                 auto cIt = recentlyReportedCreations.find(filePath);
                 if (cIt != recentlyReportedCreations.end()) {
                     auto sinceCreate = std::chrono::duration_cast<std::chrono::seconds>(now - cIt->second).count();
-                    if (sinceCreate < 10) {
+                    if (sinceCreate < 2) {
                         logger.Debug("Suppressing file_modified for " + fileName +
                                      " - already reported as file_created " +
                                      std::to_string(sinceCreate) + "s ago");
