@@ -50,6 +50,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
 
+      # `:latest` intentionally NEVER tagged from this legacy/duplicate
+      # workflow (kept only for its per-branch/per-tag builds, e.g. PR
+      # preview tags). Both this workflow AND build-and-push.yml used to
+      # push a `:latest` tag to ghcr.io/dlp-dashboard and dlp-manager --
+      # build-and-push.yml unconditionally, this one only from `main` --
+      # so whichever workflow finished last silently decided what
+      # production ran, regardless of which branch actually had a given
+      # fix. A push to `main` (unrelated feature work, still active on
+      # this repo) clobbered a File Transfer Monitoring dashboard fix
+      # that had already landed on `master`, and no amount of re-running
+      # update.sh or hard-refreshing the browser could fix it because the
+      # deployed image itself was simply the wrong build. See
+      # build-and-push.yml's own trigger comment for the other half of
+      # this fix -- that workflow (master-only now) is the single
+      # remaining source of the `:latest` tag, matching what
+      # update.sh/docker-compose.prod.yml actually deploy from.
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5.7.0
@@ -60,7 +76,6 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v6.16.0

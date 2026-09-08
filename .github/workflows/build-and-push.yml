@@ -1,8 +1,24 @@
 name: Build and Push Docker Images
 
+# `master` ONLY. This workflow tags every image it builds `:latest` --
+# the exact tag docker-compose.prod.yml pulls in production (see
+# update.sh) -- unconditionally, regardless of which branch triggered
+# the run. With `main` also listed here, an unrelated push to `main`
+# (a second active branch in this repo, used for other feature work)
+# would silently overwrite the production `:latest` tag with a build
+# that doesn't contain whatever was just fixed on `master` -- which is
+# exactly what happened: a File Transfer Monitoring dashboard fix
+# (commit a6dbe86) landed on `master`, but a same-day push to `main`
+# re-tagged `:latest` with `main`'s dashboard build (which never had
+# that fix) right after, so `update.sh` kept pulling the wrong image
+# no matter how many times it was re-run or how thoroughly the browser
+# was cache-busted -- the deployed image itself was simply the wrong
+# one. `master` is the only branch update.sh's own config-file sync
+# targets (GITHUB_BRANCH default, see that script), so it's the only
+# branch that should ever be able to move production's `:latest` tag.
 on:
   push:
-    branches: [main, master]
+    branches: [master]
   workflow_dispatch:
 
 # Workflow-level permissions — required for GHCR push with GITHUB_TOKEN
