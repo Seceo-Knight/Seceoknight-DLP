@@ -349,6 +349,40 @@ async def create_event(
             "matched_rules": event.classification_rules_matched or [],
         }]
 
+    # ── Step 1.5: Reconcile an already-uploaded quarantine file ─────────
+    # ROOT CAUSE of the "QUARANTINED — NOT DOWNLOADABLE" bug: agent.cpp's
+    # HandleFileEvent() calls UploadQuarantinedFileToServer() (a blocking
+    # HTTP POST) from INSIDE the quarantine branch, well before it reaches
+    # the code further down that builds this event's JSON and POSTs it here.
+    # That upload is a synchronous, in-process call that fully completes
+    # before HandleFileEvent() even starts building the event payload -- so
+    # by the time upload_quarantine_file() ran, this event document did not
+    # exist yet, on every single quarantine event, not just occasionally.
+    # upload_quarantine_file() already tags every GridFS blob with
+    # metadata.event_id (see that endpoint below), so instead of requiring
+    # the upload to arrive AFTER the event (or adding a fragile retry/sleep
+    # loop on the agent or here), we just check for a matching not-yet-
+    # claimed blob at event-creation time and attach it right into the doc
+    # we're about to insert. upload_quarantine_file() separately handles the
+    # (also possible, e.g. after a future refactor) reverse ordering where
+    # the event already exists when the upload arrives.
+    try:
+        quarantine_files_collection = mongo_db["quarantine_files.files"]
+        pending_quarantine = await quarantine_files_collection.find_one(
+            {"metadata.event_id": event.event_id}
+        )
+        if pending_quarantine:
+            event_doc["quarantine_file_id"] = str(pending_quarantine["_id"])
+            event_doc["quarantine_file_name"] = pending_quarantine.get("filename")
+            event_doc["quarantine_file_size"] = pending_quarantine.get("length")
+            event_doc["quarantine_uploaded_at"] = pending_quarantine.get("uploadDate")
+    except Exception as e:
+        # Never let this reconciliation lookup block ordinary event
+        # ingestion -- worst case the Download button stays unavailable
+        # and the file remains safely quarantined on the endpoint's own
+        # disk, exactly like before this feature existed.
+        logger.warning("quarantine_reconcile_lookup_failed", event_id=event.event_id, error=str(e))
+
     # ── Step 2: Atomic upsert into MongoDB (fast, <5ms) ────────────────
     result = await events_collection.update_one(
         {"id": event.event_id},
@@ -1393,9 +1427,19 @@ async def upload_quarantine_file(
     db = get_mongodb()
     events_collection = db["dlp_events"]
 
+    # NOTE: deliberately NOT rejecting with 404 when the event doc doesn't
+    # exist yet. agent.cpp's UploadQuarantinedFileToServer() is a blocking
+    # call made from inside HandleFileEvent()'s quarantine branch, strictly
+    # BEFORE that same function goes on to build the event JSON and POST it
+    # to create_event() below -- so on the normal/expected code path this
+    # upload always arrives first, every time, not occasionally. The GridFS
+    # blob below is tagged with metadata.event_id regardless of whether the
+    # event exists yet; create_event() reconciles the other direction by
+    # looking up quarantine_files.files for a matching event_id at the
+    # moment it inserts the event doc. This still opportunistically updates
+    # an already-existing event doc below, for the (rarer, but possible
+    # after future refactors) case where the event really did land first.
     event = await events_collection.find_one({"id": event_id}, projection={"id": 1})
-    if not event:
-        raise HTTPException(status_code=404, detail="Event not found")
 
     bucket = AsyncIOMotorGridFSBucket(db, bucket_name="quarantine_files")
     file_id = await bucket.upload_from_stream(
@@ -1404,21 +1448,23 @@ async def upload_quarantine_file(
         metadata={"event_id": event_id, "agent_id": agent_id},
     )
 
-    await events_collection.update_one(
-        {"id": event_id},
-        {"$set": {
-            "quarantine_file_id": str(file_id),
-            "quarantine_file_name": payload.file_name,
-            "quarantine_file_size": len(raw),
-            "quarantine_uploaded_at": datetime.now(timezone.utc),
-        }},
-    )
+    if event:
+        await events_collection.update_one(
+            {"id": event_id},
+            {"$set": {
+                "quarantine_file_id": str(file_id),
+                "quarantine_file_name": payload.file_name,
+                "quarantine_file_size": len(raw),
+                "quarantine_uploaded_at": datetime.now(timezone.utc),
+            }},
+        )
 
     logger.info(
         "quarantine_file_uploaded",
         event_id=event_id,
         agent_id=agent_id,
         file_size=len(raw),
+        event_existed_yet=bool(event),
     )
 
     return {"status": "uploaded", "quarantine_file_id": str(file_id), "size": len(raw)}
