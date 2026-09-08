@@ -9198,8 +9198,86 @@ if (shouldMonitor) {
                         logger.Info("Pure file monitoring policy matched - generating alert for: " + fileName);
                         classification.labels.push_back("FILE_ACCESSED");
                     } else {
-                        logger.Debug("No sensitive data detected, skipping event");
-                        return;
+                        // The agent's own local ExtractDataType() matching
+                        // (predefined types like SSN/Credit Card, plus any
+                        // custom regex/keyword rules imported from the Rules
+                        // tab into this policy's Detection Patterns) found
+                        // NOTHING for this file. Before giving up silently,
+                        // give the server's own, independently-maintained
+                        // ClassificationEngine one more look.
+                        //
+                        // BUG THIS FIXES: predefined patterns (SSN, Credit
+                        // Card, etc.) reliably matched locally, but a CUSTOM
+                        // rule (e.g. a "Study Report" keyword/regex rule
+                        // selected in this same policy's pattern picker)
+                        // consistently did not -- confirmed live: modifying a
+                        // file to contain SSN/Credit Card text correctly
+                        // triggered an event and action, but modifying it to
+                        // contain the custom rule's text triggered nothing at
+                        // all, even though the SAME custom rule DOES fire
+                        // correctly for Clipboard Monitoring. Clipboard
+                        // already had a safety net for exactly this kind of
+                        // gap (see HandleClipboardEvent: when ITS local match
+                        // is empty, it still forwards the content to the
+                        // server and honours the server's own decision) --
+                        // File System Monitoring never got the equivalent,
+                        // so any divergence between the agent's lightweight
+                        // C++ regex engine and the server's Python one meant
+                        // custom-rule file events were dropped with zero
+                        // event, zero alert, and no visible error anywhere.
+                        //
+                        // Reuses EvaluatePolicyRealtime() -- the exact same
+                        // server round-trip already trusted for real-time USB
+                        // transfer content inspection -- rather than a new,
+                        // separately-maintained code path.
+                        bool serverFoundSomething = false;
+                        PolicyEvaluationResult serverEval;
+                        try {
+                            serverEval = EvaluatePolicyRealtime(fileName, filePath, "", "file_system_monitoring");
+                            serverFoundSomething = serverEval.evaluationSucceeded &&
+                                (serverEval.totalMatches > 0 ||
+                                 !serverEval.matchedRules.empty() ||
+                                 (!serverEval.classificationLevel.empty() && serverEval.classificationLevel != "Public"));
+                        } catch (...) {
+                            // Best-effort only -- server unreachable/timeout
+                            // just falls back to "no event", exactly the
+                            // pre-existing behavior, never a hard failure.
+                            serverFoundSomething = false;
+                        }
+
+                        if (!serverFoundSomething) {
+                            logger.Debug("No sensitive data detected, skipping event");
+                            return;
+                        }
+
+                        logger.Info("Server-side reclassification found sensitive content the "
+                                    "local matcher missed for: " + fileName +
+                                    " (classification=" + serverEval.classificationLevel +
+                                    ", matches=" + std::to_string(serverEval.totalMatches) + ")");
+
+                        // Apply THIS policy's own configured action/severity
+                        // -- deliberately NOT serverEval.action, which
+                        // reflects the server's evaluation across every
+                        // policy type system-wide (e.g. an unrelated
+                        // Classification Aware policy), not specifically
+                        // this File System Monitoring policy.
+                        std::string serverLabel = serverEval.matchedRules.empty()
+                            ? (serverEval.classificationLevel.empty() ? "SERVER_CLASSIFIED_CONTENT" : serverEval.classificationLevel)
+                            : serverEval.matchedRules.front();
+                        classification.labels.push_back(serverLabel);
+                        classification.detectedContent[serverLabel] =
+                            serverEval.matchedRules.empty() ? std::vector<std::string>{fileName} : serverEval.matchedRules;
+                        for (const auto& policy : relevantPolicies) {
+                            classification.matchedPolicies.push_back(policy.policyId);
+                            std::string sev = policy.severity.empty() ? "medium" : policy.severity;
+                            if (classification.severity == "low") classification.severity = sev;
+                            if (policy.action == "block" || policy.action == "quarantine") {
+                                classification.severity = "critical";
+                                classification.suggestedAction = policy.action;
+                            } else if (classification.suggestedAction == "logged") {
+                                classification.suggestedAction = policy.action.empty() ? "alert" : policy.action;
+                            }
+                        }
                     }
                 }
             }
