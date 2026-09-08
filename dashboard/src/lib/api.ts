@@ -295,6 +295,17 @@ export type Event = {
   quarantined?: boolean
   quarantine_path?: string
   quarantine_timestamp?: string
+  /** Set once the agent successfully uploads the quarantined file's bytes to
+   *  the server (see upload_quarantine_file in events.py). Its presence is
+   *  what determines whether the Download button in EventDetailModal is
+   *  actually clickable — quarantine can succeed locally on the endpoint
+   *  well before (or without) this ever being set, e.g. while the upload is
+   *  in flight, the file exceeded QUARANTINE_MAX_UPLOAD_MB, or the network
+   *  hiccuped (upload is best-effort/non-fatal on the agent side). */
+  quarantine_file_id?: string
+  quarantine_file_name?: string
+  quarantine_file_size?: number
+  quarantine_uploaded_at?: string
   file_hash?: string
   file_size?: number
   transfer_type?: string
@@ -836,6 +847,19 @@ export async function downloadReportBlob(reportId: string, fmt: 'pdf' | 'csv') {
 
 export async function deleteReport(id: string) {
   await apiClient.delete(`/reports/${id}`)
+}
+
+// ── Quarantined file download ────────────────────────────────────────────────
+// Mirrors downloadReportBlob above. Backs the real Download button on
+// quarantined File System Monitoring events (server: GET
+// /events/{event_id}/quarantine/download in events.py) -- replacing what
+// used to be a static "quarantined"/"QUARANTINED" badge with no download
+// behavior behind it at all.
+export async function downloadQuarantineFile(eventId: string) {
+  const response = await apiClient.get(`/events/${eventId}/quarantine/download`, {
+    responseType: 'blob',
+  })
+  return response
 }
 
 // ── Authorized-IP allowlist (Super Admin only) ──────────────────────────────

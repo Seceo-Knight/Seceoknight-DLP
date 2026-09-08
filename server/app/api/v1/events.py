@@ -17,6 +17,11 @@ from app.core.database import get_mongodb, get_db
 from app.core.domains import domain_for_event_type
 from app.services.domain_service import build_domain_mongo_filter
 from app.services.event_processor import get_event_processor
+# require_agent_key (not verify_agent_key) -- the quarantine upload endpoint
+# below carries sensitive file bytes and must never be reachable anonymously,
+# the same reasoning as every other "SECURITY: Requires a valid X-Agent-Key
+# header" endpoint in agents.py.
+from app.api.v1.agents import require_agent_key
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -1324,6 +1329,166 @@ async def get_event(
     event_dict = {k: v for k, v in event.items() if k != "_id"}
     await _attach_agent_info([event_dict])
     return event_dict
+
+
+class QuarantineFileUpload(BaseModel):
+    """
+    Body the Windows/Linux agent POSTs right after it locally quarantines a
+    file (moves/copies it into its own C:\\ProgramData\\SeceoKnight\\
+    quarantine folder), so the Dashboard has a real copy to offer for
+    download instead of the misleading "quarantined"/"QUARANTINED" badges
+    that used to render with a download-shaped icon but no actual download
+    behind them (task #130's original bug report). Kept as base64-in-JSON,
+    the same convention agent.cpp already uses for file_content_b64 in its
+    real-time policy evaluation calls, instead of introducing a second,
+    multipart-upload code path into the agent's HTTP client just for this.
+    """
+    file_name: str = Field(..., description="Original file name, for Content-Disposition on download")
+    file_content_b64: str = Field(..., description="Base64-encoded raw bytes of the quarantined file")
+
+
+@router.post("/{event_id}/quarantine/upload")
+async def upload_quarantine_file(
+    event_id: str,
+    payload: QuarantineFileUpload,
+    agent_id: str = Depends(require_agent_key),
+):
+    """
+    SECURITY: Requires a valid X-Agent-Key header (see require_agent_key's
+    docstring in agents.py -- this carries the actual sensitive file bytes,
+    so it must never be reachable anonymously).
+
+    Stores the quarantined file's bytes in GridFS (bucket "quarantine_files"
+    -- handles the >16MB-single-document limit a plain Mongo field would hit,
+    and cleanup_old_quarantine_files can precisely target it by upload date)
+    and records a reference on the event doc so GET .../quarantine/download
+    and the Dashboard's Download button know it's available.
+
+    Capped at Settings.QUARANTINE_MAX_UPLOAD_MB -- see that setting's
+    docstring for why. Rejecting an oversized upload here is not a failure
+    of quarantine itself: the file is already safely quarantined on the
+    endpoint's own disk regardless of whether this upload succeeds.
+    """
+    import base64 as _b64
+    from motor.motor_asyncio import AsyncIOMotorGridFSBucket
+    from app.core.config import settings
+
+    try:
+        raw = _b64.b64decode(payload.file_content_b64, validate=False)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"file_content_b64 is not valid base64: {e}")
+
+    max_bytes = max(1, settings.QUARANTINE_MAX_UPLOAD_MB) * 1024 * 1024
+    if len(raw) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"Quarantined file is {len(raw)} bytes, over the "
+                f"{settings.QUARANTINE_MAX_UPLOAD_MB}MB server upload limit. "
+                "The file remains quarantined on the endpoint's own disk; "
+                "it just won't be downloadable from the Dashboard."
+            ),
+        )
+
+    db = get_mongodb()
+    events_collection = db["dlp_events"]
+
+    event = await events_collection.find_one({"id": event_id}, projection={"id": 1})
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    bucket = AsyncIOMotorGridFSBucket(db, bucket_name="quarantine_files")
+    file_id = await bucket.upload_from_stream(
+        payload.file_name,
+        raw,
+        metadata={"event_id": event_id, "agent_id": agent_id},
+    )
+
+    await events_collection.update_one(
+        {"id": event_id},
+        {"$set": {
+            "quarantine_file_id": str(file_id),
+            "quarantine_file_name": payload.file_name,
+            "quarantine_file_size": len(raw),
+            "quarantine_uploaded_at": datetime.now(timezone.utc),
+        }},
+    )
+
+    logger.info(
+        "quarantine_file_uploaded",
+        event_id=event_id,
+        agent_id=agent_id,
+        file_size=len(raw),
+    )
+
+    return {"status": "uploaded", "quarantine_file_id": str(file_id), "size": len(raw)}
+
+
+@router.get("/{event_id}/quarantine/download")
+async def download_quarantine_file(
+    event_id: str,
+    current_user=Depends(require_role("analyst")),
+    pg_db: AsyncSession = Depends(get_db),
+):
+    """
+    Streams the actual quarantined file back to the Dashboard. Requires
+    analyst role and passes the SAME ABAC/domain scoping as GET
+    /events/{event_id} above (a viewer without view_all_departments can't
+    download a quarantined file from a department they can't otherwise see
+    that event in -- 404, not 403, so existence isn't leaked either).
+    """
+    from app.services.abac_service import (
+        build_abac_mongo_filter,
+        merge_mongo_filter,
+    )
+    from motor.motor_asyncio import AsyncIOMotorGridFSBucket
+    from bson import ObjectId
+    from fastapi.responses import Response
+    from app.core.config import settings
+
+    db = get_mongodb()
+    abac = await build_abac_mongo_filter(pg_db, current_user)
+    lookup = merge_mongo_filter({"id": event_id}, abac)
+    lookup = merge_mongo_filter(lookup, build_domain_mongo_filter(current_user))
+
+    event = await db.dlp_events.find_one(
+        lookup,
+        projection={"quarantine_file_id": 1, "quarantine_file_name": 1},
+    )
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    file_id = event.get("quarantine_file_id")
+    if not file_id:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No quarantined file is available for this event. Either the "
+                "agent hasn't finished uploading it yet, it was too large to "
+                f"upload (over {settings.QUARANTINE_MAX_UPLOAD_MB}MB), "
+                "or its retention period has expired."
+            ),
+        )
+
+    bucket = AsyncIOMotorGridFSBucket(db, bucket_name="quarantine_files")
+    try:
+        stream = await bucket.open_download_stream(ObjectId(file_id))
+        raw = await stream.read()
+    except Exception:
+        raise HTTPException(
+            status_code=404,
+            detail="The quarantined file is no longer available (retention expired or the blob was removed).",
+        )
+
+    file_name = event.get("quarantine_file_name") or "quarantined_file"
+
+    logger.info("quarantine_file_downloaded", event_id=event_id, user=str(getattr(current_user, "email", current_user)))
+
+    return Response(
+        content=raw,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+    )
 
 
 @router.get("/stats/summary")

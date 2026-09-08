@@ -70,6 +70,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.event_cleanup_tasks.cleanup_old_events",
         "schedule": crontab(hour=2, minute=0),                  # 2:00 AM UTC daily
     },
+    "quarantine-file-cleanup": {
+        "task": "app.tasks.quarantine_cleanup_tasks.cleanup_old_quarantine_files",
+        "schedule": crontab(hour=2, minute=30),                 # 2:30 AM UTC daily
+    },
 }
 
 

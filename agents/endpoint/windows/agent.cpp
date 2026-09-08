@@ -1135,7 +1135,41 @@ std::string TryOcrClipboardImage() {
      // fired concurrently. All requests are now fully serialized.
      std::mutex requestMutex;
 
+     // The agent's server-issued credential (see AgentConfig::apiKey for how
+     // it's obtained/persisted), sent as the X-Agent-Key header on every
+     // request once known. BUG FOUND while wiring the quarantine-file-upload
+     // endpoint (which the server deliberately gates with require_agent_key,
+     // since it carries actual sensitive file bytes): this class captured
+     // and persisted apiKey for years but NEVER actually sent it anywhere --
+     // SendRequest() only ever set Content-Type. That meant every endpoint
+     // marked "SECURITY: Requires a valid X-Agent-Key header" (real-time
+     // policy evaluation included, not just the new quarantine upload) was
+     // silently 401ing the real compiled agent, or -- for verify_agent_key's
+     // backward-compatible "key optional" endpoints -- silently running
+     // fully anonymous despite the docstring. Stored here (not read from
+     // AgentConfig directly) because HttpClient has no back-reference to
+     // AgentConfig and multiple independent HttpClient instances exist
+     // (httpClient, heartbeatHttpClient). Guarded by its own mutex, separate
+     // from requestMutex, so SetApiKey() (called right after the server
+     // issues/rotates a key) never has to wait behind a slow in-flight
+     // network call, and SendRequest() never blocks a concurrent key update.
+     std::string agentApiKey;
+     std::mutex apiKeyMutex;
+
  public:
+     // Safe to call at any time, from any thread, including before the
+     // key is known (empty key = header simply omitted, preserving the
+     // pre-existing anonymous/backward-compatible behavior).
+     void SetApiKey(const std::string& key) {
+         std::lock_guard<std::mutex> lock(apiKeyMutex);
+         agentApiKey = key;
+     }
+
+     std::string GetApiKey() {
+         std::lock_guard<std::mutex> lock(apiKeyMutex);
+         return agentApiKey;
+     }
+
      HttpClient(const std::string& url) : serverUrl(url) {
          ParseUrl(url);
          hSession = WinHttpOpen(L"SeceoKnight/1.0",
@@ -1220,9 +1254,18 @@ std::string TryOcrClipboardImage() {
              nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, requestFlags);
          
          if (!hRequest) return {0, ""};
-         
+
          std::wstring headers = L"Content-Type: application/json\r\n";
-         
+
+         // See agentApiKey's declaration for why this is here at all --
+         // omitted entirely (not sent as empty) when no key is known yet,
+         // so pre-registration requests behave exactly as before.
+         std::string currentApiKey = GetApiKey();
+         if (!currentApiKey.empty()) {
+             std::wstring wApiKey(currentApiKey.begin(), currentApiKey.end());
+             headers += L"X-Agent-Key: " + wApiKey + L"\r\n";
+         }
+
          BOOL result = WinHttpSendRequest(hRequest, headers.c_str(), -1,
              (LPVOID)data.c_str(), data.length(), data.length(), 0);
          
@@ -2934,6 +2977,13 @@ static ClassificationResult Classify(const std::string& content,
              {
                  std::lock_guard<std::mutex> lock(httpClientMutex);
                  httpClient = std::make_shared<HttpClient>(config.serverUrl);
+                 // Fresh HttpClient instance = fresh (empty) agentApiKey --
+                 // carry the already-known key over so requests right after
+                 // reconnect aren't silently sent anonymous. See
+                 // HttpClient::agentApiKey.
+                 if (!config.apiKey.empty()) {
+                     httpClient->SetApiKey(config.apiKey);
+                 }
              }
              SendHeartbeat();
              logger.Info("Reconnect after unlock: HTTP client reinitialized, heartbeat sent");
@@ -3988,6 +4038,16 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          // main httpClient's requestMutex.
          heartbeatHttpClient = std::make_shared<HttpClient>(config.serverUrl);
 
+         // config's own constructor (initializer list, above) already ran
+         // LoadFromFile()/apiKey extraction by this point, so if this agent
+         // previously registered and has a persisted key, both clients pick
+         // it up immediately -- no need to wait for a fresh RegisterAgent()
+         // round-trip on every restart. See HttpClient::agentApiKey.
+         if (!config.apiKey.empty()) {
+             httpClient->SetApiKey(config.apiKey);
+             heartbeatHttpClient->SetApiKey(config.apiKey);
+         }
+
          if (config.GetQuarantine().enabled) {
              try {
                  fs::create_directories(config.GetQuarantine().folder);
@@ -4835,6 +4895,17 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                      config.apiKey = returnedKey;
                      config.SaveApiKeyFile("C:\\ProgramData\\SeceoKnight\\agent_key.json");
                      logger.Info("Agent api_key captured and saved to C:\\ProgramData\\SeceoKnight\\agent_key.json");
+                     // Propagate to both live HttpClient instances immediately
+                     // -- without this, a key issued/rotated mid-session would
+                     // sit in config.apiKey unused until the next process
+                     // restart or reconnect, and every "requires X-Agent-Key"
+                     // call in between (including the quarantine upload this
+                     // was added for) would keep failing. See
+                     // HttpClient::agentApiKey.
+                     GetHttpClient()->SetApiKey(config.apiKey);
+                     if (heartbeatHttpClient) {
+                         heartbeatHttpClient->SetApiKey(config.apiKey);
+                     }
                  }
              } else if (status == 0) {
                  logger.Error("Cannot connect to server at " + config.serverUrl);
@@ -8700,7 +8771,92 @@ if (shouldMonitor) {
          
          return false;
      }
-     
+
+     // Uploads a just-quarantined file's raw bytes to the server so the
+     // Dashboard has a real, downloadable copy instead of a dead badge (see
+     // server/app/api/v1/events.py's upload_quarantine_file() and the
+     // QUARANTINE_RETENTION_DAYS/QUARANTINE_MAX_UPLOAD_MB settings that
+     // bound how long/how large that server-side copy is allowed to be).
+     //
+     // Deliberately reads quarantinePath fresh off disk rather than reusing
+     // whatever in-memory content the caller has on hand: the delete-
+     // quarantine path's "originalContent" and the modify/create path's
+     // "content" variable can both be OCR-substituted text (see the
+     // file_content_b64 fix elsewhere in this file for why raw bytes matter
+     // for classification) or otherwise not a byte-for-byte copy of what's
+     // actually sitting in the quarantine folder. This function must ship
+     // exactly what a human would need to inspect/restore, so it always
+     // re-reads the quarantined file itself, in binary mode.
+     //
+     // Non-fatal by design: local quarantine has already succeeded by the
+     // time this is called (the file is off the user's disk / restored to
+     // safe content), so a network hiccup or the server being briefly
+     // unreachable must never surface as a quarantine failure. Every
+     // failure path here just logs and returns -- the agent's own 10-minute
+     // local restore timer (see the restoreThread lambdas in HandleFileEvent)
+     // is completely unaffected either way.
+     void UploadQuarantinedFileToServer(const std::string& quarantinePath,
+                                         const std::string& originalFileName,
+                                         const std::string& eventId) {
+         try {
+             if (quarantinePath.empty() || eventId.empty()) {
+                 return;
+             }
+
+             std::ifstream file(quarantinePath, std::ios::binary);
+             if (!file.is_open()) {
+                 logger.Warning("Quarantine upload skipped: cannot open quarantined file at " + quarantinePath);
+                 return;
+             }
+             std::string fileBytes((std::istreambuf_iterator<char>(file)),
+                                    std::istreambuf_iterator<char>());
+             file.close();
+
+             // Local cap mirrors the server's QUARANTINE_MAX_UPLOAD_MB so an
+             // oversized file fails fast here instead of after a slow upload
+             // the server would reject anyway. The file stays quarantined on
+             // this endpoint's own disk regardless -- only the server-side
+             // downloadable copy is skipped.
+             const size_t kMaxUploadBytes = 25 * 1024 * 1024;
+             if (fileBytes.size() > kMaxUploadBytes) {
+                 logger.Warning("Quarantine upload skipped: " + quarantinePath + " is " +
+                                std::to_string(fileBytes.size()) +
+                                " bytes, over the ~25MB server upload limit. "
+                                "File remains quarantined locally only.");
+                 return;
+             }
+
+             std::string fileBytesB64 = Base64Encode(fileBytes);
+             if (fileBytesB64.empty() && !fileBytes.empty()) {
+                 logger.Warning("Quarantine upload skipped: base64 encoding failed for " + quarantinePath);
+                 return;
+             }
+
+             JsonBuilder json;
+             json.AddString("file_name", originalFileName);
+             json.AddString("file_content_b64", fileBytesB64);
+
+             std::string apiPath = "/events/" + eventId + "/quarantine/upload";
+             std::pair<int, std::string> resp = GetHttpClient()->Post(apiPath, json.Build());
+             int statusCode = resp.first;
+
+             if (statusCode == 200 || statusCode == 201) {
+                 logger.Info("Quarantined file uploaded to server for event " + eventId +
+                            " (" + std::to_string(fileBytes.size()) + " bytes)");
+             } else {
+                 logger.Warning("Quarantine upload to server failed for event " + eventId +
+                                ": HTTP " + std::to_string(statusCode) +
+                                " -- file remains quarantined locally only.");
+             }
+         } catch (const std::exception& e) {
+             logger.Warning(std::string("Quarantine upload to server threw an exception: ") + e.what() +
+                            " -- file remains quarantined locally only.");
+         } catch (...) {
+             logger.Warning("Quarantine upload to server threw an unknown exception -- "
+                            "file remains quarantined locally only.");
+         }
+     }
+
      void HandleFileEvent(const std::string& filePath, const std::string& eventSubtype, const std::string& action) {
         try {
             if (!allowEvents || !hasFilePolices) return;
@@ -9094,10 +9250,18 @@ if (shouldMonitor) {
             // If no policies matched, only log the event - don't enforce actions
             bool shouldEnforceAction = !classification.matchedPolicies.empty();
             
-            logger.Debug("Event: " + eventSubtype + ", Action: " + detectedAction + ", Policies Matched: " + 
-                         std::to_string(classification.matchedPolicies.size()) + ", Should Enforce: " + 
+            logger.Debug("Event: " + eventSubtype + ", Action: " + detectedAction + ", Policies Matched: " +
+                         std::to_string(classification.matchedPolicies.size()) + ", Should Enforce: " +
                          (shouldEnforceAction ? "YES" : "NO"));
-            
+
+            // Generated once, up front, instead of inline where the JSON
+            // payload gets built further below -- the quarantine branches
+            // just below need this SAME id to tag the file they upload to
+            // the server (see UploadQuarantinedFileToServer()), so the
+            // uploaded blob can be matched back to the exact event doc it
+            // belongs to once that event actually reaches the server.
+            std::string thisEventId = GenerateUUID();
+
             // Enforce policy actions only if policies matched
             if (detectedAction == "quarantine" && shouldEnforceAction) {
                 logger.Info("Quarantine requested for event '" + eventSubtype + "' - " + 
@@ -9161,6 +9325,14 @@ if (shouldMonitor) {
                                 
                                 logger.Warning("*** Saved deleted file to quarantine: " + quarantinePath);
                                 detectedAction = "quarantined_on_delete";
+
+                                // Give the Dashboard a real, downloadable copy
+                                // -- see UploadQuarantinedFileToServer()'s own
+                                // comment for why. Uses thisEventId so the
+                                // uploaded blob is matched to the exact event
+                                // doc this HandleFileEvent() call is about to
+                                // send below via SendEvent(json.Build()).
+                                UploadQuarantinedFileToServer(quarantinePath, fileName, thisEventId);
                                 
                                 // Schedule restoration - capture filePath by value
                                 std::string filePathCopy = filePath;
@@ -9312,6 +9484,15 @@ if (shouldMonitor) {
                         fs::rename(filePath, quarantinePath);
                         logger.Warning("Quarantined file: " + filePath + " to " + quarantinePath);
                         detectedAction = "quarantined";
+
+                        // Give the Dashboard a real, downloadable copy -- see
+                        // UploadQuarantinedFileToServer()'s own comment for
+                        // why this re-reads from quarantinePath (post-rename)
+                        // rather than reusing the "content" variable above.
+                        // Uses thisEventId so the uploaded blob is matched to
+                        // the exact event doc this HandleFileEvent() call is
+                        // about to send below via SendEvent(json.Build()).
+                        UploadQuarantinedFileToServer(quarantinePath, fileName, thisEventId);
                         
                         // Schedule restoration - capture filePath by value
                         std::string filePathCopy = filePath;
@@ -9469,7 +9650,7 @@ if (shouldMonitor) {
             }
             
             JsonBuilder json;
-            json.AddString("event_id", GenerateUUID());
+            json.AddString("event_id", thisEventId);
             json.AddString("event_type", "file");
             json.AddString("event_subtype", eventSubtype);
             json.AddString("agent_id", config.agentId);

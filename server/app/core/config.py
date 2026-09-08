@@ -264,6 +264,28 @@ class Settings(BaseSettings):
     # Event Retention Configuration
     EVENT_RETENTION_DAYS: int = Field(default=180)
 
+    # Quarantined-file blob retention. Deliberately much shorter than
+    # EVENT_RETENTION_DAYS above: the event record itself (metadata, who/
+    # what/when, classification) is cheap and worth keeping for the full
+    # compliance window, but the quarantined file's raw BYTES are a second,
+    # much heavier copy of the exact sensitive data this product exists to
+    # contain -- keeping that around for 180 days multiplies both storage
+    # cost and the blast radius of a server compromise for no real benefit
+    # once an investigation window has passed. cleanup_old_quarantine_files
+    # (app/tasks/quarantine_cleanup_tasks.py) deletes the GridFS blob after
+    # this many days but leaves the event record itself untouched -- the
+    # Dashboard just stops offering a Download button once it's gone.
+    QUARANTINE_RETENTION_DAYS: int = Field(default=30)
+
+    # Upper bound on what the agent will actually upload to the server when
+    # it quarantines a file. Quarantine itself (the local move/copy on the
+    # endpoint) is NOT capped by this -- only whether the server keeps a
+    # remote copy for Dashboard download. Above this size the file stays
+    # quarantined on the endpoint's own disk only, same as before this
+    # feature existed, rather than risking a large upload hammering the
+    # server or Redis/Mongo on every big quarantine event.
+    QUARANTINE_MAX_UPLOAD_MB: int = Field(default=25)
+
     # Rate Limiting
     RATE_LIMIT_ENABLED: bool = Field(default=True)
     RATE_LIMIT_REQUESTS: int = Field(default=100)

@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import LoadingSpinner from '@/components/LoadingSpinner'
 import ErrorMessage from '@/components/ErrorMessage'
-import { searchEvents, getAgents, clearAllEvents, triggerGoogleDrivePoll, triggerOneDrivePoll, getPolicies, type Event, type Agent } from '@/lib/api'
+import { searchEvents, getAgents, clearAllEvents, triggerGoogleDrivePoll, triggerOneDrivePoll, getPolicies, downloadQuarantineFile, type Event, type Agent } from '@/lib/api'
 import { formatDate, cn, truncate, formatDateTimeIST, formatAgentLabel } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/page-header'
 import { Card } from '@/components/ui/card'
@@ -53,6 +53,33 @@ function EventDetailModal({
   getDriveLetter: (path: string) => string
 }) {
   const [showRawData, setShowRawData] = useState(false)
+  const [downloadingQuarantine, setDownloadingQuarantine] = useState(false)
+
+  // Backs the real Download button below -- replaces what used to be a
+  // static "quarantined"/"QUARANTINED" badge with a Download-shaped icon
+  // and zero click behavior (the original bug report). Only reachable when
+  // event.quarantine_file_id is set, i.e. the agent's upload actually
+  // succeeded (see UploadQuarantinedFileToServer() in agent.cpp and
+  // upload_quarantine_file() in events.py).
+  const handleDownloadQuarantine = async () => {
+    const eventId = event.id || event.event_id
+    if (!eventId) return
+    setDownloadingQuarantine(true)
+    try {
+      const response = await downloadQuarantineFile(eventId)
+      const blob = new Blob([response.data])
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = event.quarantine_file_name || fileName || 'quarantined_file'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      toast.error(extractErrorDetail(e) || 'Failed to download quarantined file')
+    } finally {
+      setDownloadingQuarantine(false)
+    }
+  }
 
   const getActionIcon = (action: string) => {
     switch (action) {
@@ -299,10 +326,29 @@ function EventDetailModal({
                 : event.action_taken || (event.quarantined ? 'quarantined' : event.action) || 'Logged'}
             </span>
             {event.quarantined && (
-              <span className={cn('inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium uppercase', tone('blue'))}>
-                <Download className="w-3 h-3" />
-                Quarantined
-              </span>
+              event.quarantine_file_id ? (
+                <button
+                  onClick={handleDownloadQuarantine}
+                  disabled={downloadingQuarantine}
+                  title={`Download the quarantined file${event.quarantine_file_size ? ` (${formatFileSize(event.quarantine_file_size)})` : ''}`}
+                  className={cn(
+                    'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium uppercase transition-colors',
+                    'hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed',
+                    tone('blue'),
+                  )}
+                >
+                  {downloadingQuarantine ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                  {downloadingQuarantine ? 'Downloading…' : 'Download Quarantined File'}
+                </button>
+              ) : (
+                <span
+                  title="The agent hasn't uploaded a downloadable copy yet — this can mean the upload is still in progress, the file was over the server's upload size limit, the network was briefly unreachable, or the retention window has expired. The file itself is still safely quarantined on the endpoint."
+                  className={cn('inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium uppercase cursor-help', tone('gray'))}
+                >
+                  <Download className="w-3 h-3" />
+                  Quarantined — Not Downloadable
+                </span>
+              )
             )}
           </div>
 
