@@ -9170,7 +9170,19 @@ if (isTransferDestination &&
                      std::string quarantineFile = quarantineDir + "\\" + fileName + "_" + timestamp;
                      fs::rename(destPath, quarantineFile);
                      quarantined = true;
-                     blocked = true;  // destination copy no longer exists either way
+                     // Deliberately NOT setting blocked = true here. blocked
+                     // and quarantined used to be conflated ("destination
+                     // copy no longer exists either way"), but the dashboard
+                     // (Events.tsx's EventDetailModal) treats them as
+                     // mutually exclusive outcomes and checks blocked FIRST
+                     // -- so a quarantined transfer was showing "Successfully
+                     // Blocked" / "Blocked" everywhere instead of
+                     // "Quarantined", even though the actual enforcement
+                     // (moving the file into quarantine) was correct. `action`
+                     // below already independently resolves to "quarantined"
+                     // via its own ternary, so blocked staying false here
+                     // doesn't lose any information -- it makes the two
+                     // outcomes distinguishable instead of indistinguishable.
                      logger.Warning("File Transfer Monitoring: quarantined destination copy: " +
                                     destPath + " -> " + quarantineFile);
                      UploadQuarantinedFileToServer(quarantineFile, fileName, thisEventId);
@@ -9180,17 +9192,28 @@ if (isTransferDestination &&
              }
              // policyAction == "alert" (or anything else): log-only, destination copy left in place.
 
+             // "Was the destination copy actually removed from where it
+             // landed" -- true for BOTH block (deleted) and quarantine
+             // (moved), false only for alert (left in place). Used for
+             // event_subtype/description/severity, which care about
+             // "something was enforced" -- NOT the same question as the
+             // `blocked` boolean field below, which specifically means
+             // "deleted" so the dashboard can tell block apart from
+             // quarantine.
+             bool enforced = blocked || quarantined;
+
              JsonBuilder json;
              json.AddString("event_id", thisEventId);
              json.AddString("event_type", "file");
-             json.AddString("event_subtype", blocked ? "transfer_blocked" : "transfer_attempt");
+             json.AddString("event_subtype", enforced ? "transfer_blocked" : "transfer_attempt");
              json.AddString("agent_id", config.agentId);
              json.AddString("source_type", "agent");
-             json.AddString("user_email", GetUsername() + "@" + GetHostname());
-             json.AddString("description", "File transfer " + std::string(blocked ? "blocked" : "detected") +
+             json.AddString("description", "File transfer " + std::string(
+                                blocked ? "blocked" : quarantined ? "quarantined" : "detected") +
                             " [" + matchedPolicy.name + "]: " + fileName);
+             json.AddString("user_email", GetUsername() + "@" + GetHostname());
              json.AddString("severity", matchedPolicy.severity.empty() ?
-                            (blocked ? "high" : "medium") : matchedPolicy.severity);
+                            (enforced ? "high" : "medium") : matchedPolicy.severity);
              json.AddString("action", quarantined ? "quarantined" : (blocked ? "blocked" : "logged"));
              json.AddString("file_path", sourcePath);
              json.AddString("file_name", fileName);
@@ -9201,6 +9224,7 @@ if (isTransferDestination &&
              json.AddString("destination_type", "endpoint_destination");
              json.AddString("transfer_type", "file_transfer");
              json.AddBool("blocked", blocked);
+             json.AddBool("quarantined", quarantined);
              json.AddString("policy_id", matchedPolicy.policyId);
              json.AddString("policy_name", matchedPolicy.name);
              json.AddString("policy_action", policyAction);
@@ -9208,7 +9232,8 @@ if (isTransferDestination &&
 
              SendEvent(json.Build());
              logger.Info("File Transfer Monitoring event sent - Action: " + policyAction +
-                        ", Blocked: " + std::to_string(blocked));
+                        ", Blocked: " + std::to_string(blocked) +
+                        ", Quarantined: " + std::to_string(quarantined));
          } catch (const std::exception& e) {
              logger.Error(std::string("Error handling transfer destination event: ") + e.what());
          } catch (...) {
