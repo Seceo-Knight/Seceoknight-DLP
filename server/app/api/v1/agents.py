@@ -2088,7 +2088,25 @@ async def evaluate_policy_realtime(
         # clipboard, browser upload, email, print) with zero policy setup
         # required, and never touches how regex/ML-only detections are
         # enforced. Purely additive — only ever turns should_block/
-        # should_alert further ON, never off.
+        # should_quarantine/should_alert further ON, never off.
+        #
+        # Restricted escalates to should_quarantine (NOT should_block).
+        # Originally this forced should_block unconditionally, which meant a
+        # Restricted Data Match always hard-deleted the file with zero
+        # recoverable copy -- even when the channel policy that actually
+        # matched (e.g. a USB File Transfer Monitoring policy) was
+        # deliberately configured for Quarantine. A real test hit this: file
+        # gone from the USB drive, nothing in the quarantine folder, no
+        # server upload, no way to recover it, despite the admin's policy
+        # saying "quarantine". should_block below is only ever set by a
+        # channel policy whose OWN action is "block" (the loop above this
+        # one) -- under the block > quarantine > alert precedence a few
+        # lines down, that still wins over this quarantine escalation, so a
+        # policy that genuinely wants Block still gets Block. This only
+        # changes the outcome when the channel policy asked for something
+        # milder (quarantine/alert/nothing) but Restricted data was found
+        # anyway: it now quarantines (recoverable) instead of destroying the
+        # file outright.
         data_match_sources_triggered = []
         for hit in classification_result.data_match_hits:
             data_match_sources_triggered.append({
@@ -2098,7 +2116,7 @@ async def evaluate_policy_realtime(
                 "classification": hit["classification"],
             })
             if hit["classification"] == "Restricted":
-                should_block = True
+                should_quarantine = True
             else:  # Confidential or Internal
                 should_alert = True
                 hit_severity = "critical" if hit["classification"] == "Confidential" else "medium"

@@ -124,7 +124,7 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
             />
             <div className="flex-1">
               <div className="text-foreground font-medium text-sm">Quarantine Transfer</div>
-              <div className="text-muted-foreground text-xs">Move file to quarantine folder on USB drive</div>
+              <div className="text-muted-foreground text-xs">Move the file to a quarantine folder on this endpoint</div>
             </div>
           </label>
 
@@ -134,11 +134,14 @@ export default function USBTransferPolicyForm({ config, onChange }: USBTransferP
                 type="text"
                 value={config.quarantinePath || ''}
                 onChange={(e) => onChange({ ...config, quarantinePath: e.target.value })}
-                placeholder="e.g., C:\\Quarantine or /quarantine"
+                placeholder="e.g., C:\ProgramData\SeceoKnight\quarantine"
                 className="w-full px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Path on the USB drive where quarantined files will be moved
+                Path on THIS ENDPOINT (not the USB drive) where quarantined files will be moved — quarantining onto
+                the USB drive itself wouldn't help, since it could just be unplugged and taken with the file still
+                on it. Leave blank to use the default quarantine folder. Quarantined files are also uploaded to the
+                server so they can be downloaded from the event's detail view.
               </p>
             </div>
           )}
