@@ -3975,7 +3975,20 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
                          const std::string& policyName, bool success,
                          const std::string& classificationLevel = "",
                          double confidenceScore = 0.0,
-                         const std::vector<std::string>& classificationLabels = {}) {
+                         const std::vector<std::string>& classificationLabels = {},
+                         // Lets a caller that already uploaded a quarantined
+                         // copy via UploadQuarantinedFileToServer() (see the
+                         // quarantine handler below) share the SAME event_id
+                         // between that upload's metadata.event_id tag and
+                         // this event's own event_id -- create_event()'s Step
+                         // 1.5 reconciliation on the server matches those two
+                         // up by exact string equality to attach
+                         // quarantine_file_id, same mechanism the (already
+                         // working) generic File Transfer Monitoring
+                         // quarantine flow uses. Empty (the default, every
+                         // other call site) preserves the previous behavior
+                         // of generating a fresh ID nobody else needs to see.
+                         const std::string& eventId = "") {
     try {
         std::string fileName = fs::path(relativePath).filename().string();
         size_t fileSize = 0;
@@ -4004,7 +4017,7 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
         description += "\nSize: " + std::to_string(fileSize) + " bytes";
 
         JsonBuilder json;
-        json.AddString("event_id", GenerateUUID());
+        json.AddString("event_id", eventId.empty() ? GenerateUUID() : eventId);
         json.AddString("event_type", "usb");
         json.AddString("event_subtype", "usb_file_transfer");
         json.AddString("agent_id", config.agentId);
@@ -12494,8 +12507,28 @@ void HandleUSBFileTransferQuarantineNoTimestamp(const std::string& fileName, con
     // classification-only "scan everything" policy, which is the one that
     // fires for a fresh screenshot with no monitoredPaths) that doesn't
     // have an explicit quarantinePath configured on the server.
+    //
+    // NOTE: this is a path on THIS ENDPOINT'S OWN local disk, same as every
+    // other quarantine root in the agent -- NOT a path on the USB drive
+    // itself, despite how the dashboard's policy form used to describe this
+    // field ("Path on the USB drive where quarantined files will be
+    // moved"). Quarantining onto the USB drive that's actively suspected of
+    // exfiltration would defeat the point (the drive can just be unplugged
+    // and walked out with the file still on it); keeping it local, alongside
+    // every other quarantine bucket, is what actually makes the "download
+    // from the dashboard" flow below meaningful. See
+    // USBTransferPolicyForm.tsx's corrected label.
     std::string quarantinePath = policy.quarantinePath.empty() ? "C:\\ProgramData\\SeceoKnight\\quarantine" : policy.quarantinePath;
     std::string quarantineFile = quarantinePath + "\\" + fileName + "_" + timestamp;
+    // Shared between this event and UploadQuarantinedFileToServer()'s
+    // metadata.event_id tag below so the server's GridFS reconciliation
+    // (create_event()'s Step 1.5) can attach quarantine_file_id to THIS
+    // event -- without a shared ID they're two unrelated records and the
+    // dashboard's Download button has nothing to point at (this was
+    // previously never called at all for USB quarantine events, so the
+    // button always showed "Not Downloadable" even on a fully successful
+    // quarantine).
+    std::string thisEventId = GenerateUUID();
 
     if (!fs::exists(usbFile)) return;
 
@@ -12550,10 +12583,22 @@ void HandleUSBFileTransferQuarantineNoTimestamp(const std::string& fileName, con
             RemoveFileWithRetry(usbFile);
             logger.Warning("  ✅ Moved to quarantine from USB");
         }
-        
-        SendUSBTransferEvent(relativePath, usbFile, monitoredPath, "quarantined_" + transferType, 
-                            policy.severity, policy.policyId, policy.name, true);
-        
+
+        // Upload the quarantined bytes to the server (GridFS) BEFORE the
+        // 2-minute auto-restore thread below gets a chance to delete
+        // quarantineFile out from under us -- same reasoning as every other
+        // UploadQuarantinedFileToServer() call site in this file. Shares
+        // thisEventId with the event sent just below so the server's
+        // create_event() Step 1.5 reconciliation can attach
+        // quarantine_file_id to this exact event; without a shared ID the
+        // upload and the event are two unrelated records and the Download
+        // button never has anything to point at.
+        UploadQuarantinedFileToServer(quarantineFile, fileName, thisEventId);
+
+        SendUSBTransferEvent(relativePath, usbFile, monitoredPath, "quarantined_" + transferType,
+                            policy.severity, policy.policyId, policy.name, true,
+                            "", 0.0, {}, thisEventId);
+
         quarantinedUSBFiles.insert(fileName);
         
         // Schedule restoration in 2 minutes
