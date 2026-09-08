@@ -2608,6 +2608,24 @@ static ClassificationResult Classify(const std::string& content,
      std::vector<std::string> monitoredDirectories;
      std::map<std::pair<std::string, std::string>, std::chrono::steady_clock::time_point> recentEvents;
 
+     // Tracks the last time a "file_created" event was actually REPORTED
+     // (sent to the server) for a given path, keyed by mutex separate from
+     // recentEvents above -- that one dedupes identical (path, eventSubtype)
+     // pairs within 2s, which does NOT catch this: copying (or saving) a
+     // file into a monitored directory makes Windows fire FILE_ACTION_ADDED
+     // then, ~500ms-a few seconds later once the write completes,
+     // FILE_ACTION_MODIFIED for the SAME file -- two different eventSubtype
+     // strings ("file_created" then "file_modified"), so recentEvents' key
+     // never matches and both sail through as two independent DLP events for
+     // what is, from the user's perspective, one single "I copied a file"
+     // action. HandleFileEvent() checks this map before processing a
+     // file_modified event and skips it if a file_created for the same path
+     // was reported within the last 10 seconds -- long enough to cover a
+     // normal multi-chunk copy's trailing write-completion notification,
+     // short enough to still report a genuinely separate edit made later.
+     std::mutex recentCreationMutex;
+     std::map<std::string, std::chrono::steady_clock::time_point> recentlyReportedCreations;
+
      // ── Ransomware early-warning state (task #106) ─────────────────────────
      // The burst thresholds live in agent_config.json (ransomware_* keys) so a
      // site can tune them without a recompile — see AgentConfig. Defaults: 15
@@ -8721,7 +8739,7 @@ if (shouldMonitor) {
                 }
                 recentEvents[eventKey] = now;
             }
-            
+
             std::string fileName = fs::path(filePath).filename().string();
             logger.Info("File " + action + ": " + fileName);
 
@@ -8759,6 +8777,38 @@ if (shouldMonitor) {
                             logger.Debug("USB tracking: added " + fileName + " (key=" + key + ")");
                             break;
                         }
+                    }
+                }
+            }
+
+            // A "file_modified" that follows closely on the heels of a
+            // file_created we already reported for this SAME path is very
+            // likely just the write-completion tail of the same copy/save
+            // operation that created the file, not a separate edit --
+            // recentEvents above can't catch this itself, since it dedupes
+            // an EXACT (path, eventSubtype) match, and "file_created" vs
+            // "file_modified" are different subtypes for what a user
+            // considers one single action (e.g. copying a sensitive file
+            // into a monitored directory: Windows fires FILE_ACTION_ADDED,
+            // then FILE_ACTION_MODIFIED a moment later once the copy
+            // finishes writing). Without this, that one copy produced two
+            // separate DLP events. Checked AFTER the USB tracking block
+            // above (not before it) so monitoredFiles still gets refreshed
+            // with this event's real, post-write file size/timestamp --
+            // only the duplicate ALERT is suppressed, not that bookkeeping.
+            // 10s comfortably covers a normal multi-chunk copy's trailing
+            // write-completion notification, while still reporting a
+            // genuinely later, separate edit.
+            if (eventSubtype == "file_modified") {
+                std::lock_guard<std::mutex> lock(recentCreationMutex);
+                auto cIt = recentlyReportedCreations.find(filePath);
+                if (cIt != recentlyReportedCreations.end()) {
+                    auto sinceCreate = std::chrono::duration_cast<std::chrono::seconds>(now - cIt->second).count();
+                    if (sinceCreate < 10) {
+                        logger.Debug("Suppressing file_modified for " + fileName +
+                                     " - already reported as file_created " +
+                                     std::to_string(sinceCreate) + "s ago");
+                        return;
                     }
                 }
             }
@@ -9441,9 +9491,22 @@ if (shouldMonitor) {
             }
             
             json.AddString("timestamp", GetCurrentTimestampISO());
-            
+
+            // Record that a file_created event was actually reported for
+            // this path, so the suppression check above can recognize (and
+            // skip) the immediately-following file_modified notification
+            // Windows fires once the same copy/save finishes writing --
+            // see that check's comment for the full explanation. Only
+            // recorded here, at the point we know this creation event is
+            // really being sent (not one that got filtered out earlier by
+            // ShouldMonitorFile/relevantPolicies/classification).
+            if (eventSubtype == "file_created") {
+                std::lock_guard<std::mutex> lock(recentCreationMutex);
+                recentlyReportedCreations[filePath] = std::chrono::steady_clock::now();
+            }
+
             SendEvent(json.Build());
-            
+
             logger.Warning("============================================================");
             logger.Warning("  FILE ALERT: Sensitive Data Detected!");
             logger.Warning("============================================================");
