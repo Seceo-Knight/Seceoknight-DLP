@@ -2694,6 +2694,19 @@ static ClassificationResult Classify(const std::string& content,
      std::mutex recentCreationMutex;
      std::map<std::string, std::chrono::steady_clock::time_point> recentlyReportedCreations;
 
+     // Same ADDED-then-MODIFIED double-notification problem as
+     // recentlyReportedCreations above, but for File Transfer Monitoring's
+     // destination watcher: WatchDirectory() routes BOTH FILE_ACTION_ADDED
+     // and FILE_ACTION_MODIFIED for a transfer-destination path to
+     // HandleTransferDestinationEvent() (unlike HandleFileEvent(), there's
+     // only one eventSubtype-agnostic entry point here, so recentEvents'
+     // (path, eventSubtype) key can't help either). Without this, one plain
+     // copy-paste into a watched destination hashes/matches/enforces/sends
+     // TWICE. Keyed by destPath only, own mutex to avoid contending with
+     // the unrelated maps above.
+     std::mutex recentTransferDestMutex;
+     std::map<std::string, std::chrono::steady_clock::time_point> recentlyHandledTransferDest;
+
      // ── Ransomware early-warning state (task #106) ─────────────────────────
      // The burst thresholds live in agent_config.json (ransomware_* keys) so a
      // site can tune them without a recompile — see AgentConfig. Defaults: 15
@@ -9063,6 +9076,24 @@ if (isTransferDestination &&
          try {
              if (!allowEvents) return;
              if (!fs::exists(destPath)) return;  // already gone (e.g. temp file cleaned up)
+
+             // De-dup ADDED+MODIFIED for the same destination file within a
+             // few seconds -- see recentlyHandledTransferDest's own comment.
+             // 3s covers the normal write-completion gap for a typical copy
+             // without swallowing a genuinely new, separate drop of the same
+             // filename moments later.
+             {
+                 std::lock_guard<std::mutex> lock(recentTransferDestMutex);
+                 auto now = std::chrono::steady_clock::now();
+                 auto it = recentlyHandledTransferDest.find(destPath);
+                 if (it != recentlyHandledTransferDest.end()) {
+                     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count();
+                     if (elapsed < 3) {
+                         return;
+                     }
+                 }
+                 recentlyHandledTransferDest[destPath] = now;
+             }
 
              uintmax_t fileSize;
              try {
