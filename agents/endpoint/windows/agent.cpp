@@ -1986,6 +1986,21 @@ void Log(const std::string& level, const std::string& message) {
     int minMatchCount = 1;
     bool enabled = true;
     std::string quarantinePath;
+
+    // File Transfer Monitoring (policyType == "file_transfer_monitoring")
+    // ONLY -- kept separate from monitoredPaths, which drives the
+    // unrelated ShouldMonitorFile()/HandleFileEvent() classification
+    // pipeline shared with file_system_monitoring. This policy type is a
+    // SOURCE -> DESTINATION correlation (did a file that exists under one
+    // of transferProtectedPaths show up under one of
+    // transferDestinationPaths?), consumed by
+    // FindSourceFileInDirs()/HandleTransferDestinationEvent() instead.
+    // Mirrors the Linux agent's protectedPaths/monitoredDestinations
+    // handling (agent.py's _match_file_transfer_policy) so both platforms
+    // implement the same real detection, not just "does this policy fire
+    // at all" (see the removed monitoredPaths-dumping fix this replaces).
+    std::vector<std::string> transferProtectedPaths;
+    std::vector<std::string> transferDestinationPaths;
 };
 
 // ==================== USB File Transfer Monitoring Structures ====================
@@ -2649,6 +2664,16 @@ static ClassificationResult Classify(const std::string& content,
      std::string lastActiveFile;
      std::set<std::string> removableDrives;
      std::vector<std::string> monitoredDirectories;
+
+     // File Transfer Monitoring destination directories -- watched the
+     // SAME way as monitoredDirectories (via FileSystemMonitor()'s
+     // WatchDirectory() threads) but handled by a completely separate
+     // check (IsUnderTransferDestination() / HandleTransferDestinationEvent())
+     // so a destination isn't also treated as if it were itself a
+     // protected/sensitive path. Guarded by policiesMutex, same as
+     // monitoredDirectories.
+     std::vector<std::string> transferDestinationDirectories;
+
      std::map<std::pair<std::string, std::string>, std::chrono::steady_clock::time_point> recentEvents;
 
      // Tracks the last time a "file_created" event was actually REPORTED
@@ -6440,6 +6465,21 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
              }
          }
          monitoredDirectories.assign(uniquePaths.begin(), uniquePaths.end());
+
+         // File Transfer Monitoring destinations -- watched SEPARATELY from
+         // monitoredDirectories above (see transferDestinationDirectories'
+         // own comment for why). Still inside this function's policiesMutex
+         // lock, same as monitoredDirectories's assignment just above.
+         std::set<std::string> uniqueTransferDestDirs;
+         for (const auto& policy : filePolicies) {
+             for (const auto& path : policy.transferDestinationPaths) {
+                 std::string normalized = NormalizeFilesystemPath(path);
+                 if (!normalized.empty() && fs::exists(normalized)) {
+                     uniqueTransferDestDirs.insert(normalized);
+                 }
+             }
+         }
+         transferDestinationDirectories.assign(uniqueTransferDestDirs.begin(), uniqueTransferDestDirs.end());
          
          // Extract version
          size_t versionPos = bundleJson.find("\"version\"");
@@ -6467,6 +6507,7 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
          logger.Info("  USB Device Policies: " + std::to_string(usbPolicies.size()) + (hasUsbDevicePolicies ? " (ACTIVE)" : " (INACTIVE)"));
          logger.Info("  USB Transfer Policies: " + std::to_string(usbTransferPolicies.size()) + (hasUsbTransferPolicies ? " (ACTIVE)" : " (INACTIVE)"));
          logger.Info("  Monitored Paths: " + std::to_string(monitoredDirectories.size()));
+         logger.Info("  File Transfer Destination Paths: " + std::to_string(transferDestinationDirectories.size()));
          logger.Info("  Events Allowed: " + std::string(allowEvents ? "YES" : "NO"));
          logger.Info("========================================");
          
@@ -6637,8 +6678,11 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                         rule.action = "alert";
                     }
                 }
-                // Extract quarantinePath for usb_file_transfer_monitoring
-                if (policyType == "usb_file_transfer_monitoring") {
+                // Extract quarantinePath for usb_file_transfer_monitoring and
+                // file_transfer_monitoring (FileTransferPolicyForm.tsx writes
+                // the same config.quarantinePath key -- see
+                // HandleTransferDestinationEvent()'s quarantine action).
+                if (policyType == "usb_file_transfer_monitoring" || policyType == "file_transfer_monitoring") {
                     rule.quarantinePath = ExtractJsonString(configObj, "quarantinePath");
                     
                     // Also check in actions.quarantine.path
@@ -6675,22 +6719,31 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 // key at all -- the dashboard form (FileTransferPolicyForm.tsx)
                 // and FileTransferConfig write "protectedPaths" (source paths to
                 // watch) and "monitoredDestinations" (where a transfer TO is
-                // watched) instead. The Linux agent already reads the right key
-                // (agent.py's transfer_protected_paths, key="protectedPaths").
-                // This Windows agent read the wrong key for this one policy
-                // type only, so rule.monitoredPaths was ALWAYS empty for it --
-                // ShouldMonitorFile()/HandleFileEvent() require a non-empty
-                // match against monitoredPaths, so file_transfer_monitoring
-                // silently never enforced anything on Windows, ever, on any
-                // path. Found in a policy-engine audit, August 28 2026.
-                // (monitoredDestinations / destination-specific matching isn't
-                // wired into PolicyRule at all yet -- that's a separate,
-                // larger gap; this restores the baseline "does this policy
-                // ever fire" behavior that Linux already had.)
+                // watched) instead.
+                //
+                // HISTORY: an earlier fix (found in a policy-engine audit,
+                // August 28 2026) dumped protectedPaths into rule.monitoredPaths
+                // so ShouldMonitorFile()/HandleFileEvent() -- the generic
+                // file_system_monitoring pipeline -- would at least fire on
+                // SOMETHING for this policy type, since it was previously
+                // reading the wrong key entirely and never firing at all. That
+                // was only ever a stopgap: it made the policy log activity
+                // anywhere under the protected path, regardless of whether
+                // anything was actually TRANSFERRED anywhere, which isn't
+                // what "File Transfer Monitoring" (as distinct from File
+                // System Monitoring) is for, and it silently ignored
+                // monitoredDestinations entirely.
+                //
+                // Replaced with the real thing: protectedPaths and
+                // monitoredDestinations are kept in their own fields below and
+                // consumed by FindSourceFileInDirs()/
+                // HandleTransferDestinationEvent() to do actual source->
+                // destination correlation -- mirroring what the Linux agent
+                // (agent.py's _match_file_transfer_policy) already does. This
+                // policy type no longer feeds rule.monitoredPaths at all.
                 if (policyType == "file_transfer_monitoring") {
-                    std::vector<std::string> protectedPaths = ExtractJsonArray(configObj, "protectedPaths");
-                    rule.monitoredPaths.insert(rule.monitoredPaths.end(),
-                                                protectedPaths.begin(), protectedPaths.end());
+                    rule.transferProtectedPaths = ExtractJsonArray(configObj, "protectedPaths");
+                    rule.transferDestinationPaths = ExtractJsonArray(configObj, "monitoredDestinations");
                 }
 
                 // ============================================================
@@ -8569,11 +8622,20 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                  continue;
              }
              
-             // Get monitored directories from policies
+             // Get monitored directories from policies -- includes File
+             // Transfer Monitoring destination directories too, so they get
+             // the SAME WatchDirectory() thread + ReadDirectoryChangesW
+             // watcher. WatchDirectory() itself checks isTransferDestination
+             // independently of shouldMonitor for each event, so a path that
+             // is ONLY a transfer destination (not also a file_system_monitoring
+             // path) is still routed correctly.
              std::vector<std::string> currentMonitoredDirs;
              {
                  std::lock_guard<std::mutex> lock(policiesMutex);
                  currentMonitoredDirs = monitoredDirectories;
+                 currentMonitoredDirs.insert(currentMonitoredDirs.end(),
+                                              transferDestinationDirectories.begin(),
+                                              transferDestinationDirectories.end());
              }
              
              // Start watching new directories
@@ -8716,6 +8778,21 @@ if (shouldMonitor) {
         HandleFileEvent(fullPath, eventSubtype, action);
     }
 }
+
+// File Transfer Monitoring: independent of shouldMonitor above (a
+// destination directory doesn't need to match any file_system_monitoring
+// policy's own monitoredPaths/fileExtensions to be worth checking here).
+// Only ADDED/MODIFIED matter -- a file has to actually exist at the
+// destination for FindSourceFileInDirs() to hash it and look for a match
+// under a protected source path.
+bool isTransferDestination = !isCanary && IsUnderTransferDestination(fullPath);
+if (isTransferDestination &&
+    (pNotify->Action == FILE_ACTION_ADDED || pNotify->Action == FILE_ACTION_MODIFIED)) {
+    // Same write-completion delay reasoning as shouldMonitor's non-delete
+    // branch above -- give the copy time to finish before we hash it.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    HandleTransferDestinationEvent(fullPath);
+}
                  
                  if (pNotify->NextEntryOffset == 0) break;
                  pNotify = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(
@@ -8854,6 +8931,257 @@ if (shouldMonitor) {
          } catch (...) {
              logger.Warning("Quarantine upload to server threw an unknown exception -- "
                             "file remains quarantined locally only.");
+         }
+     }
+
+     // ==================== File Transfer Monitoring (source -> destination) ====================
+     //
+     // Mirrors the Linux agent's already-working design (agent.py:
+     // start_transfer_monitoring / _find_source_file_in_dirs /
+     // _match_file_transfer_policy / handle_transfer_destination_event).
+     // Unlike file_system_monitoring, file_transfer_monitoring isn't "did a
+     // file matching X show up under path Y" -- it's "did a file that
+     // ALREADY exists under one of this policy's transferProtectedPaths
+     // show up under one of its transferDestinationPaths", proven by exact
+     // filename + size + hash match. Purely path/identity based, same as
+     // the existing USB transfer correlation just above
+     // (FindSourceFileInMonitoredDirs/HandleRemovableDriveFile) -- no
+     // content classification here, matching the Linux agent's behavior.
+
+     // Prefix-match against transferDestinationDirectories, same
+     // case-sensitive NormalizeFilesystemPath()-based comparison
+     // ShouldMonitorFile() uses for monitoredDirectories (a pre-existing
+     // agent-wide convention, not something new here).
+     bool IsUnderTransferDestination(const std::string& filePath) {
+         std::vector<std::string> destDirs;
+         {
+             std::lock_guard<std::mutex> lock(policiesMutex);
+             destDirs = transferDestinationDirectories;
+         }
+         if (destDirs.empty()) return false;
+
+         std::string normalizedFilePath = NormalizeFilesystemPath(filePath);
+         for (const auto& destDir : destDirs) {
+             if (normalizedFilePath.find(destDir) == 0) {
+                 return true;
+             }
+         }
+         return false;
+     }
+
+     // Walks searchDirs (normalized/existence-checked transferProtectedPaths
+     // gathered across all file_transfer_monitoring policies by the caller)
+     // looking for a file with the exact same name, size, and content hash
+     // as the one that just showed up at the destination -- i.e. a real
+     // copy, not just a same-named-different-file coincidence. Mirrors
+     // FindSourceFileInMonitoredDirs() above (USB transfer correlation) but
+     // takes an explicit dirs list instead of the global monitoredDirectories,
+     // since transfer-protected paths are a separate, policy-owned set.
+     std::string FindSourceFileInDirs(const std::vector<std::string>& searchDirs,
+                                       const std::string& fileHash,
+                                       uintmax_t fileSize,
+                                       const std::string& fileName) {
+         if (fileHash.empty()) return "";
+
+         for (const auto& searchDir : searchDirs) {
+             try {
+                 for (const auto& entry : fs::recursive_directory_iterator(searchDir)) {
+                     if (entry.is_regular_file() &&
+                         entry.path().filename().string() == fileName) {
+
+                         if (fs::file_size(entry.path()) == fileSize) {
+                             std::string candidateHash = CalculateFileHash(entry.path().string());
+                             if (candidateHash == fileHash) {
+                                 return entry.path().string();
+                             }
+                         }
+                     }
+                 }
+             } catch (...) {
+                 continue;
+             }
+         }
+
+         return "";
+     }
+
+     // Finds the specific file_transfer_monitoring policy (there can be
+     // more than one active) whose transferProtectedPaths covers sourcePath
+     // AND whose transferDestinationPaths covers destPath -- mirrors the
+     // Linux agent's _match_file_transfer_policy(). A policy only fires if
+     // BOTH sides match; a destination watched by one policy but reached
+     // via a source protected by a DIFFERENT policy matches neither.
+     bool MatchFileTransferPolicy(const std::string& sourcePath,
+                                   const std::string& destPath,
+                                   PolicyRule& matchedOut) {
+         std::vector<PolicyRule> policies;
+         {
+             std::lock_guard<std::mutex> lock(policiesMutex);
+             policies = filePolicies;
+         }
+
+         std::string normalizedSource = NormalizeFilesystemPath(sourcePath);
+         std::string normalizedDest = NormalizeFilesystemPath(destPath);
+
+         for (const auto& policy : policies) {
+             if (policy.policyType != "file_transfer_monitoring" || !policy.enabled) continue;
+
+             bool sourceMatches = false;
+             for (const auto& protectedPath : policy.transferProtectedPaths) {
+                 std::string normalizedProtected = NormalizeFilesystemPath(protectedPath);
+                 if (!normalizedProtected.empty() && normalizedSource.find(normalizedProtected) == 0) {
+                     sourceMatches = true;
+                     break;
+                 }
+             }
+             if (!sourceMatches) continue;
+
+             bool destMatches = false;
+             for (const auto& destinationPath : policy.transferDestinationPaths) {
+                 std::string normalizedDestPolicy = NormalizeFilesystemPath(destinationPath);
+                 if (!normalizedDestPolicy.empty() && normalizedDest.find(normalizedDestPolicy) == 0) {
+                     destMatches = true;
+                     break;
+                 }
+             }
+             if (!destMatches) continue;
+
+             matchedOut = policy;
+             return true;
+         }
+         return false;
+     }
+
+     // Orchestrates the full source->destination transfer flow once a file
+     // shows up under a watched transfer-destination directory: find the
+     // matching source file (by hash+size+name) under a protected path,
+     // find the specific policy that covers this exact source->destination
+     // pair, then enforce that policy's configured action (block/quarantine/
+     // alert) and send the transfer event. Mirrors the Linux agent's
+     // handle_transfer_destination_event().
+     void HandleTransferDestinationEvent(const std::string& destPath) {
+         try {
+             if (!allowEvents) return;
+             if (!fs::exists(destPath)) return;  // already gone (e.g. temp file cleaned up)
+
+             uintmax_t fileSize;
+             try {
+                 fileSize = fs::file_size(destPath);
+             } catch (...) {
+                 return;  // file vanished/locked between the event and now
+             }
+             std::string fileName = fs::path(destPath).filename().string();
+
+             std::string fileHash;
+             try {
+                 fileHash = CalculateFileHash(destPath);
+             } catch (...) {
+                 logger.Debug("File Transfer Monitoring: failed to hash destination file: " + destPath);
+                 return;
+             }
+             if (fileHash.empty()) return;
+
+             // Search every file_transfer_monitoring policy's protected
+             // paths for the source, not just one policy's -- which policy
+             // actually matches is only knowable once we know WHICH
+             // protected path the source file lived under.
+             std::vector<std::string> allProtectedDirs;
+             {
+                 std::lock_guard<std::mutex> lock(policiesMutex);
+                 for (const auto& policy : filePolicies) {
+                     if (policy.policyType != "file_transfer_monitoring" || !policy.enabled) continue;
+                     for (const auto& p : policy.transferProtectedPaths) {
+                         std::string normalized = NormalizeFilesystemPath(p);
+                         if (!normalized.empty()) allProtectedDirs.push_back(normalized);
+                     }
+                 }
+             }
+             if (allProtectedDirs.empty()) return;
+
+             std::string sourcePath = FindSourceFileInDirs(allProtectedDirs, fileHash, fileSize, fileName);
+             if (sourcePath.empty()) {
+                 // Not a copy of anything under a protected path -- e.g. the
+                 // file was created directly at the destination, or came
+                 // from somewhere we don't watch. Nothing to report.
+                 return;
+             }
+
+             PolicyRule matchedPolicy;
+             if (!MatchFileTransferPolicy(sourcePath, destPath, matchedPolicy)) {
+                 logger.Debug("File Transfer Monitoring: source " + sourcePath +
+                              " and destination " + destPath +
+                              " matched no single policy's protected+destination pair");
+                 return;
+             }
+
+             logger.Warning("File transfer detected [" + matchedPolicy.name + "]: " +
+                            sourcePath + " -> " + destPath);
+
+             std::string policyAction = matchedPolicy.action.empty() ? "alert" : matchedPolicy.action;
+             bool blocked = false;
+             bool quarantined = false;
+             std::string thisEventId = GenerateUUID();
+
+             if (policyAction == "block") {
+                 try {
+                     fs::remove(destPath);
+                     blocked = true;
+                     logger.Warning("File Transfer Monitoring: blocked transfer by deleting destination copy: " + destPath);
+                 } catch (...) {
+                     logger.Error("File Transfer Monitoring: failed to delete destination copy: " + destPath);
+                 }
+             } else if (policyAction == "quarantine") {
+                 std::string quarantineDir = matchedPolicy.quarantinePath.empty() ?
+                     "C:\\ProgramData\\SeceoKnight\\quarantine" : matchedPolicy.quarantinePath;
+                 try {
+                     fs::create_directories(quarantineDir);
+                     std::string timestamp = std::to_string(time(NULL));
+                     std::string quarantineFile = quarantineDir + "\\" + fileName + "_" + timestamp;
+                     fs::rename(destPath, quarantineFile);
+                     quarantined = true;
+                     blocked = true;  // destination copy no longer exists either way
+                     logger.Warning("File Transfer Monitoring: quarantined destination copy: " +
+                                    destPath + " -> " + quarantineFile);
+                     UploadQuarantinedFileToServer(quarantineFile, fileName, thisEventId);
+                 } catch (...) {
+                     logger.Error("File Transfer Monitoring: failed to quarantine destination copy: " + destPath);
+                 }
+             }
+             // policyAction == "alert" (or anything else): log-only, destination copy left in place.
+
+             JsonBuilder json;
+             json.AddString("event_id", thisEventId);
+             json.AddString("event_type", "file");
+             json.AddString("event_subtype", blocked ? "transfer_blocked" : "transfer_attempt");
+             json.AddString("agent_id", config.agentId);
+             json.AddString("source_type", "agent");
+             json.AddString("user_email", GetUsername() + "@" + GetHostname());
+             json.AddString("description", "File transfer " + std::string(blocked ? "blocked" : "detected") +
+                            " [" + matchedPolicy.name + "]: " + fileName);
+             json.AddString("severity", matchedPolicy.severity.empty() ?
+                            (blocked ? "high" : "medium") : matchedPolicy.severity);
+             json.AddString("action", quarantined ? "quarantined" : (blocked ? "blocked" : "logged"));
+             json.AddString("file_path", sourcePath);
+             json.AddString("file_name", fileName);
+             json.AddInt("file_size", static_cast<int>(fileSize));
+             json.AddString("file_hash", fileHash);
+             json.AddString("source_path", sourcePath);
+             json.AddString("destination", destPath);
+             json.AddString("destination_type", "endpoint_destination");
+             json.AddString("transfer_type", "file_transfer");
+             json.AddBool("blocked", blocked);
+             json.AddString("policy_id", matchedPolicy.policyId);
+             json.AddString("policy_name", matchedPolicy.name);
+             json.AddString("policy_action", policyAction);
+             json.AddString("timestamp", GetCurrentTimestampISO());
+
+             SendEvent(json.Build());
+             logger.Info("File Transfer Monitoring event sent - Action: " + policyAction +
+                        ", Blocked: " + std::to_string(blocked));
+         } catch (const std::exception& e) {
+             logger.Error(std::string("Error handling transfer destination event: ") + e.what());
+         } catch (...) {
+             logger.Error("Error handling transfer destination event");
          }
      }
 
