@@ -435,8 +435,25 @@ def handle_web_activity(meta):
         emit_web_activity_event(meta, category, activity, "alerted", "medium", level, blocked=False,
                                  policy_id=policy_id, policy_name=policy_name, policy_action=action)
     else:
-        emit_web_activity_event(meta, category, activity, "logged", "info", level, blocked=False,
-                                 policy_id=policy_id, policy_name=policy_name, policy_action=action)
+        # action == "allow": there are only four possible matrix actions
+        # (ACTIONS in web_activity.py: allow/alert/block/redact) and "allow"
+        # is also DEFAULT_ACTION, so this branch fires for BOTH "no active
+        # Web Activity Control policy at all" and "a policy exists but its
+        # matrix cell for this host/activity is explicitly Allow" -- neither
+        # case has anything to enforce, alert on, or redact. Previously this
+        # still POSTed a full event (severity="info", action="logged") for
+        # EVERY qualifying request/response, which is what actually produced
+        # the reported "continuous event flooding": ordinary background SPA
+        # traffic (conversation-list refreshes, model lists, telemetry
+        # beacons, keep-alive pings -- see web-activity.js's own comments on
+        # why request/response bodies this size get captured at all) mostly
+        # resolves to "allow" and was being logged as if it were meaningful
+        # activity, dozens of times a minute, with zero actionable content in
+        # any of it. Skip the network round trip and the event entirely --
+        # local log line only, for on-endpoint troubleshooting. A real
+        # detection (alert/block/redact, above) still always creates an
+        # event as before.
+        log("web_activity allow, not logging event: host=%s activity=%s" % (meta.get("host"), activity))
 
     return action, category, level, reason, redacted_content, labels_redacted
 

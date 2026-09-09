@@ -56,9 +56,22 @@
   }
 
   var MAX_TEXT_CHARS = 200000;      // cap for prompt/message/response text sent for classification
-  var MIN_SEND_TEXT_LENGTH = 40;    // best-effort filter — see module docstring on "send"
-  var MIN_RESPONSE_TEXT_LENGTH = 40; // same reasoning as MIN_SEND_TEXT_LENGTH, applied to responses —
-                                      // see maybeRedactResponse for why this exists
+  // Raised from 40 (September 2026): 40 chars is trivially exceeded by a
+  // huge amount of routine SPA background traffic that isn't a real
+  // composed prompt/message at all — a JSON array with two or three short
+  // fields (conversation-list refresh, model list, a telemetry beacon)
+  // clears 40 chars easily. Every one of those was spending a full
+  // server decision round trip just to (almost always) come back "allow" —
+  // wasted latency/load even after the native-host side stopped logging
+  // "allow" outcomes as events. 150 is still short enough to catch a real
+  // one-line sensitive prompt/message, just no longer trivially matched by
+  // near-empty structured payloads. Same trade-off as before, just tuned:
+  // a genuinely short sensitive prompt under the threshold still isn't
+  // inspected — accepted because it's outweighed by not drowning real
+  // signal (and the server) in background chatter.
+  var MIN_SEND_TEXT_LENGTH = 150;    // best-effort filter — see module docstring on "send"
+  var MIN_RESPONSE_TEXT_LENGTH = 150; // same reasoning as MIN_SEND_TEXT_LENGTH, applied to responses —
+                                       // see maybeRedactResponse for why this exists
   var DECISION_TIMEOUT_MS = 15000;  // generous: a genai reply can take longer to classify than a small upload
   var pending = new Map();
   var seq = 0;
