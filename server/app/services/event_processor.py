@@ -600,6 +600,37 @@ class EventProcessor:
         Evaluate event against database-backed DLP policies.
         """
         agent_resolved = event.get("agent_resolved_policy")
+
+        if not agent_resolved and event.get("event", {}).get("type") == "web_activity":
+            # Web Activity Control events with no agent_resolved_policy means
+            # no active web_activity_control policy actually matched this
+            # traffic (skdlp_host.py's emit_web_activity_event() only sends
+            # policy_id + policy_action -- which is what builds
+            # agent_resolved_policy in events.py's _build_processor_payload()
+            # -- when evaluate_web_activity() resolved a real policy match;
+            # see handle_web_activity()). The generic DatabasePolicyEvaluator
+            # below can NEVER validly match a web_activity_control policy
+            # either way, matched or not (its config is matrix-shaped, not
+            # the conditions.rules shape the evaluator expects) -- so letting
+            # it run here only risks an accidental collision with some
+            # UNRELATED policy whose loosely-specified conditions happen to
+            # match this event's generic fields (event_type/description/
+            # destination/etc.), silently overwriting the client's already-
+            # correct action/severity with that unrelated policy's own.
+            # Confirmed root cause of a real bug (September 2026): a plain
+            # "logged" web activity event with severity="info" and NO active
+            # Web Activity Control policy at all was showing MEDIUM severity
+            # in the dashboard purely from this kind of collision, and every
+            # web_activity event was flooding the Events/Alerts tabs as a
+            # result. Skip evaluation entirely for this event type when
+            # nothing resolved a policy -- there is nothing valid for the
+            # generic evaluator to do with it either way.
+            logger.debug(
+                "No web_activity policy resolved -- skipping generic evaluator",
+                event_id=event.get("event_id"),
+            )
+            return event
+
         if agent_resolved:
             # The caller (events.py's _build_processor_payload(), see its
             # comment) already resolved exactly which policy applies and
