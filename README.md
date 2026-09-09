@@ -111,6 +111,8 @@ Start-ScheduledTask -TaskName "SeceoKnight DLP Agent"
 irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/manage-agent.ps1 | iex
 ```
 
+**Always run it this way — don't save a local copy and re-run that.** A saved `.ps1` file keeps whatever branch/URL was baked into it the moment it was downloaded forever, with no warning if it later goes stale (this exact trap silently sent one endpoint's updates to the wrong branch for weeks — see CHANGELOG). The `irm | iex` one-liner always fetches and runs the current version. If you do keep a local copy for offline use, the script itself will detect it and warn you if it's out of date.
+
 It opens an interactive menu:
 
 - **[1] Install** — same as above, only relevant if this machine somehow doesn't have the agent yet

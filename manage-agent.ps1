@@ -135,6 +135,61 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Write-Host ''
   }
 
+  # Detects a stale LOCAL copy of this script, as opposed to running it fresh
+  # via `irm ... | iex` -- exactly the trap that silently sent CYBER-SEC(001)'s
+  # Update runs to the wrong branch for weeks (found September 9, 2026): a
+  # saved local manage-agent.ps1 keeps whatever $RAW_BASE/branch value was
+  # baked into it at the moment it was downloaded, and nothing about running
+  # it ever complains, refreshes the file, or points out it might be
+  # outdated -- [2] Update can print "Binary replaced" / "Native host
+  # updated" and report full success every single time while quietly pulling
+  # from a stale or wrong URL, with no error anywhere in the chain to say so.
+  # $PSCommandPath is empty when this script is invoked via `irm | iex` (no
+  # file ever touches disk) and set to a real path when run via `-File` from
+  # a saved copy -- that alone, with zero network calls, is enough to flag
+  # "this might be stale." The hash comparison on top is best-effort and
+  # fail-open on any network error (offline endpoints must still be able to
+  # manage themselves from whatever local copy they have).
+  function Test-ScriptFreshness {
+    if (-not $PSCommandPath) { return }  # irm | iex -- always fresh, nothing to check
+
+    Write-Host '  [!] Running from a saved local file:' -ForegroundColor Yellow
+    Write-Host "        $PSCommandPath" -ForegroundColor Yellow
+    Write-Host '      A saved copy can silently go stale -- it keeps whatever branch/URL' -ForegroundColor Yellow
+    Write-Host '      was baked in when it was downloaded, with no warning, ever.' -ForegroundColor Yellow
+
+    try {
+      $remote      = (Invoke-WebRequest -Uri "$RAW_BASE/manage-agent.ps1" -UseBasicParsing -TimeoutSec 8 -ErrorAction Stop).Content
+      $localHash   = (Get-FileHash -Algorithm SHA256 -Path $PSCommandPath).Hash
+      $remoteHash  = [BitConverter]::ToString(
+        [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($remote))
+      ).Replace('-', '')
+      if ($localHash -ne $remoteHash) {
+        Write-Host ''
+        Write-Host '  [x] THIS COPY IS OUT OF DATE relative to master on GitHub.' -ForegroundColor Red
+        Write-Host '      Continuing may install/update from the wrong branch or an old build,' -ForegroundColor Red
+        Write-Host '      exactly like CYBER-SEC(001) did for weeks without any error shown.' -ForegroundColor Red
+        Write-Host ''
+        Write-Host '      Always launch via this one-liner instead of a saved file:' -ForegroundColor Yellow
+        Write-Host "        irm $RAW_BASE/manage-agent.ps1 | iex" -ForegroundColor White
+        Write-Host ''
+        $ans = Read-Host '      Re-launch the current version from GitHub now? (Y/n)'
+        if ($ans.Trim() -notmatch '^(n|no)$') {
+          Start-Process powershell.exe -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', "irm $RAW_BASE/manage-agent.ps1 | iex")
+          exit 0
+        }
+        Write-Host '      Continuing with the local (possibly outdated) copy...' -ForegroundColor DarkYellow
+      } else {
+        Ok 'This local copy matches the current master version.'
+      }
+    } catch {
+      Warn "Could not check for a newer version of this script (offline?): $($_.Exception.Message)"
+    }
+    Write-Host ''
+    Start-Sleep -Seconds 1
+  }
+
   # ================= Elevation =================
 
   $isAdmin = ([Security.Principal.WindowsPrincipal] `
@@ -156,6 +211,8 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     }
     return
   }
+
+  Test-ScriptFreshness
 
   # ================= Detection =================
 

@@ -8,6 +8,41 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: manage-agent.ps1 silently updates from a stale local copy with no warning (September 9, 2026)
+
+Root-caused a multi-week staleness bug on a live endpoint (CYBER-SEC 001): its browser-extension
+native host (`skdlp_host.exe`) never matched any SHA-256 the CI pipeline had ever published for
+`master`, going back to August 19 -- yet every `[2] Update` run printed full success ("Binary
+replaced", "Native host updated"). Root cause: the operator had a *saved local copy* of
+`manage-agent.ps1` (downloaded once, kept around, re-run via `-File`) that still had the pre-fix
+`$RAW_BASE` value pointing at `main` -- a different, diverged branch -- baked in from before that
+was corrected to `master` (commit `20ad7f0`, August 19). The script has no self-versioning: once a
+copy is saved to disk, it runs forever with whatever URL was frozen into it at download time, and
+nothing about running it -- not the banner, not "Update: up to date", not a successful `[2] Update`
+-- ever indicates the copy itself might be outdated. `$RAW_BASE` being fixed on GitHub months ago
+did nothing for any endpoint already running a saved copy from before that fix.
+
+Added `Test-ScriptFreshness`, called once per elevated session right after the admin check passes.
+`$PSCommandPath` is empty when the script is invoked the recommended way (`irm ... | iex` -- no file
+ever touches disk) and set to a real path when run via `-File` from a saved copy; that alone, with
+zero network calls, is enough to flag "this might be stale." When running from a saved file, it also
+best-effort fetches the current `master` copy of `manage-agent.ps1`, compares SHA-256 hashes, and if
+they differ, prints a loud warning (referencing exactly this failure mode) and offers to relaunch the
+current version from GitHub immediately (default: yes) instead of silently continuing against a
+possibly-stale URL. Fails open on any network error (offline endpoints must still be able to manage
+themselves from whatever local copy they have) and is a no-op entirely for the `irm | iex` path,
+which was never the problem.
+
+Confirmed this exact scenario on CYBER-SEC (001): its installed `skdlp_host.exe` hash
+(`B542D460C4BF...`) matched zero commits in `master`'s build history at all (checked back through
+Aug 19 -- Sep 9), while `[2] Update`'s console output showed the download URL literally reading
+`.../main/agents/endpoint/windows/...`. After fetching a fresh copy of `manage-agent.ps1` via the
+`irm | iex` one-liner and re-running `[2] Update`, both the Windows agent and native-host hashes
+changed and the native host finally matched the current `master` build (`dd422aa`, hash
+`A5371B82...`).
+
+---
+
 ## Feature: Detection Patterns picker for Web Activity Control policies (September 9, 2026)
 
 The Web Activity Control policy form previously exposed only the app-category/activity/action matrix
