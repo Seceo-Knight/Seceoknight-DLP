@@ -158,6 +158,72 @@ if ! docker exec seceoknight-manager alembic upgrade head; then
     exit 1
 fi
 
+# ─── 4.5. Repackage & republish the browser extension ──────────────────
+# Gap found September 2026, running this script for real: install.sh
+# packages the browser extension (agents/browser-extension/ -> a signed
+# .crx in server/extension_dist/, served by the running manager container,
+# force-installed to endpoints via ExtensionInstallForcelist -- see
+# install.sh's own step 8c comment and scripts/pack-extension.py) exactly
+# ONCE, at initial install. This script had NO equivalent step at all --
+# every extension-side fix committed to the repo (background.js,
+# web-activity.js, a manifest.json version bump, ...) was completely
+# invisible to every managed endpoint no matter how many times `git push`
+# + `sudo bash update.sh` ran, because nothing here ever re-packaged and
+# re-published the .crx. The server just kept serving whatever version was
+# live at first install, forever, silently -- there is no error anywhere
+# in this chain, it looks like a successful update every time. Confirmed
+# live: an endpoint stuck on version 1.0.9 after several rounds of exactly
+# that sequence, with newer fixes already sitting unpublished in the repo.
+#
+# Fixed here the same way install.sh does it: since "no source code is
+# ever placed on the production server" is this deployment's whole design
+# (see install.sh's own framing), the extension's small source tree is
+# fetched into a TEMP directory, packaged, and the temp clone deleted
+# immediately after -- only the packaged output (server/extension_dist/)
+# and the persistent signing key (/etc/seceoknightdlp/extension-signing.pem
+# -- reused, never regenerated, since a NEW key would make every endpoint
+# see a completely different extension) remain on disk afterward.
+#
+# Entirely best-effort / non-fatal, same posture as install.sh's version --
+# a server that can't (re)package the extension must never fail the rest
+# of the update over it.
+say "Repackaging the browser extension for force-install"
+if command -v git >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    if ! python3 -m pip show cryptography >/dev/null 2>&1; then
+        say "Installing the 'cryptography' package"
+        python3 -m pip install --quiet cryptography --break-system-packages >/dev/null 2>&1 \
+            || python3 -m pip install --quiet cryptography >/dev/null 2>&1 \
+            || c_yellow "[!] Could not install 'cryptography' -- skipping extension repackaging (non-fatal)"
+    fi
+    if python3 -m pip show cryptography >/dev/null 2>&1; then
+        EXT_TMP="$(mktemp -d)"
+        trap 'rm -rf "${EXT_TMP}"' EXIT
+        if git clone --quiet --depth 1 --branch "${GITHUB_BRANCH}" \
+                "https://github.com/${GITHUB_REPO}.git" "${EXT_TMP}/repo" 2>/dev/null \
+            && [ -f "${EXT_TMP}/repo/scripts/pack-extension.py" ]; then
+            HOST_IP_FOR_EXT="$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)"
+            if python3 "${EXT_TMP}/repo/scripts/pack-extension.py" \
+                --out "${INSTALL_DIR}/server/extension_dist" \
+                --server "http://${HOST_IP_FOR_EXT}"; then
+                say "Browser extension repackaged and republished"
+            else
+                c_yellow "[!] Extension repackaging failed (non-fatal) -- run it manually later:"
+                c_yellow "    git clone https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
+                c_yellow "    python3 scripts/pack-extension.py --out ${INSTALL_DIR}/server/extension_dist --server http://<this-server>"
+            fi
+        else
+            c_yellow "[!] Could not fetch the extension source -- skipping (non-fatal, same manual command as above)"
+        fi
+        rm -rf "${EXT_TMP}"
+        trap - EXIT
+    fi
+else
+    c_yellow "[!] git or python3 unavailable -- skipping extension repackaging (non-fatal)"
+    c_yellow "    Install them and run manually later:"
+    c_yellow "    git clone https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
+    c_yellow "    python3 scripts/pack-extension.py --out ${INSTALL_DIR}/server/extension_dist --server http://<this-server>"
+fi
+
 # ─── 5. Health check ─────────────────────────────────────────────────────
 say "Waiting for the API to come up via nginx (max ~2 minutes)"
 for i in $(seq 1 60); do
