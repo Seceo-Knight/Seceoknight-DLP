@@ -444,6 +444,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Err '   No extension id cached yet -- nothing to reset. Run [1] Install/[2] Update first.'
       return
     }
+
+    $task = Get-ScheduledTask -TaskName $EXTGUARD_TASK -ErrorAction SilentlyContinue
+    $didRemove = $false
+
     if (@($extStatus.Forced).Count -eq 0) {
       Warn '   No browser currently shows a force-install entry for this extension -- nothing to remove.'
       Warn '   If the extension still looks stuck, just restart the Browser Extension Guard task below.'
@@ -451,14 +455,33 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
       Write-Host ''
       Warn "   This removes the ExtensionInstallForcelist entry for $($extStatus.ExtensionId) from:"
       foreach ($name in $extStatus.Forced) { Warn "     - $name" }
-      Warn '   Chrome/Edge will auto-uninstall the extension on their next policy read, then the'
-      Warn '   guard task (triggered immediately below) re-adds the entry for a genuinely fresh install.'
-      Warn '   You will need to fully close and reopen each affected browser afterwards.'
+      Warn '   Chrome/Edge will auto-uninstall the extension once they next read policy with the'
+      Warn '   entry gone -- which needs the guard task PAUSED for a moment first (see below), then'
+      Warn '   the browser fully closed and reopened.'
       $confirm = Read-Host "   Type 'y' to confirm (anything else cancels)"
       if ($confirm -ne 'y' -and $confirm -ne 'Y') {
         Warn '   Cancelled -- no changes made.'
         return
       }
+
+      # DISABLE (not just Stop) the guard task BEFORE touching the registry.
+      # Stop-ScheduledTask only kills a currently-running instance -- it does
+      # NOT stop the task's own recurring 2-minute trigger from firing again
+      # on schedule and re-adding the entry before the browser has had any
+      # chance to notice it's gone. Found live on CYBER-SEC (001), September
+      # 2026, running exactly this function: it removed the entry and
+      # re-triggered the guard task in the very same breath, with no gap at
+      # all for Chrome to react -- Remove stayed greyed out (Chrome still
+      # saw an active policy moments later) and the extension never actually
+      # reinstalled, no matter how many times this ran or the browser was
+      # closed/reopened. Pausing the schedule (not just skipping the manual
+      # trigger) is what actually gives Chrome a real window to process the
+      # removal.
+      if ($task) {
+        try { Disable-ScheduledTask -TaskName $EXTGUARD_TASK -ErrorAction Stop | Out-Null } catch {}
+        try { Stop-ScheduledTask -TaskName $EXTGUARD_TASK -ErrorAction SilentlyContinue } catch {}
+      }
+
       foreach ($b in $BROWSERS) {
         if ($extStatus.Forced -notcontains $b.Name) { continue }
         $fl = Join-Path $b.Root 'ExtensionInstallForcelist'
@@ -472,26 +495,37 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
             $removed = $true
           }
         }
-        if ($removed) { Ok "   $($b.Name): force-install entry removed." }
+        if ($removed) { Ok "   $($b.Name): force-install entry removed."; $didRemove = $true }
         else { Warn "   $($b.Name): entry not found when removing (already gone?)." }
       }
+
+      if ($didRemove) {
+        Write-Host ''
+        Warn '   Guard task paused -- it will NOT re-add the entry until you continue below.'
+        Warn '   Now fully close and reopen EVERY WINDOW of each affected browser so Chrome'
+        Warn '   actually processes the policy removal. The Remove button on the SeceoKnight'
+        Warn '   entry becomes clickable once it has (not required to continue -- just confirms'
+        Warn '   the uninstall genuinely completed if you want to check).'
+        Read-Host '   Press Enter once you have fully closed and reopened the browser(s)'
+      }
     }
+
     Write-Host ''
-    $task = Get-ScheduledTask -TaskName $EXTGUARD_TASK -ErrorAction SilentlyContinue
     if ($task) {
       try {
+        Enable-ScheduledTask -TaskName $EXTGUARD_TASK -ErrorAction Stop | Out-Null
         Start-ScheduledTask -TaskName $EXTGUARD_TASK -ErrorAction Stop
-        Ok '   Browser Extension Guard task triggered -- it will re-add the entry within a few seconds.'
+        Ok '   Browser Extension Guard task re-enabled and triggered -- it will re-add the entry within a few seconds.'
       } catch {
-        Err "   Could not trigger the guard task: $($_.Exception.Message)"
-        Warn "   It will still run on its own schedule (up to 2 minutes)."
+        Err "   Could not restart the guard task: $($_.Exception.Message)"
+        Warn "   Re-enable/trigger it manually: Enable-ScheduledTask -TaskName '$EXTGUARD_TASK'; Start-ScheduledTask -TaskName '$EXTGUARD_TASK'"
       }
     } else {
       Warn '   Browser Extension Guard task is not installed -- run [1] Install/[2] Update first.'
     }
     Write-Host ''
-    Warn '   Now fully close and reopen each affected browser (not just a tab/window) to complete'
-    Warn '   the reinstall. Verify afterwards with chrome://extensions or edge://extensions.'
+    Warn '   Now fully close and reopen each affected browser ONE MORE TIME to complete the fresh'
+    Warn '   install. Verify afterwards with chrome://extensions or edge://extensions.'
   }
 
   # Reads a registry value from an EXPLICIT view (64-bit or 32-bit),
