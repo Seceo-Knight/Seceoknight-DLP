@@ -51,7 +51,16 @@ const requestKeys = new Map(); // requestId -> coalesce key, ONLY set for reques
 const waWaiters = new Map(); // requestId -> respond
 const waRequestKeys = new Map(); // requestId -> { key, contentSig }, ONLY set for requests we're willing to cache
 const waRecentDecisions = new Map(); // "host:activity" -> { decision, expiresAt, contentSig }
-const WA_COALESCE_WINDOW_MS = 4000; // matches COALESCE_WINDOW_MS's own reasoning below
+// Widened from 4000 (September 2026): live testing on a real endpoint showed
+// even 4 seconds was too narrow -- a single ChatGPT message produced THREE
+// separate genai/post alerts for the SAME prompt, timestamped 8s and then
+// 19s after the first, not sub-second as the original Aug 19 2026 fix
+// above assumed. ChatGPT's moderation-precheck / title-generation calls
+// evidently don't fire in the same instant as the main completion call --
+// they trail behind it by several seconds, well outside the old window, so
+// they were never coalesced and each fired its own duplicate alert. 45s
+// comfortably covers what's actually been observed with margin to spare.
+const WA_COALESCE_WINDOW_MS = 45000;
 
 function waCoalesceKeyFor(meta) {
   return ((meta && meta.host) || "") + ":" + ((meta && meta.activity) || "");
@@ -61,19 +70,26 @@ function waCoalesceKeyFor(meta) {
 // carry user-visible text (web-activity.js sends `content` only for
 // "post" and "ai_response" — genuine prompts/replies; internal metadata/
 // moderation pre-check calls this cache was built to coalesce have no
-// `content` at all). Found in a policy-engine audit, August 28 2026: the
-// host+activity-only key above was reused as-is for TWO DIFFERENT real
-// prompts, or a prompt followed by a genuinely different AI reply, sent
-// seconds apart to the same host — a real detection bypass, not just
-// noise, since ai_response inspection is the headline capability this
-// feature exists for. Fixed the same way inject.js's bodyIdentityKey()
-// fixed the equivalent bug in the upload path: a cheap length+prefix
-// signature, not a full hash, cheap enough to compute on every call and
-// good enough to tell "same text, re-fired" apart from "different text."
-// When `content` is absent (the original internal-call case this cache
-// was built for), this returns "" on both sides and behaves exactly as
-// before — host+activity coalescing across those calls' differing bodies
-// is still intentional and preserved.
+// `content` at all). Originally REQUIRED to match for a cached decision to
+// be reused (added in a policy-engine audit, August 28 2026, after the
+// host+activity-only key was found reusing a cached decision for TWO
+// DIFFERENT real prompts sent seconds apart to the same host — a real
+// detection bypass, not just noise).
+//
+// September 2026: no longer gates cache reuse (see the onMessage handler
+// below) now that WA_COALESCE_WINDOW_MS is 45s instead of 4s -- requiring
+// an exact signature match defeated the whole point of the wider window,
+// since the duplicate calls this widening exists to catch (moderation
+// pre-check, title-gen, ...) carry DIFFERENT body shapes than the main
+// call for the SAME user action, same reasoning waCoalesceKeyFor's own
+// comment already gives for keying on host+activity instead of content in
+// the first place. Kept computing/storing it anyway (still logged, still
+// available for debugging) since dropping it as a gate is an accepted
+// trade-off, not a claim it's useless: two genuinely different sensitive
+// prompts/replies sent to the same host within the SAME 45-second window
+// will now coalesce into one alert instead of two. Judged the better
+// failure mode than the flooding this whole cache exists to prevent --
+// revisit if that trade-off turns out wrong in practice.
 function waContentSig(meta) {
   var c = meta && typeof meta.content === "string" ? meta.content : "";
   if (!c) return "";
@@ -420,10 +436,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const waKey = waCoalesceKeyFor(message.meta);
     const waSig = waContentSig(message.meta);
     const waCached = waRecentDecisions.get(waKey);
-    // Require the content signature to match too (see waContentSig's own
-    // comment) -- host+activity alone isn't enough to trust a cached
-    // decision for a content-bearing request.
-    if (waCached && waCached.expiresAt > Date.now() && waCached.contentSig === waSig) {
+    // host+activity alone, no content-signature requirement (see
+    // waContentSig's own comment for why that gate was dropped alongside
+    // widening WA_COALESCE_WINDOW_MS to 45s) -- any qualifying request to
+    // the same host+activity within the window reuses the cached decision.
+    if (waCached && waCached.expiresAt > Date.now()) {
       log("reusing cached web-activity decision for", waKey, "->", waCached.decision.action);
       sendResponse(waCached.decision);
       return false;
