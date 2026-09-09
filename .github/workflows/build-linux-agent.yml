@@ -90,7 +90,22 @@ jobs:
           # fails outright rather than silently degrading (the runtime
           # try/except ImportError in usb_monitor.py only helps once
           # pyudev is already importable; it can't make a failed build succeed).
-          apt-get install -y --no-install-recommends \
+          #
+          # --allow-downgrades: archive.debian.org's bullseye snapshot is
+          # frozen as of the day it was archived (2025-06-19), but the
+          # python:3.9-slim-bullseye image itself was built later and
+          # already has newer point-release point packages baked in (e.g.
+          # libc6 2.31-13+deb11u13, libudev1 247.3-7+deb11u6, perl-base
+          # 5.32.1-4+deb11u4). libc6-dev/libudev-dev/perl in the archive
+          # snapshot depend on the OLDER exact point releases (deb11u11/
+          # deb11u5/deb11u3) that shipped alongside them at archive time,
+          # which apt refuses to cross without this flag -- it reported
+          # "unmet dependencies" / "held broken packages" rather than
+          # silently downgrading libc6 etc. on its own. This is a routine,
+          # safe apt-managed downgrade (not a manual libc swap): apt
+          # resolves the whole dependency set consistently, it just won't
+          # do so by default without explicit permission.
+          apt-get install -y --no-install-recommends --allow-downgrades \
             build-essential libudev-dev pkg-config git ca-certificates file
           echo "=== glibc version this binary will be built/linked against ==="
           ldd --version | head -1
