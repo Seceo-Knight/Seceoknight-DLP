@@ -109,16 +109,29 @@ jobs:
           # --allow-downgrades that deep rather than risk silently breaking
           # something else already installed at the newer version.
           #
-          # `dist-upgrade --allow-downgrades` first, on its own, with no
-          # packages named, tells apt to reconcile EVERY already-installed
-          # package against what's actually available in the (older)
-          # archive snapshot in one pass -- downgrading libc6/libudev1/
-          # perl-base and anything else that needs it together, as a single
-          # consistent set -- before we ask for anything new. Once the
-          # container's package state matches what the archive snapshot can
-          # actually satisfy, the subsequent install of the new -dev
-          # packages has nothing left to reconcile and just works.
-          apt-get -y --allow-downgrades dist-upgrade -qq
+          # `dist-upgrade --allow-downgrades` on its own (tried, still
+          # failed the same way) also doesn't fix it: with no conflicting
+          # package requested yet, apt sees libc6/libudev1/perl-base as
+          # already installed and satisfied -- there is nothing for
+          # dist-upgrade to reconcile until libc6-dev etc. are actually
+          # requested, at which point it's back to the same transitive
+          # problem as plain `install`.
+          #
+          # Verified directly against the archive (browsed the pool):
+          # archive.debian.org's glibc packages for bullseye stop dead at
+          # +deb11u11 (dated 2024-08-16) -- there is nothing past it. The
+          # newer +deb11u13/+deb11u6/+deb11u4 baked into the
+          # python:3.9-slim-bullseye image were evidently published to
+          # bullseye through some later channel that never made it into
+          # any archive mirror reachable today. u11/u5/u3 themselves DO
+          # exist in the pool, though, so force those three packages down
+          # to that exact version explicitly, by name -- this bypasses
+          # relying on apt's resolver to infer the downgrade transitively
+          # through build-essential, which it wasn't doing.
+          apt-get install -y --allow-downgrades \
+            libc6=2.31-13+deb11u11 \
+            libudev1=247.3-7+deb11u5 \
+            perl-base=5.32.1-4+deb11u3
           apt-get install -y --no-install-recommends --allow-downgrades \
             build-essential libudev-dev pkg-config git ca-certificates file
           echo "=== glibc version this binary will be built/linked against ==="
