@@ -11790,11 +11790,79 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                     
                     if (!isFromMonitoredPath) continue;
 
-                    // REAL-TIME CLASSIFICATION-AWARE BLOCKING
-                    // Call server to classify content and evaluate classification-aware policies
                     std::string usbFile = drivePath + "\\" + fileName;
                     std::string sourceFile = matchedMonitoredPath + "\\" + meta.relativePath;
 
+                    // FAST PATH — policy.action == "block": enforce INSTANTLY,
+                    // without waiting on the classification round-trip. A
+                    // policy explicitly configured to Block a monitored path
+                    // means every transfer from that path gets stopped, full
+                    // stop -- the earlier fix a few lines below (finalAction
+                    // precedence) already guarantees classification can never
+                    // downgrade that outcome, but it still made the actual
+                    // file removal wait on a full read+base64+upload+server-
+                    // classify round trip before deleting anything, which is
+                    // real, size-dependent latency (reported directly: a
+                    // larger file visibly sat on the USB drive far longer
+                    // than a small one before disappearing). Since the
+                    // decision doesn't depend on content for a Block policy,
+                    // there's no reason to wait: delete/restore the USB copy
+                    // right now, then gather classification detail in the
+                    // background (off a detached thread, using the SOURCE
+                    // file -- sourceFile -- which the block above never
+                    // touches) purely to enrich the audit trail with what was
+                    // actually in the file, as a follow-up event once that
+                    // completes. Quarantine/alert policies are unaffected —
+                    // they still go through the synchronous evaluate-then-act
+                    // path below, since gathering that detail before deciding
+                    // is exactly why classification-aware quarantine/alert
+                    // exists.
+                    if (policy.action == "block") {
+                        logger.Info("🚫 Block policy matched for monitored path — enforcing instantly, classification deferred: " + policy.name);
+
+                        HandleUSBFileTransferBlockNoTimestamp(fileName, meta.relativePath, drivePath,
+                                                  matchedMonitoredPath, policy);
+
+                        if (fs::exists(sourceFile)) {
+                            std::string capturedSourceFile = sourceFile;
+                            std::string capturedUsbFile = usbFile;
+                            std::string capturedRelativePath = meta.relativePath;
+                            std::string capturedMonitoredPath = matchedMonitoredPath;
+                            std::string capturedFileName = fileName;
+                            USBFileTransferPolicy capturedPolicy = policy;
+                            std::thread classifyDetailThread([this, capturedSourceFile, capturedUsbFile,
+                                                               capturedRelativePath, capturedMonitoredPath,
+                                                               capturedFileName, capturedPolicy]() {
+                                try {
+                                    PolicyEvaluationResult detail = EvaluatePolicyRealtime(
+                                        capturedFileName, capturedSourceFile, capturedUsbFile, "usb_file_transfer");
+                                    // Only worth a follow-up event if something
+                                    // was actually found -- an empty/Public
+                                    // result adds no information beyond the
+                                    // "blocked" event already sent above.
+                                    if (detail.evaluationSucceeded &&
+                                        (!detail.matchedRules.empty() ||
+                                         (!detail.classificationLevel.empty() && detail.classificationLevel != "Public"))) {
+                                        SendUSBTransferEvent(capturedRelativePath, capturedUsbFile, capturedMonitoredPath,
+                                                            "blocked_classification_detail", capturedPolicy.severity,
+                                                            capturedPolicy.policyId, capturedPolicy.name, true,
+                                                            detail.classificationLevel, detail.confidenceScore,
+                                                            detail.matchedRules);
+                                    }
+                                } catch (const std::exception& e) {
+                                    logger.Warning("Background classification detail for blocked USB transfer failed: " + std::string(e.what()));
+                                }
+                            });
+                            classifyDetailThread.detach();
+                        }
+
+                        break; // Process only once per file
+                    }
+
+                    // REAL-TIME CLASSIFICATION-AWARE BLOCKING (quarantine/alert
+                    // policies only from here on — Block already handled and
+                    // returned above)
+                    // Call server to classify content and evaluate classification-aware policies
                     logger.Info("🔍 Evaluating file transfer with real-time classification:");
                     logger.Info("   File: " + fileName);
                     logger.Info("   Source: " + sourceFile);
@@ -11832,16 +11900,41 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                                                       matchedMonitoredPath, policy);
                         }
                     } else {
-                        // CRITICAL FIX: dispatch on the actual action string
-                        // ("block" / "quarantine" / "allow"), not just the
-                        // shouldBlock bool — that only recognized "block",
-                        // so a quarantine-actioned policy always fell into
-                        // the "allowed" branch below with zero enforcement.
-                        if (evalResult.action == "block") {
+                        // The policy's OWN configured action (policy.action --
+                        // what the admin actually picked for this monitored
+                        // path: Block/Quarantine/Alert) is the GUARANTEED
+                        // floor for any transfer matching that path.
+                        // evalResult.action (the server's content-classification
+                        // verdict) is only allowed to ESCALATE beyond that floor
+                        // -- e.g. an Alert-only policy that happens to catch a
+                        // Restricted document still gets quarantined/blocked,
+                        // same precedent as the Data Matching fix in
+                        // evaluate_policy_realtime (server/app/api/v1/agents.py)
+                        // -- never to DOWNGRADE it. Previously this dispatched
+                        // purely on evalResult.action, so a policy explicitly
+                        // configured to Block silently let any file the
+                        // classifier scored "Public" straight through as a
+                        // merely-informational "allowed" event -- defeating the
+                        // entire point of picking "Block Transfer" for a
+                        // monitored path in the UI: an admin choosing Block
+                        // expects EVERY transfer from that path stopped, not
+                        // just the ones whose content also happens to look
+                        // sensitive.
+                        auto actionRank = [](const std::string& a) -> int {
+                            if (a == "block") return 3;
+                            if (a == "quarantine") return 2;
+                            if (a == "alert") return 1;
+                            return 0; // "allow" / unrecognized
+                        };
+                        std::string finalAction = actionRank(evalResult.action) > actionRank(policy.action)
+                            ? evalResult.action : policy.action;
+
+                        if (finalAction == "block") {
                             logger.Warning("============================================================");
-                            logger.Warning("  🚫 CONTENT-AWARE BLOCKING TRIGGERED!");
+                            logger.Warning("  🚫 USB TRANSFER BLOCKED!");
                             logger.Warning("============================================================");
                             logger.Warning("  File: " + fileName);
+                            logger.Warning("  Policy action: " + policy.action + " | Classification verdict: " + evalResult.action);
                             logger.Warning("  Classification: " + evalResult.classificationLevel);
                             logger.Warning("  Confidence: " + std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "%");
                             logger.Warning("  Reason: " + evalResult.reason);
@@ -11855,16 +11948,20 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
                             logger.Warning("============================================================");
 
                             // Execute block action with classification data
+                            // (attached for detail even when it was the
+                            // policy's own static action, not the classifier,
+                            // that decided to block).
                             HandleUSBFileTransferBlockNoTimestamp(fileName, meta.relativePath, drivePath,
                                                       matchedMonitoredPath, policy,
                                                       evalResult.classificationLevel,
                                                       evalResult.confidenceScore,
                                                       evalResult.matchedRules);
-                        } else if (evalResult.action == "quarantine") {
+                        } else if (finalAction == "quarantine") {
                             logger.Warning("============================================================");
-                            logger.Warning("  ⚠️ CONTENT-AWARE QUARANTINE TRIGGERED!");
+                            logger.Warning("  ⚠️ USB TRANSFER QUARANTINED!");
                             logger.Warning("============================================================");
                             logger.Warning("  File: " + fileName);
+                            logger.Warning("  Policy action: " + policy.action + " | Classification verdict: " + evalResult.action);
                             logger.Warning("  Classification: " + evalResult.classificationLevel);
                             logger.Warning("  Confidence: " + std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "%");
                             logger.Warning("  Reason: " + evalResult.reason);
@@ -11878,10 +11975,15 @@ void CheckUSBDriveForMonitoredFiles(const std::string& drivePath) {
 
                             HandleUSBFileTransferQuarantineNoTimestamp(fileName, meta.relativePath, drivePath,
                                                            matchedMonitoredPath, policy);
+                        } else if (finalAction == "alert") {
+                            logger.Info("🔔 USB transfer alert - Policy action: " + policy.action +
+                                       " | Classification verdict: " + evalResult.action);
+                            HandleUSBFileTransferAlertNoTimestamp(fileName, meta.relativePath, drivePath,
+                                                      matchedMonitoredPath, policy);
                         } else {
                             logger.Info("✅ File ALLOWED - Classification: " + evalResult.classificationLevel +
                                        " (" + std::to_string(static_cast<int>(evalResult.confidenceScore * 100)) + "% confidence)");
-                            logger.Info("   No sensitive data detected, allowing transfer");
+                            logger.Info("   Policy action is allow/unset and no sensitive data detected");
 
                             // Create an informational event for allowed transfers with classification data
                             SendUSBTransferEvent(meta.relativePath, usbFile, matchedMonitoredPath, "allowed",
