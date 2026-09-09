@@ -347,7 +347,7 @@ def evaluate_web_activity(meta):
 
 
 def emit_web_activity_event(meta, category, activity, action_taken, severity, level, blocked,
-                             policy_id=None, policy_name=None):
+                             policy_id=None, policy_name=None, policy_action=None):
     """Emit one Web Activity Control event. Mirrors emit_event() below --
     field names match the server's EventCreate schema.
 
@@ -356,7 +356,22 @@ def emit_web_activity_event(meta, category, activity, action_taken, severity, le
     this event carries a trusted reference to it instead of leaving
     create_event() to (fail to) re-derive one. See EventCreate.policy_id's
     docstring in events.py for why this matters for the dashboard's
-    Policies page violation counts."""
+    Policies page violation counts.
+
+    policy_action: the matched policy's own configured action (block/redact/
+    alert/allow, i.e. evaluate_web_activity()'s raw `action` return value)
+    as opposed to `action_taken`, which is what actually happened for THIS
+    particular emitted event (e.g. a block produces one "alerted" event and
+    one "blocked" event, both with policy_action="block"). Sending this
+    alongside policy_id lets the server's existing agent_resolved_policy
+    fast path (event_processor.py's evaluate_policies(), same mechanism
+    File Transfer Monitoring already relies on) build a synthetic policy
+    match from this already-trusted decision instead of asking the generic
+    DatabasePolicyEvaluator to re-derive one from this event's generic
+    fields -- something it can never validly do for this event type anyway
+    (web_activity_control policies are matrix-shaped, not conditions.rules),
+    and which was silently overwriting correct severities with an unrelated
+    policy's when it ran (found September 2026)."""
     if requests is None or not CFG["agent_key"]:
         return
     try:
@@ -380,6 +395,7 @@ def emit_web_activity_event(meta, category, activity, action_taken, severity, le
                 ),
                 "policy_id": policy_id,
                 "policy_name": policy_name,
+                "policy_action": policy_action,
             },
             timeout=5,
             verify=CFG.get("verify_tls", False),
@@ -406,21 +422,21 @@ def handle_web_activity(meta):
     # actually deliver for downloads.
     if action == "block" and activity == "download":
         emit_web_activity_event(meta, category, activity, "alerted", "critical", level, blocked=False,
-                                 policy_id=policy_id, policy_name=policy_name)
+                                 policy_id=policy_id, policy_name=policy_name, policy_action=action)
     elif action == "block":
         emit_web_activity_event(meta, category, activity, "alerted", "high", level, blocked=False,
-                                 policy_id=policy_id, policy_name=policy_name)
+                                 policy_id=policy_id, policy_name=policy_name, policy_action=action)
         emit_web_activity_event(meta, category, activity, "blocked", "critical", level, blocked=True,
-                                 policy_id=policy_id, policy_name=policy_name)
+                                 policy_id=policy_id, policy_name=policy_name, policy_action=action)
     elif action == "redact":
         emit_web_activity_event(meta, category, activity, "redacted", "medium", level, blocked=False,
-                                 policy_id=policy_id, policy_name=policy_name)
+                                 policy_id=policy_id, policy_name=policy_name, policy_action=action)
     elif action == "alert":
         emit_web_activity_event(meta, category, activity, "alerted", "medium", level, blocked=False,
-                                 policy_id=policy_id, policy_name=policy_name)
+                                 policy_id=policy_id, policy_name=policy_name, policy_action=action)
     else:
         emit_web_activity_event(meta, category, activity, "logged", "info", level, blocked=False,
-                                 policy_id=policy_id, policy_name=policy_name)
+                                 policy_id=policy_id, policy_name=policy_name, policy_action=action)
 
     return action, category, level, reason, redacted_content, labels_redacted
 
