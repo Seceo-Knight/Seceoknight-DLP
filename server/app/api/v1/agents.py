@@ -2378,6 +2378,43 @@ async def evaluate_web_activity(
         is_sensitive_block = level in ("Confidential", "Restricted")
         is_sensitive_alert = level in ("Internal", "Confidential", "Restricted")
         has_matches = bool(classification_result.matched_rules)
+        matched_rules = list(classification_result.matched_rules)
+
+        # Policy-scoped Detection Patterns (config.patterns.custom -- the
+        # picker on the Web Activity Control policy form, added September
+        # 2026: previously this policy type had NO way to specify which
+        # content should trigger it beyond whatever Rules happened to be
+        # enabled globally). Checked directly here, ADDITIVE to the
+        # classify_content() pass above -- deliberately NOT routed through
+        # DatabasePolicyEvaluator, which is exactly what corrupted
+        # web-activity severity before this policy type got its own
+        # evaluator skip (see evaluate_policies() in event_processor.py).
+        # A match here can only ever push the effective level UP (Public ->
+        # Confidential), never down -- an empty/no-match patterns list is a
+        # no-op, preserving prior behavior exactly for every policy that
+        # hasn't configured any.
+        custom_patterns = ((policy.config or {}).get("patterns") or {}).get("custom") or []
+        if custom_patterns and content_to_classify:
+            import re as _re
+            for _p in custom_patterns:
+                _regex = _p.get("regex") if isinstance(_p, dict) else None
+                if not _regex:
+                    continue
+                try:
+                    _m = _re.search(_regex, content_to_classify, _re.IGNORECASE)
+                except _re.error:
+                    continue  # invalid regex saved on the policy -- skip rather than 500
+                if _m:
+                    _desc = (_p.get("description") if isinstance(_p, dict) else None) or _regex
+                    matched_rules.append({
+                        "rule_name": _desc, "rule_type": "web_activity_custom_pattern",
+                        "matched_text": _m.group(0)[:200],
+                    })
+                    has_matches = True
+                    is_sensitive_block = True
+                    is_sensitive_alert = True
+                    if level == "Public":
+                        level = "Confidential"
 
         final_action = "allow"
         redacted_content = None
@@ -2388,8 +2425,16 @@ async def evaluate_web_activity(
         elif cell_action == "alert" and is_sensitive_alert:
             final_action = "alert"
         elif cell_action == "redact" and has_matches:
+            # matched_rules here includes the web_activity_custom_pattern
+            # entries appended above -- safe to pass straight through:
+            # redact_content() only ever redacts entries with a real
+            # rule_id and rule_type in ("regex", "keyword") (see
+            # app/core/masking.py), so a custom-pattern hit (no rule_id,
+            # rule_type="web_activity_custom_pattern") is inert here, same
+            # as it would be for a matched_rules list with nothing else in
+            # it. It still did its job by making has_matches True.
             redacted_content, labels_redacted = await _redact_content(
-                db, content_to_classify, classification_result.matched_rules
+                db, content_to_classify, matched_rules
             )
             final_action = "redact" if labels_redacted else "allow"
 
@@ -2404,7 +2449,7 @@ async def evaluate_web_activity(
         return WebActivityEvaluationResponse(
             app_category=category, action=final_action, reason=reason,
             classification_level=level, confidence=classification_result.confidence_score,
-            matched_rules=classification_result.matched_rules,
+            matched_rules=matched_rules,
             redacted_content=redacted_content, labels_redacted=labels_redacted,
             policy_id=str(policy.id), policy_name=policy.name,
         )

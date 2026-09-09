@@ -286,6 +286,22 @@ export interface WebActivityControlConfig {
     'genai.ai_response'?: WebActivityAction
     'file_sharing.download'?: WebActivityAction
   }
+  // Optional — which content patterns actually trigger a matrix cell's
+  // configured action, beyond whatever's already globally enabled in the
+  // Rules tab. Same shape as FileSystemConfig.patterns.custom (regex +
+  // optional description) so a Rules-tab rule picked here is the exact same
+  // {regex, description} pair File System Monitoring would store — see
+  // useCustomDetectionRules. Evaluated server-side in evaluate_web_activity()
+  // (server/app/api/v1/agents.py) as an ADDITIVE check on top of the normal
+  // classify_content() pass, not a replacement for it — leaving this empty
+  // preserves the exact prior behavior (only the globally enabled Rules are
+  // checked). No "predefined" bucket the way File System has one: those
+  // canned patterns (SSN, Credit Card, ...) are already covered by whatever
+  // default Rules are enabled system-wide, so a separate predefined picker
+  // here would just be duplicating them under a different toggle.
+  patterns?: {
+    custom: { regex: string; description?: string }[]
+  }
 }
 
 // Classification-aware policy types

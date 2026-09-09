@@ -8,6 +8,33 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Feature: Detection Patterns picker for Web Activity Control policies (September 9, 2026)
+
+The Web Activity Control policy form previously exposed only the app-category/activity/action matrix
+(allow/alert/block/redact per row) -- there was no way to specify WHICH content should actually trigger a
+row's configured action beyond whatever Rules happened to be enabled system-wide at the time. Every other
+policy type with content matching (File System Monitoring, Clipboard Monitoring) already lets an admin pick
+specific Rules-tab rules or type a one-off regex into the policy itself; Web Activity Control had no
+equivalent.
+
+**What changed:**
+- `dashboard/src/types/policy.ts` -- `WebActivityControlConfig` gained an optional `patterns.custom` field
+  (`{regex, description}[]`), the same shape `FileSystemConfig.patterns.custom` already uses.
+- `dashboard/src/components/policies/WebActivityControlPolicyForm.tsx` -- new "Detection Patterns" section
+  below the matrix, mirroring `FileSystemPolicyForm`'s picker: existing Rules-tab rules (`useCustomDetectionRules`)
+  shown as selectable tiles, plus a manual regex input with live validation and a test box. No "predefined"
+  bucket (SSN/Credit Card/etc.) the way File System has one -- those canned patterns are already covered by
+  whatever default Rules are enabled globally, so a second picker for the same thing would just be
+  duplicative.
+- `server/app/api/v1/agents.py` (`evaluate_web_activity`) -- reads `policy.config.patterns.custom` and checks
+  each regex against the content directly, ADDITIVE to the existing `classify_content()` pass (not routed
+  through `DatabasePolicyEvaluator`, which is exactly what corrupted web-activity severity before that
+  policy type got its own evaluator skip). A match can only push the effective classification level UP
+  (Public -> Confidential) and is appended to `matched_rules` for visibility on the event detail view; an
+  empty/unmatched patterns list is a no-op, so every existing policy behaves exactly as before.
+
+---
+
 ## Fix: Web Activity Control still flooding events after the coalesce-window widening (September 9, 2026)
 
 Live testing on a real endpoint (extension v1.0.11) showed a single ChatGPT message still logging 3-4
