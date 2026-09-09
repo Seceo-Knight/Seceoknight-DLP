@@ -152,8 +152,8 @@ jobs:
               exit 0
             fi
             echo "Push rejected (attempt $attempt) — fetching and rebasing before retry..."
-            git fetch origin main
-            git rebase origin/main || { echo "Rebase failed — manual intervention needed"; exit 1; }
+            git fetch origin master
+            git rebase origin/master || { echo "Rebase failed — manual intervention needed"; exit 1; }
           done
 
           echo "Push still failing after retries"
@@ -222,8 +222,8 @@ jobs:
               exit 0
             fi
             echo "Push rejected (attempt $attempt) — fetching and rebasing before retry..."
-            git fetch origin main
-            git rebase origin/main || { echo "Rebase failed — manual intervention needed"; exit 1; }
+            git fetch origin master
+            git rebase origin/master || { echo "Rebase failed — manual intervention needed"; exit 1; }
           done
 
           echo "Push still failing after retries"
