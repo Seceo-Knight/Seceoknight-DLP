@@ -49,14 +49,31 @@ jobs:
         run: |
           # Debian 11 (bullseye) reached full end-of-life in September 2026
           # (its LTS window, run by Freexian, ended Aug 2026) -- once that
-          # happens Debian stops publishing fresh Release files for that
-          # suite on deb.debian.org entirely, so a plain `apt-get update`
-          # here started failing with "Release file ... is expired" (the
-          # error the user hit pushing this branch-fix commit). The fix is
-          # to point apt at archive.debian.org, which mirrors every EOL
-          # Debian release indefinitely, and to skip the Valid-Until check
-          # since the archived Release files are frozen at their EOL date
-          # and will never get a fresher one.
+          # happens deb.debian.org stops publishing fresh Release files for
+          # that suite entirely, so a plain `apt-get update` here started
+          # failing with "Release file ... is expired" (the error the user
+          # hit pushing this branch-fix commit).
+          #
+          # Redirecting deb.debian.org -> archive.debian.org (Debian's
+          # permanent EOL-release mirror) is the standard fix, but it does
+          # NOT work uniformly here: archive.debian.org only mirrors
+          # -security suites up through buster -- there is no
+          # bullseye-security tree there at all (confirmed by hand: 404 on
+          # both archive.debian.org/debian-security/dists/bullseye-security/
+          # and archive.debian.org/debian/dists/bullseye-security/), even
+          # though archive.debian.org/debian/dists/bullseye/ and
+          # bullseye-updates/ (the non-security suites) ARE fully present.
+          # Redirecting the security line the same way as the other two
+          # just trades "expired Release file" for "repository ... does
+          # not have a Release file" -- which is exactly the failure this
+          # replaced. So: drop the bullseye-security line outright (this is
+          # a throwaway build container, not a machine that needs security
+          # patches -- build-essential/libudev-dev/pkg-config/git/
+          # ca-certificates/file below all live in the plain "bullseye"
+          # component, not a security-only package), then redirect what's
+          # left to archive.debian.org and skip the Valid-Until check,
+          # since archived Release files are frozen at EOL and will never
+          # get a fresher one.
           #
           # Deliberately NOT bumping the container to bookworm to "fix"
           # this properly -- see the `container:` comment above: staying
@@ -64,10 +81,8 @@ jobs:
           # 2.31 (Debian 11 / Ubuntu 20.04+, per agents/endpoint/linux/
           # README.md's stated Requirements). Bookworm's glibc 2.36 would
           # silently break already-deployed older target machines instead.
-          sed -i \
-            -e 's|http://deb.debian.org/debian-security|http://archive.debian.org/debian-security|g' \
-            -e 's|http://deb.debian.org/debian|http://archive.debian.org/debian|g' \
-            /etc/apt/sources.list
+          sed -i '/bullseye-security/d' /etc/apt/sources.list
+          sed -i 's|http://deb.debian.org/debian|http://archive.debian.org/debian|g' /etc/apt/sources.list
           apt-get -o Acquire::Check-Valid-Until=false update -qq
           # build-essential + libudev-dev + pkg-config: pyudev's CFFI binding
           # (_libudev) has to compile a small C extension against libudev's
