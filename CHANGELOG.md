@@ -8,6 +8,30 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: Web Activity Control still flooding events after the coalesce-window widening (September 9, 2026)
+
+Live testing on a real endpoint (extension v1.0.11) showed a single ChatGPT message still logging 3-4
+separate `web_activity` events instead of one, even after the September 2026 fix that widened
+`WA_COALESCE_WINDOW_MS` to 45s and dropped the content-signature requirement (`agents/browser-extension/src/background.js`).
+
+**Root cause.** That earlier fix only helps a request that arrives *after* an earlier one's native-host
+round trip has already completed and been cached in `waRecentDecisions`. ChatGPT fires its `post` /
+title-generation / moderation-precheck / main-completion calls within the same second -- well before the
+first one's round trip (extension -> native host -> server -> back) has any chance to finish. Every one of
+those near-simultaneous calls found `waRecentDecisions` still empty for their shared `host:activity` key
+and went on to hit the native host independently, each producing its own logged event. This is the exact
+race the `classify` path (file uploads) already solved with an `inFlightByKey` leader/piggyback pattern
+(`agents/browser-extension/src/background.js`) -- the `webActivity` path never had the equivalent.
+
+**Fix.** Added `waInFlightByKey`, mirroring `inFlightByKey`: the first request for a given `host:activity`
+key becomes the "leader" and actually calls the native host; any other request for the same key that
+arrives while the leader's round trip is still in flight piggybacks on it instead of racing it, and all of
+them are answered together (`waFanOut`) when the leader's decision arrives. `waRecentDecisions` still
+exists on top of this for requests that arrive after the round trip completes. Extension version bumped to
+1.0.12 so this reaches endpoints via the existing force-install path.
+
+---
+
 ## Redesign: dashboard UI, dark "obsidian vault" -> light enterprise theme (September 3, 2026)
 
 Full-pass redesign of the dashboard (all 18 pages) from the dark "obsidian vault" palette to a light,

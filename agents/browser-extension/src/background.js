@@ -48,9 +48,23 @@ const requestKeys = new Map(); // requestId -> coalesce key, ONLY set for reques
 // content, since these background requests often carry DIFFERENT bodies
 // for the same logical user action, so a content-based key wouldn't
 // coalesce them.
-const waWaiters = new Map(); // requestId -> respond
+const waWaiters = new Map(); // requestId -> respond (fans out to every piggybacked caller, see waInFlightByKey)
 const waRequestKeys = new Map(); // requestId -> { key, contentSig }, ONLY set for requests we're willing to cache
 const waRecentDecisions = new Map(); // "host:activity" -> { decision, expiresAt, contentSig }
+// September 2026, second pass: waRecentDecisions alone did NOT stop the
+// flooding it was built for. It only helps a request that arrives AFTER an
+// earlier one's native-host round trip has already completed and been
+// cached — but live testing showed ChatGPT firing its post/title-gen/
+// moderation-precheck/main-completion calls within the SAME second, well
+// before that first round trip (extension -> native host -> server ->
+// back) has any chance to finish. Every one of those near-simultaneous
+// calls found waRecentDecisions still empty for their shared key and went
+// on to hit the native host independently -- 4 separate events logged for
+// one user action, confirmed on a real endpoint. This is the exact race
+// the classify/inFlightByKey pair below already solved for chunked
+// uploads; waInFlightByKey applies the identical leader/piggyback pattern
+// to the webActivity path, which never had it.
+const waInFlightByKey = new Map(); // coalesce key -> { waiters: [sendResponse, ...] }
 // Widened from 4000 (September 2026): live testing on a real endpoint showed
 // even 4 seconds was too narrow -- a single ChatGPT message produced THREE
 // separate genai/post alerts for the SAME prompt, timestamped 8s and then
@@ -223,6 +237,13 @@ function connect() {
         if (waKey && decision.action !== "redact") {
           waRecentDecisions.set(waKey, { decision, expiresAt: Date.now() + WA_COALESCE_WINDOW_MS, contentSig: waSig });
         }
+        // The leader's round trip is done -- release the in-flight slot so
+        // any FUTURE request for this key goes through waRecentDecisions
+        // above instead of piggybacking on a request that's already
+        // finished. respond() here is the fanOut function set up in the
+        // onMessage handler below; calling it answers the leader AND every
+        // waiter that piggybacked while this was in flight.
+        if (waKey) waInFlightByKey.delete(waKey);
         respond(decision);
         return;
       }
@@ -446,21 +467,45 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       return false;
     }
 
+    // A "leader" request for this same host+activity is already in flight
+    // (its round trip to the native host hasn't completed, so
+    // waRecentDecisions above is still empty for it) -- piggyback on the
+    // leader instead of racing it with a second independent request to the
+    // native host. This is the actual fix for the flooding waRecentDecisions
+    // alone couldn't catch: ChatGPT's post/title-gen/moderation-precheck/
+    // main-completion calls land within the same second, well before the
+    // FIRST one's round trip finishes and populates the cache above.
+    const waInFlight = waInFlightByKey.get(waKey);
+    if (waInFlight) {
+      log("piggybacking on in-flight web-activity request for", waKey);
+      waInFlight.waiters.push(sendResponse);
+      return true; // async — answered when the leader's decision arrives
+    }
+
     if (!port) connect();
     if (!port) {
       warn("webActivity: no native host available → allow (fail-open)");
       sendResponse({ action: "allow", reason: "agent-unavailable" });
       return false;
     }
-    waWaiters.set(message.requestId, sendResponse);
+    // Become the leader for this key. leaderEntry.waiters starts with just
+    // this caller, and grows if other requests for the same key piggyback
+    // before the native host responds.
+    const waLeaderEntry = { waiters: [sendResponse] };
+    waInFlightByKey.set(waKey, waLeaderEntry);
+    const waFanOut = (decision) => {
+      for (const respond of waLeaderEntry.waiters) { try { respond(decision); } catch (e) {} }
+    };
+    waWaiters.set(message.requestId, waFanOut);
     waRequestKeys.set(message.requestId, { key: waKey, contentSig: waSig });
     try {
       port.postMessage(Object.assign({ type: "web_activity", requestId: message.requestId }, message.meta));
     } catch (e) {
       waWaiters.delete(message.requestId);
       waRequestKeys.delete(message.requestId);
+      waInFlightByKey.delete(waKey);
       warn("webActivity postMessage to host failed:", e && e.message);
-      sendResponse({ action: "allow", reason: "send-failed" });
+      waFanOut({ action: "allow", reason: "send-failed" });
       return false;
     }
     setTimeout(() => {
@@ -468,8 +513,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const respond = waWaiters.get(message.requestId);
         waWaiters.delete(message.requestId);
         waRequestKeys.delete(message.requestId);
+        waInFlightByKey.delete(waKey);
         warn("webActivity agent timeout for", message.requestId);
-        respond({ action: "allow", reason: "agent-timeout" });
+        respond({ action: "allow", reason: "agent-timeout" }); // fans out to every piggybacked waiter too
       }
     }, WEB_ACTIVITY_TIMEOUT_MS);
     return true; // async response
