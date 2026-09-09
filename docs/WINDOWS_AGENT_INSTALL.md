@@ -85,7 +85,7 @@ New-Item -ItemType Directory -Path "C:\ProgramData\SeceoKnight\cache" -Force
 > automatically, including SHA-256 verification of the downloaded binary:
 >
 > ```powershell
-> powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install-agent.ps1 | iex"
+> powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install-agent.ps1 | iex"
 > ```
 
 If you are registering manually, create a scheduled task named

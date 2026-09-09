@@ -2,7 +2,11 @@ name: Build Linux Agent
 
 on:
   push:
-    branches: [ main ]
+    # Fixed to "master" -- see build-windows-agent.yml's matching comment
+    # for the full story (this workflow had the identical bug: scoped to
+    # "main", a diverged branch with unrelated commits, so no push to
+    # master ever rebuilt the Linux agent binary either).
+    branches: [ master ]
     paths:
       - 'agents/endpoint/linux/agent.py'
       - 'agents/endpoint/linux/policy_cache.py'

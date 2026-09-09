@@ -15,7 +15,7 @@
 # requirements a generic product's uninstaller wouldn't need to consider.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/uninstall.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/uninstall.sh | sudo bash
 #   curl -fsSL .../uninstall.sh | sudo bash -s -- --purge             # also delete all data
 #   curl -fsSL .../uninstall.sh | sudo bash -s -- --purge --backup    # dump DBs first, then delete
 #   sudo INSTALL_DIR=/srv/seceoknight bash uninstall.sh                # custom dir
@@ -171,7 +171,7 @@ if [ "$PURGE" -eq 1 ]; then
     [ "$BACKUP" -eq 1 ] && say "Any successful DB dumps remain at: /var/backups/seceoknight/"
 else
     c_green "SeceoKnight DLP stopped and removed. Data volumes were KEPT."
-    say "Reinstall over the existing data:  curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install.sh | sudo bash"
+    say "Reinstall over the existing data:  curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install.sh | sudo bash"
     say "Delete the data later:             sudo bash uninstall.sh --purge"
 fi
 echo

@@ -11,7 +11,7 @@ Usage:
     sudo python3 install_linux_agent.py --server-url http://10.0.0.5:55000/api/v1 --no-start
 
 One-liner (download and run):
-    curl -sLO https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
+    curl -sLO https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
 """
 
 import argparse
@@ -33,7 +33,14 @@ import uuid
 
 REPO_OWNER = "Seceo-Knight"
 REPO_NAME = "Seceoknight-DLP"
-DEFAULT_BRANCH = "main"
+# Fixed to "master" (September 2026) -- same branch-confusion bug fixed
+# across update.sh/install.sh/manage-agent.ps1/install-agent.ps1 this same
+# pass: "main" is a DIFFERENT, actively-diverged branch with its own
+# unrelated feature commits, not a delayed mirror of master (this repo's
+# actual active branch). Every fresh Linux agent install was silently
+# bootstrapping from "main" by default regardless of what had actually
+# been pushed to master.
+DEFAULT_BRANCH = "master"
 DEFAULT_INSTALL_DIR = "/opt/seceoknight/agent"
 DEFAULT_CONFIG_DIR = "/etc/seceoknight"
 SERVICE_NAME = "seceoknight_dlp-agent"
@@ -542,7 +549,7 @@ def main():
               sudo python3 install_linux_agent.py --server-url http://myserver:55000/api/v1 --force
 
             One-liner:
-              curl -sLO https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
+              curl -sLO https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install_linux_agent.py && sudo python3 install_linux_agent.py --server-url http://<SERVER-IP>:55000/api/v1
         """),
     )
     parser.add_argument(

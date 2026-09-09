@@ -42,7 +42,7 @@ SeceoKnight DLP is an enterprise Data Loss Prevention platform. It monitors your
 Run this single command on your Ubuntu server. It installs Docker automatically if needed, generates all passwords, detects your server IP, and starts everything:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install.sh | sudo bash
 ```
 
 **What happens automatically:**
@@ -80,7 +80,7 @@ Open the Dashboard URL in your browser. Your browser will show a **security warn
 Run this on each Windows computer you want to monitor. Open **PowerShell as Administrator** and run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install-agent.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install-agent.ps1 | iex"
 ```
 
 The script will ask you three questions:
@@ -108,7 +108,7 @@ Start-ScheduledTask -TaskName "SeceoKnight DLP Agent"
 `install-agent.ps1` above is only for a **first-time install** on a machine that's never had the agent — don't re-run it on a machine that already has one. For everything after that (updating the binary, uninstalling, checking the browser extension's force-install status, or disabling Incognito/InPrivate), use the management console instead:
 
 ```powershell
-irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/manage-agent.ps1 | iex
+irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/manage-agent.ps1 | iex
 ```
 
 It opens an interactive menu:
@@ -372,7 +372,7 @@ with a red on-screen warning.
 ### 5.2 — Verify it's working
 
 ```powershell
-irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/manage-agent.ps1 | iex
+irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/manage-agent.ps1 | iex
 ```
 Choose **[4] Browser** from the menu. It reports, per browser:
 - whether the extension force-install policy is set
@@ -451,7 +451,7 @@ to turn off protection for Gmail, Drive, or any other built-in destination.
 
 ```bash
 cd /opt/seceoknight
-curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/docker-compose.prod.yml -o docker-compose.prod.yml
+curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/docker-compose.prod.yml -o docker-compose.prod.yml
 docker compose -f docker-compose.prod.yml pull
 docker compose -f docker-compose.prod.yml up -d
 ```

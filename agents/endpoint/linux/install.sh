@@ -14,7 +14,7 @@
 
 set -e
 
-RAW_BASE="https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/agents/endpoint/linux"
+RAW_BASE="https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/agents/endpoint/linux"
 BINARY_NAME="seceoknight_linux_agent"
 FROM_SOURCE=false
 SERVER_URL=""

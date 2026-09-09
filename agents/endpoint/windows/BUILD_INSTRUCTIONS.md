@@ -130,7 +130,7 @@ The executable should be around 3-4 MB.
 ### Option 2: re-run the canonical one-liner installer
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install-agent.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install-agent.ps1 | iex"
 ```
 
 This is the recommended path. The installer cleans the previous

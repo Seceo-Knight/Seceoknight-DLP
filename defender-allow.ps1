@@ -18,7 +18,7 @@
 # manage-agent.ps1 are unaffected.
 #
 # Run either form (self-elevates to Administrator):
-#   powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/defender-allow.ps1 | iex"
+#   powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/defender-allow.ps1 | iex"
 #   powershell -ExecutionPolicy Bypass -File .\defender-allow.ps1
 #
 # If THIS script also gets blocked by AMSI on a given machine, there is no
@@ -59,7 +59,7 @@
       } else {
         Start-Process powershell.exe -Verb RunAs -ArgumentList @(
           '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
-          'irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/defender-allow.ps1 | iex')
+          'irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/defender-allow.ps1 | iex')
       }
     } catch {
       Err "Could not self-elevate: $($_.Exception.Message)"

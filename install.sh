@@ -7,16 +7,23 @@
 # server. All services run from pre-built images on GHCR.
 #
 # Usage (one-liner):
-#   curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install.sh | sudo bash
 #
 # Or to a custom directory:
-#   curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install.sh | sudo INSTALL_DIR=/srv/seceoknight bash
+#   curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install.sh | sudo INSTALL_DIR=/srv/seceoknight bash
 #
 set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────
 GITHUB_REPO="Seceo-Knight/Seceoknight-DLP"
-GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
+# Fixed to "master" (September 2026) -- see update.sh's own GITHUB_BRANCH
+# comment for the full story: "main" is a DIFFERENT, actively-diverged
+# branch with its own unrelated feature commits, not a delayed mirror of
+# master (this repo's actual active branch). update.sh was already fixed
+# for this; this script, used for the initial install, was not -- every
+# fresh install was bootstrapping from "main" regardless of what had
+# actually been pushed to master.
+GITHUB_BRANCH="${GITHUB_BRANCH:-master}"
 RAW_BASE="https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/seceoknight}"
 COMPOSE_FILE="docker-compose.prod.yml"
@@ -278,7 +285,7 @@ if command -v git >/dev/null 2>&1 && python3 -m pip show cryptography >/dev/null
     # must never be what's left behind on the server.
     trap 'rm -rf "${EXT_TMP}"' EXIT
 
-    if git clone --quiet --depth 1 "https://github.com/${GITHUB_REPO}.git" "${EXT_TMP}/repo" 2>/dev/null \
+    if git clone --quiet --depth 1 --branch "${GITHUB_BRANCH}" "https://github.com/${GITHUB_REPO}.git" "${EXT_TMP}/repo" 2>/dev/null \
         && [ -f "${EXT_TMP}/repo/scripts/pack-extension.py" ]; then
         HOST_IP_FOR_EXT="$(hostname -I 2>/dev/null | awk '{print $1}' || echo localhost)"
         if python3 "${EXT_TMP}/repo/scripts/pack-extension.py" \
@@ -287,7 +294,7 @@ if command -v git >/dev/null 2>&1 && python3 -m pip show cryptography >/dev/null
             say "Browser extension packaged and published -- endpoints force-install it automatically"
         else
             c_yellow "[!] Extension packaging failed (non-fatal) -- run it manually later:"
-            c_yellow "    git clone https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
+            c_yellow "    git clone --branch ${GITHUB_BRANCH} https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
             c_yellow "    python3 scripts/pack-extension.py --out ${INSTALL_DIR}/server/extension_dist --server http://<this-server>"
         fi
     else
@@ -299,7 +306,7 @@ if command -v git >/dev/null 2>&1 && python3 -m pip show cryptography >/dev/null
 else
     c_yellow "[!] git or 'cryptography' unavailable -- skipping extension packaging (non-fatal)"
     c_yellow "    Install them and run manually later:"
-    c_yellow "    git clone https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
+    c_yellow "    git clone --branch ${GITHUB_BRANCH} https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
     c_yellow "    python3 scripts/pack-extension.py --out ${INSTALL_DIR}/server/extension_dist --server http://<this-server>"
 fi
 

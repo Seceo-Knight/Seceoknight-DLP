@@ -208,7 +208,7 @@ if command -v git >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
                 say "Browser extension repackaged and republished"
             else
                 c_yellow "[!] Extension repackaging failed (non-fatal) -- run it manually later:"
-                c_yellow "    git clone https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
+                c_yellow "    git clone --branch ${GITHUB_BRANCH} https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
                 c_yellow "    python3 scripts/pack-extension.py --out ${INSTALL_DIR}/server/extension_dist --server http://<this-server>"
             fi
         else
@@ -220,7 +220,7 @@ if command -v git >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
 else
     c_yellow "[!] git or python3 unavailable -- skipping extension repackaging (non-fatal)"
     c_yellow "    Install them and run manually later:"
-    c_yellow "    git clone https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
+    c_yellow "    git clone --branch ${GITHUB_BRANCH} https://github.com/${GITHUB_REPO}.git && cd Seceoknight-DLP"
     c_yellow "    python3 scripts/pack-extension.py --out ${INSTALL_DIR}/server/extension_dist --server http://<this-server>"
 fi
 

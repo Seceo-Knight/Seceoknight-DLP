@@ -50,7 +50,7 @@ Binary (recommended, no python3/pip needed on the target):
 
 ```bash
 sudo mkdir -p /opt/seceoknight/agent /etc/seceoknight
-curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/agents/endpoint/linux/seceoknight_linux_agent \
+curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/agents/endpoint/linux/seceoknight_linux_agent \
   -o /opt/seceoknight/agent/seceoknight_linux_agent
 sudo chmod +x /opt/seceoknight/agent/seceoknight_linux_agent
 sudo cp agent_config.json /etc/seceoknight/

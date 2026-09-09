@@ -2,7 +2,18 @@ name: Build Windows Agent
 
 on:
      push:
-       branches: [ main ]
+       # Fixed to "master" -- that's this repo's actual active branch (see
+       # update.sh's own extensive comment on this exact confusion, and
+       # commit 737c3df's fix for the parallel ":latest" Docker-image race
+       # in build-and-push.yml/build-images.yml). This workflow was still
+       # scoped to "main" -- a DIFFERENT, actively-diverged branch with its
+       # own unrelated feature commits, not a delayed mirror of master --
+       # meaning EVERY push to master containing an agent.cpp/skdlp_host.py
+       # fix silently never rebuilt seceoknight_agent.exe/skdlp_host.exe at
+       # all, with no error anywhere to suggest that. Found September 2026
+       # tracing why a browser extension version bump on master wasn't
+       # reaching an endpoint via manage-agent.ps1's [2] Update.
+       branches: [ master ]
        paths:
          - 'agents/endpoint/windows/agent.cpp'
          - 'agents/endpoint/windows/network_exfil_monitor.cpp'

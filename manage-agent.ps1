@@ -10,7 +10,7 @@
 #     [1] Install    [2] Update    [3] Uninstall    [4] Exit
 #
 # Run either form (both self-elevate to Administrator):
-#   powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/manage-agent.ps1 | iex"
+#   powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/manage-agent.ps1 | iex"
 #   powershell -ExecutionPolicy Bypass -File .\manage-agent.ps1
 #
 # Design notes (why this isn't a straight port of a similar script from the
@@ -63,7 +63,19 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
   # ---- Shared constants (MUST match install-agent.ps1) ----
   $GITHUB_REPO   = 'Seceo-Knight/Seceoknight-DLP'
-  $RAW_BASE      = "https://raw.githubusercontent.com/$GITHUB_REPO/main"
+  # Fixed to "master" (September 2026): this was "main" -- a DIFFERENT,
+  # actively-diverged branch with its own unrelated feature commits, not a
+  # delayed mirror of master, which is this repo's actual active branch
+  # (see update.sh's own extensive comment on this exact confusion, and
+  # commit 737c3df's parallel fix for the Docker-image ":latest" race).
+  # Every download this script makes -- install-agent.ps1, the agent exe,
+  # skdlp_host.exe, and this script's own self-elevation re-fetch -- was
+  # silently pulling from "main" the whole time, completely independent of
+  # whatever had actually been pushed to master. Combined with
+  # build-windows-agent.yml ALSO only building on "main" (fixed alongside
+  # this), the agent/native-host binaries in the repo could be arbitrarily
+  # stale relative to master with no error anywhere in the chain to say so.
+  $RAW_BASE      = "https://raw.githubusercontent.com/$GITHUB_REPO/master"
   $INSTALL_URL   = "$RAW_BASE/install-agent.ps1"
   $SUM_URL       = "$RAW_BASE/agents/endpoint/windows/seceoknight_agent.exe.sha256"
   $DOWNLOAD_URL  = "$RAW_BASE/agents/endpoint/windows/seceoknight_agent.exe"
@@ -1348,7 +1360,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     Info 'add can never block the rest of this management console again.'
     Write-Host ''
     Write-Host '   Run this in a new PowerShell window (as Administrator):' -ForegroundColor Yellow
-    Write-Host '   irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/defender-allow.ps1 | iex' -ForegroundColor White
+    Write-Host '   irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/defender-allow.ps1 | iex' -ForegroundColor White
     Write-Host ''
     Write-Host '   If that also gets blocked, add the exclusion by hand instead:' -ForegroundColor Yellow
     Write-Host "   Windows Security -> Virus & threat protection -> Manage settings ->" -ForegroundColor Yellow

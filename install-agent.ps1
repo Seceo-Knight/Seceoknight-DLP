@@ -2,7 +2,7 @@
 # Requires Administrator privileges.
 #
 # Usage (one-liner):
-#   powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install-agent.ps1 | iex"
+#   powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install-agent.ps1 | iex"
 #
 # What this script does:
 #   1. Validates server connectivity (IP or DNS hostname).
@@ -39,7 +39,12 @@ $DATA_DIR = "C:\ProgramData\SeceoKnight"
 $EXE_NAME = "seceoknight_agent.exe"
 $CONFIG_NAME = "agent_config.json"
 $TASK_NAME = "SeceoKnight DLP Agent"
-$RAW_BASE = "https://raw.githubusercontent.com/$GITHUB_REPO/main"
+# Fixed to "master" (September 2026) -- see manage-agent.ps1's matching
+# comment on $RAW_BASE for the full story: this was "main", a DIFFERENT,
+# actively-diverged branch, not a mirror of master (this repo's actual
+# active branch). Every download this script makes was silently pulling
+# from "main" regardless of what had actually been pushed to master.
+$RAW_BASE = "https://raw.githubusercontent.com/$GITHUB_REPO/master"
 
 # Colors for output
 function Write-ColorOutput {

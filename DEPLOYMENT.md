@@ -40,7 +40,7 @@ It covers:
 ### One-liner install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install.sh | sudo bash
 ```
 
 What this does, in order:
@@ -206,8 +206,8 @@ Use a more descriptive message if you prefer, e.g.
 ### Verify the upload landed
 
 ```bash
-curl -fsI https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/agents/endpoint/windows/seceoknight_agent.exe | head -1
-curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/agents/endpoint/windows/seceoknight_agent.exe.sha256
+curl -fsI https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/agents/endpoint/windows/seceoknight_agent.exe | head -1
+curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/agents/endpoint/windows/seceoknight_agent.exe.sha256
 ```
 
 Both should return successfully. The SHA-256 should match what you
@@ -227,7 +227,7 @@ generated locally.
 Run this **as Administrator** on each Windows endpoint:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/install-agent.ps1 | iex"
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/install-agent.ps1 | iex"
 ```
 
 What it does:
@@ -305,12 +305,12 @@ For just updating the binary without rerunning the full installer:
 Stop-Process -Name "seceoknight_agent" -Force -ErrorAction SilentlyContinue
 Start-Sleep 2
 Invoke-WebRequest -UseBasicParsing `
-    -Uri "https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/agents/endpoint/windows/seceoknight_agent.exe" `
+    -Uri "https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/agents/endpoint/windows/seceoknight_agent.exe" `
     -OutFile "C:\Program Files\SeceoKnight\seceoknight_agent.exe"
 
 # Verify hash
 $expected = (Invoke-WebRequest -UseBasicParsing `
-    -Uri "https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/agents/endpoint/windows/seceoknight_agent.exe.sha256").Content.Trim().Split()[0].ToUpper()
+    -Uri "https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/agents/endpoint/windows/seceoknight_agent.exe.sha256").Content.Trim().Split()[0].ToUpper()
 $actual = (Get-FileHash -Algorithm SHA256 "C:\Program Files\SeceoKnight\seceoknight_agent.exe").Hash.ToUpper()
 if ($expected -ne $actual) {
     Write-Host "HASH MISMATCH — refusing to start" -ForegroundColor Red
@@ -366,7 +366,7 @@ nginx's image changed, then runs `alembic upgrade head`. If you don't have
 `update.sh` locally yet:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/main/update.sh \
+curl -fsSL https://raw.githubusercontent.com/Seceo-Knight/Seceoknight-DLP/master/update.sh \
   -o /opt/seceoknight/update.sh
 cd /opt/seceoknight && sudo bash update.sh
 ```
