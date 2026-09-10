@@ -8,6 +8,31 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: genai response classification inspected the raw SSE/JSON stream instead of just the reply text, causing over-classification (September 10, 2026)
+
+Confirmed live on CYBER-SEC (001): prompting ChatGPT with a trivial two-word message ("hello
+vaibhav") produced a real MEDIUM "Web Activity AI Response" alert, classified Internal at only 54%
+confidence. `dlp-host.log` showed `content_len=73915` for that response -- 73KB for a reply to a
+two-word prompt. Traced to `maybeRedactResponse()` in `web-activity.js`: it read the ENTIRE
+response body (`resp.clone().text()`) and sent that whole thing off for classification.
+ChatGPT's `chatgpt.com/backend-api/conversation` endpoint streams its reply as
+`text/event-stream` -- dozens of `data: {...}` events, each carrying the full message object (ids,
+author metadata, moderation flags, conversation state, model config) plus the accumulated reply
+text so far. The actual words ("Hello Vaibhav! How can I help you today?") were a small fragment
+buried inside all that structural JSON; classifying the whole blob let a generic pattern match at
+just-over-50% confidence and mislabel a greeting as Internal.
+
+Fixed by adding `extractReplyText()` + `collectKnownTextFields()`: walks SSE `data:` lines (or a
+single JSON document for non-streaming vendors), pulls out only known reply-text fields
+(`content.parts` for ChatGPT, `delta.content`/`delta.text` for OpenAI/Claude-style deltas), and
+keeps the longest fragment seen (SSE re-sends the full accumulated reply on every event, so the
+longest one is the complete final message). `maybeRedactResponse()` now classifies that extracted
+text instead of the raw stream. Fails open to the original raw text if nothing recognizable
+parses out, so this can only reduce what's classified, never suppress a real reply that would
+previously have been caught. Browser extension version bumped to 1.0.16.
+
+---
+
 ## Fix: opening a GenAI tab alone (no prompt sent) could trigger a "Web Activity AI Response" alert (September 10, 2026)
 
 Confirmed live on CYBER-SEC (001), separate from the download-flood fix above: simply opening

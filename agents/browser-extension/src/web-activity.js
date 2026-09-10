@@ -190,6 +190,71 @@
   // already-generated content on page load is not.
   var NON_SUBMIT_METHODS = { GET: 1, HEAD: 1, OPTIONS: 1 };
 
+  // Pulls known reply-text fields out of a parsed genai JSON event, into
+  // `out`. Covers the streaming shapes actually seen from major vendors:
+  //   ChatGPT (chatgpt.com/backend-api/conversation SSE): message.content.parts: [".."]
+  //   OpenAI-style chat-completion delta:                  delta.content: ".."
+  //   Claude-style delta:                                  delta.text: ".."
+  // Recurses through the object generically so nested/wrapped shapes are
+  // still found, but only ever COLLECTS known text fields — it never
+  // includes IDs, timestamps, moderation flags, or other structural JSON,
+  // which is the whole point (see extractReplyText below).
+  function collectKnownTextFields(obj, out, depth) {
+    depth = depth || 0;
+    if (!obj || depth > 6 || typeof obj !== "object") return;
+    if (Array.isArray(obj)) {
+      for (var i = 0; i < obj.length; i++) collectKnownTextFields(obj[i], out, depth + 1);
+      return;
+    }
+    if (obj.content && Array.isArray(obj.content.parts)) {
+      out.push(obj.content.parts.filter(function (p) { return typeof p === "string"; }).join(""));
+    }
+    if (obj.delta && typeof obj.delta.content === "string") out.push(obj.delta.content);
+    if (obj.delta && typeof obj.delta.text === "string") out.push(obj.delta.text);
+    if (typeof obj.text === "string" && obj.text.length > 20) out.push(obj.text);
+    for (var k in obj) {
+      if (k === "content" || k === "delta" || k === "text") continue; // already handled above
+      collectKnownTextFields(obj[k], out, depth + 1);
+    }
+  }
+
+  // Extracts just the assistant's visible reply text from a genai response
+  // body, instead of classifying the ENTIRE raw payload. Added after a live
+  // false positive (CYBER-SEC 001, September 10 2026): prompting ChatGPT
+  // with a two-word "hello vaibhav" produced an ai_response body of 73,915
+  // chars -- content-type text/event-stream, i.e. dozens of SSE `data: {...}`
+  // events each carrying the full message object (ids, author, moderation
+  // flags, conversation state, model config) plus the accumulated reply
+  // text-so-far. The actual reply ("Hello Vaibhav! How can I help you
+  // today?") was a tiny fragment inside that -- classifying the whole blob
+  // let a generic structural pattern match at just 54% confidence and mislabel
+  // a greeting as Internal. This walks SSE `data:` lines (or a single JSON
+  // document for non-streaming vendors), pulls out only known reply-text
+  // fields via collectKnownTextFields, and keeps the LONGEST one seen --
+  // SSE re-sends the full accumulated reply on every event, so the longest
+  // fragment is the complete final message, not a concatenation of repeats.
+  // Fails open to the original raw text if nothing recognizable parses out,
+  // so this can only ever REDUCE what gets classified, never suppress
+  // content that would previously have been caught.
+  function extractReplyText(raw, contentType) {
+    if (!raw) return raw;
+    var isEventStream = /event-stream/i.test(contentType || "") || /^data:\s*\S/m.test(raw);
+    var collected = [];
+    if (isEventStream) {
+      var lines = raw.split(/\r?\n/);
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i].slice(0, 5) !== "data:") continue;
+        var payload = lines[i].slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try { collectKnownTextFields(JSON.parse(payload), collected); } catch (e) { /* not JSON on this line */ }
+      }
+    } else {
+      try { collectKnownTextFields(JSON.parse(raw), collected); } catch (e) { /* not a JSON document */ }
+    }
+    if (!collected.length) return raw; // nothing recognizable -- fail open, unchanged behavior
+    return collected.reduce(function (a, b) { return b.length > a.length ? b : a; }, "");
+  }
+
   // Reads a Response's CLONE to text for classification, leaving the
   // original Response's body untouched and still consumable by whatever
   // this function ultimately returns to the caller — see maybeRedactResponse.
@@ -203,7 +268,11 @@
     // untouched via this early return, at effectively zero extra cost.
     if (!/text|json|event-stream/i.test(ct)) return resp;
 
-    return resp.clone().text().then(function (text) {
+    return resp.clone().text().then(function (rawText) {
+      // Classify only the extracted reply text, not the raw stream/JSON --
+      // see extractReplyText's docstring for why (content_len=73915 on a
+      // two-word prompt, September 10 2026).
+      var text = extractReplyText(rawText, ct);
       // Content-type alone (checked above) isn't a strong enough signal —
       // real genai chat UIs fire plenty of small, unrelated JSON/text
       // fetches to the same watched host alongside the actual completion
