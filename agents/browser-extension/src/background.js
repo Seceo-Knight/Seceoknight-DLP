@@ -661,6 +661,32 @@ let dlSeq = 0; // own counter -- this file's other "seq" (web-activity.js's) liv
 const DL_COALESCE_WINDOW_MS = 10 * 60 * 1000;
 const dlRecentByKey = new Map(); // key -> last-seen timestamp (ms)
 
+// Root cause confirmed September 10, 2026 from dlp-host.log: a single
+// service-worker wake produced onCreated firings for HUNDREDS of distinct,
+// unrelated URLs spanning months of unrelated browsing history (installers,
+// old expired signed SharePoint/Dropbox/ChatGPT URLs, etc.) inside an ~18
+// second burst -- not something a real user does. This is Chrome MV3
+// replaying entries from the browser's historical downloads database
+// through onCreated on wake/restart (or Chrome Sync download-history
+// rehydration), not genuinely new downloads. The dedupe cache above only
+// coalesces REPEAT firings of the same (host, filename, size); it can't
+// stop the first firing of each of hundreds of distinct historical items
+// in one replay burst, since every one of them looks "new" the first time.
+// A replayed historical item is always already settled by the time it's
+// replayed (state !== "in_progress") and its startTime is always well in
+// the past -- a genuine new download is "in_progress" with a startTime
+// that is effectively "now". Filtering on both, before any catalog/dedupe
+// work runs, is the actual fix for the flood (complementary to, not a
+// replacement for, the coalescing above).
+const DL_MAX_STARTTIME_AGE_MS = 15 * 1000;
+
+function isLikelyHistoricalReplay(item) {
+  if (item.state && item.state !== "in_progress") return true;
+  const startedMs = Date.parse(item.startTime || "");
+  if (!Number.isFinite(startedMs)) return false; // no startTime to judge -- don't block on it
+  return (Date.now() - startedMs) > DL_MAX_STARTTIME_AGE_MS;
+}
+
 function dlDedupeKey(host, item) {
   const basename = ((item.filename || "").split(/[\\/]/).pop()) || item.url || "";
   return host + "|" + basename + "|" + (item.fileSize > 0 ? item.fileSize : "?");
@@ -827,6 +853,13 @@ function handleDownloadCreated(item) {
     // service worker at all (blob: URLs are scoped to the page that
     // created them), and this hook never touches the real download anyway.
     dlog("downloads: non-http(s) URL scheme, leaving untouched: " + item.url);
+    return;
+  }
+  if (isLikelyHistoricalReplay(item)) {
+    // See DL_MAX_STARTTIME_AGE_MS's comment above -- this is Chrome replaying
+    // its historical downloads database through onCreated, not a genuine new
+    // download. Skip before doing any catalog/dedupe/inspection work at all.
+    dlog("downloads: skipping onCreated for non-fresh item (likely historical replay): state=" + item.state + " startTime=" + item.startTime + " url=" + item.url);
     return;
   }
 

@@ -8,6 +8,42 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: root cause of the download-flood -- chrome.downloads.onCreated replaying Chrome's entire historical downloads database (September 10, 2026)
+
+Root cause of the flood documented in the entry directly below is now confirmed, and it's a different
+(and bigger) problem than that entry's dedupe cache alone can fix. `dlp-host.log` on CYBER-SEC (001)
+showed a single ~18-second burst (`11:00:18`-`11:00:25`) producing `onCreated` firings for **hundreds
+of distinct, unrelated URLs spanning months of unrelated browsing** -- Wazuh installers, GitHub repo
+zips, old expired ChatGPT/SharePoint/Dropbox signed URLs with expiry timestamps from April/June/July
+2025, VeraCrypt, Docker, TeamViewer, wallpaper sites, and more -- all in one burst, which is not
+something a real user does in 18 seconds. `chrome.downloads.onCreated` was firing for Chrome's entire
+historical downloads database on some trigger (service-worker wake, extension reload, or Chrome Sync
+download-history rehydration), not for genuinely new downloads.
+
+The `dlRecentByKey` dedupe cache added below (v1.0.13) is confirmed working as designed -- it visibly
+suppresses exact repeat firings of the same (host, filename, size). But it can't stop this: every one
+of the hundreds of distinct historical items in a replay burst looks "new" to that cache the first
+time it's seen, since the cache only coalesces *repeats*, not first-occurrences. That's why the flood
+persisted after v1.0.13 shipped.
+
+Fixed at the actual source in `handleDownloadCreated()` (`agents/browser-extension/src/background.js`):
+added `isLikelyHistoricalReplay(item)`, checked before any catalog lookup, dedupe, or inspection work
+runs. A replayed historical item is always already settled (`item.state !== "in_progress"`) and its
+`item.startTime` is always well in the past; a genuine new download is `"in_progress"` with a
+`startTime` that is effectively "now" (`DL_MAX_STARTTIME_AGE_MS` = 15s tolerance). Either signal alone
+is enough to skip it, with a `dlog()` note explaining why. This is complementary to, not a replacement
+for, the v1.0.13 dedupe cache -- that cache still guards against a genuine in-progress download somehow
+re-firing `onCreated` for itself.
+
+This also explains the "alert fired for `chatgpt.com` while doing nothing" reports from earlier
+sessions: the same log window shows two genuinely real, correctly-classified GenAI events at
+`11:00:34`/`11:00:36` (`post` allowed, `ai_response` alerted as Confidential 60%) sitting in the middle
+of the replay-burst noise -- those were real and correctly classified, they were just buried in
+hundreds of spurious historical-download events that made the dashboard look like it was reacting to
+nothing. Browser extension version bumped to 1.0.14.
+
+---
+
 ## Fix: Web Activity Control download events flooding on repeat chrome.downloads.onCreated firings (September 10, 2026)
 
 CYBER-SEC (001) flooded dozens of `web_activity`/download events a second for the same handful of
