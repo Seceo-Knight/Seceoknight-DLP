@@ -8,6 +8,29 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: genai reply-text extraction switched from hardcoded field names to vendor-agnostic prose detection (September 10, 2026)
+
+Follow-up to the entry directly below (v1.0.16), which tried to isolate a genai reply's actual text
+by pattern-matching known JSON field names (ChatGPT's `content.parts`, OpenAI-style `delta.content`,
+etc). Confirmed live to be wrong: across five separate test prompts on CYBER-SEC (001), none of the
+guessed field names matched what chatgpt.com actually sends, so extraction kept finding nothing and
+silently fell back to classifying the full raw stream every time -- `content_len` stayed pinned at
+73,900-76,800 chars regardless of what was typed, and real prompts kept getting misclassified
+(Internal 54%, Restricted 100%, Confidential 69%) off generic structural JSON, not the actual reply.
+
+Replaced with a vendor-agnostic approach that doesn't require knowing any vendor's internal schema:
+`extractReplyText()` now scans the raw response text directly for double-quoted JSON string VALUES
+that look like natural-language content (`PROSE_STRING_RE` + `looksLikeProse()` -- reasonably long,
+mostly letters/spaces/sentence punctuation) and discards everything else: ids, hashes, urls,
+timestamps, enum/status values, model names, and the rest of the structural JSON that dominates a
+modern streaming genai response. Works the same whether a vendor resends a full snapshot per SSE
+event or streams incremental patches, and works across vendors without per-vendor field-path
+knowledge. Verified in isolation against a simulated ~14KB noisy payload (ids, timestamps,
+moderation flags, config) with a real reply buried inside -- correctly extracted just the 40-char
+reply text and discarded the rest. Browser extension version bumped to 1.0.18.
+
+---
+
 ## Fix: genai response classification inspected the raw SSE/JSON stream instead of just the reply text, causing over-classification (September 10, 2026)
 
 Confirmed live on CYBER-SEC (001): prompting ChatGPT with a trivial two-word message ("hello

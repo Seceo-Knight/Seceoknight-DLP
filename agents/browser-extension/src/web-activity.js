@@ -190,69 +190,54 @@
   // already-generated content on page load is not.
   var NON_SUBMIT_METHODS = { GET: 1, HEAD: 1, OPTIONS: 1 };
 
-  // Pulls known reply-text fields out of a parsed genai JSON event, into
-  // `out`. Covers the streaming shapes actually seen from major vendors:
-  //   ChatGPT (chatgpt.com/backend-api/conversation SSE): message.content.parts: [".."]
-  //   OpenAI-style chat-completion delta:                  delta.content: ".."
-  //   Claude-style delta:                                  delta.text: ".."
-  // Recurses through the object generically so nested/wrapped shapes are
-  // still found, but only ever COLLECTS known text fields — it never
-  // includes IDs, timestamps, moderation flags, or other structural JSON,
-  // which is the whole point (see extractReplyText below).
-  function collectKnownTextFields(obj, out, depth) {
-    depth = depth || 0;
-    if (!obj || depth > 6 || typeof obj !== "object") return;
-    if (Array.isArray(obj)) {
-      for (var i = 0; i < obj.length; i++) collectKnownTextFields(obj[i], out, depth + 1);
-      return;
+  // Vendor-agnostic prose extraction. An earlier version of this function
+  // tried to hardcode the exact JSON field names each genai vendor's
+  // streaming API uses (ChatGPT's message.content.parts, OpenAI-style
+  // delta.content, etc). Confirmed live and wrong (CYBER-SEC 001, September
+  // 10 2026): across five separate test prompts the guessed field names
+  // never matched what chatgpt.com actually sends, so extraction kept
+  // finding nothing and silently fell back to the full raw stream every
+  // time -- content_len stayed pinned at 73,900-76,800 chars regardless of
+  // what was typed, and real prompts kept getting misclassified (Internal
+  // 54%, Restricted 100%, Confidential 69%) off generic structural JSON
+  // rather than the actual reply.
+  //
+  // Instead of matching field NAMES (which are vendor-specific and can
+  // change), this scans the raw response text directly for double-quoted
+  // JSON string VALUES that look like actual natural-language content --
+  // reasonably long, mostly letters/spaces/punctuation -- and discards
+  // everything else: ids, hashes, urls, timestamps, enum/status values,
+  // model names, and the rest of the structural JSON that dominates a
+  // modern streaming genai response (conversation metadata, moderation
+  // results, model config, ...). Works the same whether the vendor resends
+  // a full snapshot on every SSE event or streams incremental patches, and
+  // works across vendors without needing per-vendor schema knowledge.
+  var PROSE_STRING_RE = /"((?:[^"\\]|\\.){20,4000})"/g;
+  function looksLikeProse(s) {
+    if (s.indexOf(" ") === -1) return false; // one "word" -- an id/enum/hash, not a sentence
+    var okChars = 0;
+    for (var i = 0; i < s.length; i++) {
+      var c = s.charCodeAt(i);
+      if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 32 ||
+        c === 46 || c === 44 || c === 33 || c === 63 || c === 39 || c === 45) okChars++;
     }
-    if (obj.content && Array.isArray(obj.content.parts)) {
-      out.push(obj.content.parts.filter(function (p) { return typeof p === "string"; }).join(""));
-    }
-    if (obj.delta && typeof obj.delta.content === "string") out.push(obj.delta.content);
-    if (obj.delta && typeof obj.delta.text === "string") out.push(obj.delta.text);
-    if (typeof obj.text === "string" && obj.text.length > 20) out.push(obj.text);
-    for (var k in obj) {
-      if (k === "content" || k === "delta" || k === "text") continue; // already handled above
-      collectKnownTextFields(obj[k], out, depth + 1);
-    }
+    return (okChars / s.length) >= 0.85; // mostly letters/spaces/sentence punctuation
   }
-
-  // Extracts just the assistant's visible reply text from a genai response
-  // body, instead of classifying the ENTIRE raw payload. Added after a live
-  // false positive (CYBER-SEC 001, September 10 2026): prompting ChatGPT
-  // with a two-word "hello vaibhav" produced an ai_response body of 73,915
-  // chars -- content-type text/event-stream, i.e. dozens of SSE `data: {...}`
-  // events each carrying the full message object (ids, author, moderation
-  // flags, conversation state, model config) plus the accumulated reply
-  // text-so-far. The actual reply ("Hello Vaibhav! How can I help you
-  // today?") was a tiny fragment inside that -- classifying the whole blob
-  // let a generic structural pattern match at just 54% confidence and mislabel
-  // a greeting as Internal. This walks SSE `data:` lines (or a single JSON
-  // document for non-streaming vendors), pulls out only known reply-text
-  // fields via collectKnownTextFields, and keeps the LONGEST one seen --
-  // SSE re-sends the full accumulated reply on every event, so the longest
-  // fragment is the complete final message, not a concatenation of repeats.
-  // Fails open to the original raw text if nothing recognizable parses out,
-  // so this can only ever REDUCE what gets classified, never suppress
-  // content that would previously have been caught.
   function extractReplyText(raw, contentType) {
     if (!raw) return raw;
-    var isEventStream = /event-stream/i.test(contentType || "") || /^data:\s*\S/m.test(raw);
-    var collected = [];
-    if (isEventStream) {
-      var lines = raw.split(/\r?\n/);
-      for (var i = 0; i < lines.length; i++) {
-        if (lines[i].slice(0, 5) !== "data:") continue;
-        var payload = lines[i].slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-        try { collectKnownTextFields(JSON.parse(payload), collected); } catch (e) { /* not JSON on this line */ }
-      }
-    } else {
-      try { collectKnownTextFields(JSON.parse(raw), collected); } catch (e) { /* not a JSON document */ }
+    var seen = {};
+    var kept = [];
+    var m;
+    PROSE_STRING_RE.lastIndex = 0;
+    while ((m = PROSE_STRING_RE.exec(raw)) !== null) {
+      var literal;
+      try { literal = JSON.parse('"' + m[1] + '"'); } catch (e) { continue; } // unescape \n \" etc
+      if (!literal || seen[literal] || !looksLikeProse(literal)) continue;
+      seen[literal] = true;
+      kept.push(literal);
     }
-    if (!collected.length) return raw; // nothing recognizable -- fail open, unchanged behavior
-    return collected.reduce(function (a, b) { return b.length > a.length ? b : a; }, "");
+    if (!kept.length) return raw; // nothing recognizable -- fail open, unchanged behavior
+    return kept.join(" ").slice(0, MAX_TEXT_CHARS);
   }
 
   // Reads a Response's CLONE to text for classification, leaving the
@@ -279,7 +264,7 @@
       // extension service-worker console, because this file runs in the
       // page's MAIN world.
       try {
-        console.debug("[SKDLP web-activity v1.0.17] ct=" + ct + " rawLen=" + rawText.length +
+        console.debug("[SKDLP web-activity v1.0.18] ct=" + ct + " rawLen=" + rawText.length +
           " extractedLen=" + (text ? text.length : 0) +
           " extractedSameAsRaw=" + (text === rawText) +
           " preview=" + JSON.stringify((text || "").slice(0, 200)));
