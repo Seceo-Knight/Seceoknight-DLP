@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: opening a GenAI tab alone (no prompt sent) could trigger a "Web Activity AI Response" alert (September 10, 2026)
+
+Confirmed live on CYBER-SEC (001), separate from the download-flood fix above: simply opening
+chatgpt.com to an existing conversation -- no prompt typed, no message sent -- produced a real
+MEDIUM "Web Activity AI Response" alert, classified Internal at only 31% confidence. Traced to
+`agents/browser-extension/src/web-activity.js`'s response-side GenAI hook: it patches `fetch()`
+for any watched host and treats EVERY text/json/event-stream response 150+ characters as an
+`"ai_response"` (an actual AI reply) and sends it off for classification -- with no way to tell
+"a real reply to something you typed" apart from the web app's own routine startup traffic.
+ChatGPT's web app fires exactly this kind of background call the moment the tab opens (reloading
+an existing conversation's messages, model/account config, etc.), and those payloads clear 150
+characters easily even though nothing was sent. The low (31%) classification confidence on the
+live alert was itself a tell -- consistent with generic conversation/app JSON, not an actual
+model-generated reply.
+
+Fixed by adding a request-method gate: a real chat completion is always requested with a
+body-bearing method (POST, occasionally PUT/PATCH); reloading already-generated content on page
+open is always GET (or HEAD/OPTIONS). Added `resolveMethod()` (mirrors the existing
+`resolveBodyText()`'s two-calling-convention handling) and a `NON_SUBMIT_METHODS` gate at the top
+of `maybeRedactResponse()` -- GET/HEAD/OPTIONS responses now return untouched, before any
+buffering or classification round trip, regardless of content-type or length. POST/PUT/PATCH
+traffic (real prompts and real replies) is inspected exactly as before. Browser extension version
+bumped to 1.0.15.
+
+---
+
 ## Fix: root cause of the download-flood -- chrome.downloads.onCreated replaying Chrome's entire historical downloads database (September 10, 2026)
 
 Root cause of the flood documented in the entry directly below is now confirmed, and it's a different

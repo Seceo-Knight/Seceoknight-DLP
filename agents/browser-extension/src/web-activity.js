@@ -165,11 +165,37 @@
     return h;
   }
 
+  // Best-effort method resolution for BOTH fetch() calling conventions —
+  // mirrors resolveBodyText's two-path handling above. fetch()'s own
+  // default when no method is given anywhere is GET.
+  function resolveMethod(input, init) {
+    if (init && init.method) return String(init.method).toUpperCase();
+    if (typeof Request !== "undefined" && input instanceof Request && input.method) {
+      return String(input.method).toUpperCase();
+    }
+    return "GET";
+  }
+
+  // Methods that never carry a request body in normal use — i.e. "read"
+  // calls, not "send/submit" calls. A genai web app's OWN startup/navigation
+  // traffic (reloading an existing conversation's messages when the tab is
+  // opened, fetching the conversation list, model/account config, ...) is
+  // fetched this way. Confirmed live (September 10, 2026, CYBER-SEC 001):
+  // simply opening chatgpt.com to an existing conversation -- no prompt
+  // typed, no message sent -- produced a MEDIUM "Web Activity AI Response"
+  // alert (classified Internal at only 31% confidence, itself a sign this
+  // was generic conversation/app JSON, not an actual model reply). A real
+  // chat completion is always requested with a body-bearing method (POST,
+  // occasionally PUT/PATCH for some vendors' APIs); simply reloading
+  // already-generated content on page load is not.
+  var NON_SUBMIT_METHODS = { GET: 1, HEAD: 1, OPTIONS: 1 };
+
   // Reads a Response's CLONE to text for classification, leaving the
   // original Response's body untouched and still consumable by whatever
   // this function ultimately returns to the caller — see maybeRedactResponse.
-  function maybeRedactResponse(resp, destHost) {
+  function maybeRedactResponse(resp, destHost, method) {
     if (!webActivityEnforced || !resp || !resp.body || typeof resp.clone !== "function") return resp;
+    if (NON_SUBMIT_METHODS[method]) return resp; // see NON_SUBMIT_METHODS above -- not a real send/reply exchange
     var ct = "";
     try { ct = (resp.headers && resp.headers.get && resp.headers.get("content-type")) || ""; } catch (e) {}
     // Only text-ish responses are worth buffering+inspecting (SSE streams,
@@ -220,6 +246,7 @@
 
       var destHost;
       try { destHost = new URL(url, location.href).hostname.toLowerCase(); } catch (e) { destHost = ""; }
+      var method = resolveMethod(input, init);
 
       return resolveBodyText(input, init).then(function (text) {
         var reqDecisionPromise;
@@ -273,7 +300,7 @@
             announce(dec, "alerted");
           }
           return origFetch.call(window, input, finalInit).then(function (resp) {
-            return maybeRedactResponse(resp, destHost);
+            return maybeRedactResponse(resp, destHost, method);
           });
         }, function () {
           // Decision round trip itself failed — fail open, but the response
@@ -281,7 +308,7 @@
           // inspection isn't silently skipped just because the REQUEST
           // side's decision errored.
           return origFetch.call(window, input, init).then(function (resp) {
-            return maybeRedactResponse(resp, destHost);
+            return maybeRedactResponse(resp, destHost, method);
           });
         });
       });
