@@ -273,6 +273,17 @@
       // see extractReplyText's docstring for why (content_len=73915 on a
       // two-word prompt, September 10 2026).
       var text = extractReplyText(rawText, ct);
+      // TEMPORARY diagnostic (remove once extraction is confirmed working
+      // against real chatgpt.com traffic) -- visible in the PAGE's own
+      // DevTools console (F12 on the chatgpt.com tab itself), NOT the
+      // extension service-worker console, because this file runs in the
+      // page's MAIN world.
+      try {
+        console.debug("[SKDLP web-activity v1.0.17] ct=" + ct + " rawLen=" + rawText.length +
+          " extractedLen=" + (text ? text.length : 0) +
+          " extractedSameAsRaw=" + (text === rawText) +
+          " preview=" + JSON.stringify((text || "").slice(0, 200)));
+      } catch (e) {}
       // Content-type alone (checked above) isn't a strong enough signal —
       // real genai chat UIs fire plenty of small, unrelated JSON/text
       // fetches to the same watched host alongside the actual completion
