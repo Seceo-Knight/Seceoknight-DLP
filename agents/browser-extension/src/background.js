@@ -76,34 +76,41 @@ const waInFlightByKey = new Map(); // coalesce key -> { waiters: [sendResponse, 
 // comfortably covers what's actually been observed with margin to spare.
 const WA_COALESCE_WINDOW_MS = 45000;
 
+// September 2026 regression, fixed again September 10 2026: this used to
+// fold waContentSig() into the key (see waContentSig's own comment for the
+// August 28 2026 incident that made that necessary — host+activity alone
+// let a cached "allow" for one real prompt get silently reused for a
+// SECOND, DIFFERENT prompt sent seconds later to the same host — a real
+// detection bypass). It was dropped to stop near-duplicate background
+// calls (moderation pre-check, title-gen) from each firing their own
+// event, but that traded a live, confirmed detection bypass for reduced
+// dashboard noise — the wrong trade-off for a DLP product. Restored below.
+// Audited end-to-end September 10 2026 (see CHANGELOG): every request that
+// reaches this function already cleared web-activity.js's own 150-char
+// MIN_SEND_TEXT_LENGTH/MIN_RESPONSE_TEXT_LENGTH gate, so in practice
+// EVERY call here carries substantial real content — there is no
+// meaningfully-empty-content case left to carve out. If moderation/
+// title-gen flooding returns, the right fix is correlating those calls to
+// the SAME user turn some other way (e.g. a shared conversation-turn id,
+// if the vendor's request exposes one) — not dropping content identity
+// from the coalescing key again.
 function waCoalesceKeyFor(meta) {
-  return ((meta && meta.host) || "") + ":" + ((meta && meta.activity) || "");
+  var base = ((meta && meta.host) || "") + ":" + ((meta && meta.activity) || "");
+  var sig = waContentSig(meta);
+  return sig ? base + ":" + sig : base;
 }
 
 // Cheap content-identity signature for the two activities that actually
 // carry user-visible text (web-activity.js sends `content` only for
-// "post" and "ai_response" — genuine prompts/replies; internal metadata/
-// moderation pre-check calls this cache was built to coalesce have no
-// `content` at all). Originally REQUIRED to match for a cached decision to
-// be reused (added in a policy-engine audit, August 28 2026, after the
-// host+activity-only key was found reusing a cached decision for TWO
-// DIFFERENT real prompts sent seconds apart to the same host — a real
-// detection bypass, not just noise).
-//
-// September 2026: no longer gates cache reuse (see the onMessage handler
-// below) now that WA_COALESCE_WINDOW_MS is 45s instead of 4s -- requiring
-// an exact signature match defeated the whole point of the wider window,
-// since the duplicate calls this widening exists to catch (moderation
-// pre-check, title-gen, ...) carry DIFFERENT body shapes than the main
-// call for the SAME user action, same reasoning waCoalesceKeyFor's own
-// comment already gives for keying on host+activity instead of content in
-// the first place. Kept computing/storing it anyway (still logged, still
-// available for debugging) since dropping it as a gate is an accepted
-// trade-off, not a claim it's useless: two genuinely different sensitive
-// prompts/replies sent to the same host within the SAME 45-second window
-// will now coalesce into one alert instead of two. Judged the better
-// failure mode than the flooding this whole cache exists to prevent --
-// revisit if that trade-off turns out wrong in practice.
+// "post" and "ai_response" — genuine prompts/replies). REQUIRED to match
+// for a cached decision/in-flight request to be reused — folded directly
+// into waCoalesceKeyFor's own key above (added in a policy-engine audit,
+// August 28 2026, after the host+activity-only key was found reusing a
+// cached decision for TWO DIFFERENT real prompts sent seconds apart to the
+// same host — a real detection bypass, not just noise; briefly dropped as
+// a gate in September 2026 to fight dashboard flooding from moderation-
+// precheck/title-gen calls, then restored September 10 2026 after that
+// trade-off was judged wrong for a DLP product — see waCoalesceKeyFor).
 function waContentSig(meta) {
   var c = meta && typeof meta.content === "string" ? meta.content : "";
   if (!c) return "";
@@ -457,10 +464,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const waKey = waCoalesceKeyFor(message.meta);
     const waSig = waContentSig(message.meta);
     const waCached = waRecentDecisions.get(waKey);
-    // host+activity alone, no content-signature requirement (see
-    // waContentSig's own comment for why that gate was dropped alongside
-    // widening WA_COALESCE_WINDOW_MS to 45s) -- any qualifying request to
-    // the same host+activity within the window reuses the cached decision.
+    // waKey now includes the content signature (see waCoalesceKeyFor), so
+    // this only reuses a cached decision for a request carrying the SAME
+    // host+activity+content within the window — a different prompt/reply
+    // gets its own key and falls through to a fresh native-host round trip.
     if (waCached && waCached.expiresAt > Date.now()) {
       log("reusing cached web-activity decision for", waKey, "->", waCached.decision.action);
       sendResponse(waCached.decision);

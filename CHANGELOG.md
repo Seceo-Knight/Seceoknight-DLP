@@ -8,6 +8,118 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Extended genai reply detection beyond chatgpt.com: Claude, Gemini, and OpenAI-API-style vendors (September 10, 2026)
+
+Web Activity Control's app_catalog watches five genai destinations (`039_app_catalog.py`): ChatGPT,
+Microsoft Copilot, Google Gemini/Bard, Claude.ai, Perplexity. Until now, `web-activity.js`'s reply
+extraction only actually reconstructed real text for chatgpt.com's specific token-patch SSE format
+(v1.0.19) -- every other vendor either matched the generic prose-string fallback by luck or, more
+likely, found nothing and correctly skipped classification (fail-closed, no false positive, but no real
+detection either).
+
+Added `reconstructKnownDeltaStream()` as a second-tier extractor, tried after the ChatGPT-specific patch
+reconstruction and before the generic prose fallback. Matches the PUBLICLY DOCUMENTED, stable streaming
+shapes of the underlying vendor APIs:
+  - Claude (Anthropic Messages API): `content_block_delta` events, `delta.text`
+  - OpenAI-API-style chat completions (several genai wrappers/integrations use this shape):
+    `choices[].delta.content`
+  - Gemini (`generateContent` streaming): `candidates[].content.parts[].text`
+
+Deliberately narrow -- only trusts `delta.text`/`delta.content` and `parts[].text` specifically, not any
+bare `.text` field anywhere in the payload (a laxer version of exactly that mistake is what caused the
+chatgpt.com incident this whole day was spent on). Verified in isolation against simulated Claude- and
+Gemini-shaped streams padded with realistic surrounding metadata: both reconstructed the exact reply
+text; a pure-noise payload with no real content correctly returned nothing rather than a false match.
+
+Caveat, stated plainly rather than left implicit: these are the vendors' PUBLIC API shapes. A vendor's
+own web UI can still stream in some different, undocumented internal format none of this recognizes --
+exactly what happened with chatgpt.com's own web client, which turned out not to match its own public
+API's shape either. Where that's true for Copilot/Gemini/Claude/Perplexity's web UIs specifically hasn't
+been verified live (no access to test against those endpoints from this session) -- but because every
+extraction layer fails CLOSED (skip classification) rather than open (send the raw blob) when nothing
+recognizable is found, a wrong guess here can only ever mean a missed detection for that vendor, never
+another false-positive incident like today's. Real coverage confirmation for each vendor is follow-up
+work, tracked, not silently claimed as done. Browser extension version bumped to 1.0.20.
+
+---
+
+## Web Activity Control end-to-end audit: three more false-positive/reliability gaps found and fixed (September 10, 2026)
+
+Full pipeline audit requested after the ai_response over-capture incident (see entries below), to check
+for OTHER issues capable of producing the same class of false positive/detection bypass independent of
+that one bug. Found and fixed three:
+
+1. **Coalescing cache reintroduced a content-blind detection bypass.** `agents/browser-extension/src/
+   background.js`'s `waCoalesceKeyFor()` deduped web-activity decisions by host+activity only (a
+   September 2026 change to fight dashboard flooding from moderation-precheck/title-gen calls). Net
+   effect: within the 45-second coalescing window, a cached "allow" decision for one real prompt/reply
+   could get silently reused for a SECOND, DIFFERENT prompt/reply sent to the same host -- the exact bug
+   an August 28 2026 fix had already closed once, before being dropped again. Restored: `waContentSig()`
+   is folded directly back into the coalescing key, so only a request carrying identical content can
+   reuse a cached decision or piggyback on an in-flight one.
+2. **No confidence floor on genai alerts.** `server/app/api/v1/agents.py`'s `evaluate_web_activity()`
+   fired an alert on ANY classification above Public, including a bare 30%+ confidence match --
+   conversational AI text is unusually prone to that kind of low-confidence keyword coincidence (see the
+   54%/69% "Internal"/"Confidential" alerts on a two-word greeting, entries below). Added a genai-scoped
+   `WEB_ACTIVITY_GENAI_MIN_CONFIDENCE = 0.5` floor -- scoped to `category == "genai"` only, so nothing
+   changes for webmail/collaboration/cloud channels or the shared classification engine used everywhere
+   else in the product. A match below the floor still shows up in matched_rules for visibility; only the
+   alert/block gate is raised.
+3. **Confidence score silently dropped before reaching the dashboard.** `skdlp_host.py`'s
+   `evaluate_web_activity()` received a `confidence` field from the server (already visible in
+   `dlp-host.log`'s "classified Internal (54%)" reason text) but never included it in the tuple it
+   returned, so `emit_web_activity_event()` never had it to send, and the dashboard's Event Details
+   "Confidence Score" panel -- already built, already reading `event.classification_score` -- had
+   nothing to display for any web activity event. This is exactly why a 54%-confidence alert and a
+   100%-confidence one looked identical on the dashboard during today's incident. Fixed: confidence now
+   flows server -> native host -> stored event -> dashboard. While touching this path, also replaced the
+   hardcoded `severity="medium"` for every alert outcome with `_web_activity_alert_severity(level,
+   confidence)`, scaling Restricted-at-high-confidence to "high" and Internal-at-low-confidence to "low"
+   -- block outcomes already had this kind of two-tier severity split, alerts didn't.
+
+Two known, accepted gaps documented but NOT fixed in this pass (tracked for follow-up, not silent):
+non-ChatGPT genai vendors (Copilot, Gemini, Claude) likely get no `ai_response` detection at all right
+now, since `web-activity.js`'s extraction is tuned to ChatGPT's specific SSE format and fails CLOSED
+(skips silently) rather than open when it doesn't recognize a stream -- better than a false positive,
+but real vendor coverage work, not a one-line fix. And genai file upload/download activity is entirely
+outside this pipeline's `MEANINGFUL_CELLS` (`server/app/core/web_activity.py`), a pre-existing, in-code-
+documented scope gap.
+
+---
+
+## Fix: genai reply-text extraction root-caused (token-level SSE patches) + fail-closed on extraction miss (September 10, 2026)
+
+Root cause of the ai_response over-classification bug (see the two entries directly below) finally
+confirmed via a full trace of the client -> content.js -> background.js -> native host ->
+`content_len` log line (nothing server-side recomputes it; it's `len()` of exactly what the
+extension sends -- ruling out coalescing caches, queued/replayed events, or a stale packaged CRX as
+the cause). The real problem: chatgpt.com streams its reply as a JSON-Patch-style sequence of
+TINY per-token operations (`{"p":"/message/content/parts/0","o":"append","v":"Hello"}`), not a
+full-snapshot resend per SSE event. The v1.0.18 prose-detection heuristic required each individual
+extracted fragment to contain a space to count as a sentence -- a single-token fragment like
+`"Hello"` has none, so literally every fragment was rejected and it silently fell back to the full
+raw stream, every time, regardless of extension version (five live tests all landed at the same
+~74-77K content_len no matter what was typed).
+
+Fixed two ways in `agents/browser-extension/src/web-activity.js`:
+  1. `reconstructPatchStream()` -- new primary extraction path. Walks every SSE `data:` line,
+     applies operations whose path targets the assistant message's content/parts, and concatenates
+     their `v` values in stream order (append accumulates, add/replace seeds/overwrites) --
+     the correct reconstruction algorithm for a patch-based protocol. Verified in isolation:
+     reconstructed "Hello Vaibhav! How can I help you today?" byte-for-byte from a simulated
+     11-token delta stream padded with ~19KB of structural noise.
+  2. `extractProseStrings()` (the old v1.0.18 logic) kept as a secondary fallback for vendors that
+     DO resend full snapshots.
+  3. **The critical change**: if neither path finds anything recognizable, `extractReplyText()` now
+     returns `""` (skip classification entirely, same treatment as a too-short prompt) instead of
+     the raw blob. Every live false positive so far has been a direct result of that raw-blob
+     fallback -- removing it means a still-imperfect guess at some future vendor's streaming format
+     can only ever cause a missed inspection, never another mislabeled-greeting alert. Removed the
+     now-obsolete temporary console debug line added in v1.0.17 for diagnosing this. Browser
+     extension version bumped to 1.0.19.
+
+---
+
 ## Fix: genai reply-text extraction switched from hardcoded field names to vendor-agnostic prose detection (September 10, 2026)
 
 Follow-up to the entry directly below (v1.0.16), which tried to isolate a genai reply's actual text

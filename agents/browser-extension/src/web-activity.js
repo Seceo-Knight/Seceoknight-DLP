@@ -190,28 +190,140 @@
   // already-generated content on page load is not.
   var NON_SUBMIT_METHODS = { GET: 1, HEAD: 1, OPTIONS: 1 };
 
-  // Vendor-agnostic prose extraction. An earlier version of this function
-  // tried to hardcode the exact JSON field names each genai vendor's
-  // streaming API uses (ChatGPT's message.content.parts, OpenAI-style
-  // delta.content, etc). Confirmed live and wrong (CYBER-SEC 001, September
-  // 10 2026): across five separate test prompts the guessed field names
-  // never matched what chatgpt.com actually sends, so extraction kept
-  // finding nothing and silently fell back to the full raw stream every
-  // time -- content_len stayed pinned at 73,900-76,800 chars regardless of
-  // what was typed, and real prompts kept getting misclassified (Internal
-  // 54%, Restricted 100%, Confidential 69%) off generic structural JSON
-  // rather than the actual reply.
+  // Reply-text extraction. Two earlier versions of this function got this
+  // wrong, both confirmed LIVE on CYBER-SEC (001), September 10 2026:
+  //   v1.0.16: hardcoded JSON field names (content.parts, delta.content)
+  //            that never matched chatgpt.com's actual shape.
+  //   v1.0.18: a vendor-agnostic "quoted string that looks like prose"
+  //            regex -- but chatgpt.com streams its reply as a JSON-Patch
+  //            style sequence of TINY per-token operations, e.g.
+  //            {"p":"/message/content/parts/0","o":"append","v":"Hello"} --
+  //            and the prose filter required each individual fragment to
+  //            CONTAIN A SPACE to count as a sentence. A one-word token
+  //            like "Hello" has no space, so every single fragment was
+  //            rejected and it silently fell back to the raw stream --
+  //            EVERY time, regardless of extension version, which is why
+  //            content_len stayed pinned at ~74-77K across five separate
+  //            live tests no matter what was actually typed.
   //
-  // Instead of matching field NAMES (which are vendor-specific and can
-  // change), this scans the raw response text directly for double-quoted
-  // JSON string VALUES that look like actual natural-language content --
-  // reasonably long, mostly letters/spaces/punctuation -- and discards
-  // everything else: ids, hashes, urls, timestamps, enum/status values,
-  // model names, and the rest of the structural JSON that dominates a
-  // modern streaming genai response (conversation metadata, moderation
-  // results, model config, ...). Works the same whether the vendor resends
-  // a full snapshot on every SSE event or streams incremental patches, and
-  // works across vendors without needing per-vendor schema knowledge.
+  // Fixed two ways:
+  //  1. reconstructPatchStream() below handles the token-by-token delta
+  //     format directly: walks every SSE `data:` line, finds ops whose
+  //     path targets the assistant message's content/parts, and
+  //     concatenates their "v" values in stream order -- the correct
+  //     reconstruction for an append-style patch protocol (as opposed to
+  //     the earlier "keep the longest snapshot" logic, which assumed a
+  //     full resend per event that chatgpt.com doesn't actually do).
+  //  2. extractProseStrings() is kept as a fallback for vendors that DO
+  //     resend full JSON snapshots per event.
+  //  3. Critically: if NEITHER finds anything, this now returns "" (skip
+  //     classification entirely -- same treatment as a too-short prompt),
+  //     NOT the raw blob. Every false positive reported live has been the
+  //     direct result of falling back to raw text, so removing that
+  //     fallback path entirely means a still-imperfect guess at some
+  //     future vendor's format can only ever cause a missed inspection,
+  //     never another mislabeled-greeting alert.
+  function reconstructPatchStream(raw) {
+    var lines = raw.split(/\r?\n/);
+    var byPath = {};
+    var order = [];
+    function applyOp(evt, depth) {
+      depth = depth || 0;
+      if (!evt || depth > 4 || typeof evt !== "object") return;
+      if (Array.isArray(evt)) {
+        for (var i = 0; i < evt.length; i++) applyOp(evt[i], depth + 1);
+        return;
+      }
+      if (typeof evt.p === "string" && /(content\/parts|\/parts\/)/.test(evt.p) && "v" in evt) {
+        var v = evt.v;
+        var text = typeof v === "string" ? v :
+          (Array.isArray(v) ? v.filter(function (x) { return typeof x === "string"; }).join("") : null);
+        if (text != null) {
+          if (!(evt.p in byPath)) { byPath[evt.p] = ""; order.push(evt.p); }
+          byPath[evt.p] = (evt.o === "append") ? byPath[evt.p] + text : text;
+        }
+      }
+      for (var k in evt) {
+        if (k === "p" || k === "o" || k === "v") continue;
+        applyOp(evt[k], depth + 1);
+      }
+    }
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].slice(0, 5) !== "data:") continue;
+      var payload = lines[i].slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try { applyOp(JSON.parse(payload)); } catch (e) { /* not JSON on this line */ }
+    }
+    if (!order.length) return null;
+    var text = order.map(function (p) { return byPath[p]; }).join("");
+    return /[A-Za-z]{2,}/.test(text) ? text : null; // must contain at least one real word
+  }
+
+  // Second-tier extraction for genai vendors OTHER than chatgpt.com (Web
+  // Activity Control's app_catalog also watches copilot.microsoft.com,
+  // gemini.google.com/bard.google.com, claude.ai, perplexity.ai -- see
+  // 039_app_catalog.py). These match the PUBLICLY DOCUMENTED, stable
+  // streaming shapes each vendor's own backing API uses:
+  //   Claude (Anthropic Messages API): content_block_delta events,
+  //     {"delta": {"type": "text_delta", "text": ".."}}
+  //   OpenAI-API-style chat completions (used by several genai wrappers):
+  //     {"choices": [{"delta": {"content": ".."}}]}
+  //   Gemini (generateContent streaming):
+  //     {"candidates": [{"content": {"parts": [{"text": ".."}]}}]}
+  // Deliberately narrow -- only trusts `delta.text`/`delta.content` and
+  // `parts[].text` specifically, NOT any bare `.text` field anywhere in the
+  // payload, because that laxer version is exactly what let today's
+  // chatgpt.com incident happen (a generic field-name match pulling in
+  // unrelated structural JSON). A vendor's own WEB UI can still stream in
+  // some other, undocumented internal shape none of this recognizes --
+  // same trap that bit chatgpt.com's web client vs. its public API -- in
+  // which case this simply finds nothing and falls through to the prose
+  // fallback / fail-closed empty result below, never to a false positive.
+  function reconstructKnownDeltaStream(raw) {
+    var parts = [];
+    function collect(evt, depth) {
+      depth = depth || 0;
+      if (!evt || depth > 6 || typeof evt !== "object") return;
+      if (Array.isArray(evt)) {
+        for (var i = 0; i < evt.length; i++) collect(evt[i], depth + 1);
+        return;
+      }
+      if (evt.delta && typeof evt.delta === "object") {
+        if (typeof evt.delta.text === "string") parts.push(evt.delta.text);
+        if (typeof evt.delta.content === "string") parts.push(evt.delta.content);
+      }
+      if (Array.isArray(evt.parts)) {
+        for (var j = 0; j < evt.parts.length; j++) {
+          var p = evt.parts[j];
+          if (p && typeof p === "object" && typeof p.text === "string") parts.push(p.text);
+          else if (typeof p === "string") parts.push(p);
+        }
+      }
+      for (var k in evt) {
+        if (k === "delta" || k === "parts") continue; // already handled above
+        collect(evt[k], depth + 1);
+      }
+    }
+    var lines = raw.split(/\r?\n/);
+    var sawDataLine = false;
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].slice(0, 5) !== "data:") continue;
+      var payload = lines[i].slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      sawDataLine = true;
+      try { collect(JSON.parse(payload)); } catch (e) { /* not JSON on this line */ }
+    }
+    if (!sawDataLine) {
+      // Not SSE at all -- try the whole body as one JSON document, for
+      // vendors that return the complete answer in a single response
+      // rather than a stream.
+      try { collect(JSON.parse(raw)); } catch (e) { /* not a JSON document either */ }
+    }
+    if (!parts.length) return null;
+    var text = parts.join("");
+    return /[A-Za-z]{2,}/.test(text) ? text : null;
+  }
+
   var PROSE_STRING_RE = /"((?:[^"\\]|\\.){20,4000})"/g;
   function looksLikeProse(s) {
     if (s.indexOf(" ") === -1) return false; // one "word" -- an id/enum/hash, not a sentence
@@ -223,8 +335,7 @@
     }
     return (okChars / s.length) >= 0.85; // mostly letters/spaces/sentence punctuation
   }
-  function extractReplyText(raw, contentType) {
-    if (!raw) return raw;
+  function extractProseStrings(raw) {
     var seen = {};
     var kept = [];
     var m;
@@ -236,8 +347,21 @@
       seen[literal] = true;
       kept.push(literal);
     }
-    if (!kept.length) return raw; // nothing recognizable -- fail open, unchanged behavior
-    return kept.join(" ").slice(0, MAX_TEXT_CHARS);
+    return kept.length ? kept.join(" ") : null;
+  }
+
+  function extractReplyText(raw, contentType) {
+    if (!raw) return "";
+    var viaPatch;
+    try { viaPatch = reconstructPatchStream(raw); } catch (e) { viaPatch = null; }
+    if (viaPatch) return viaPatch.slice(0, MAX_TEXT_CHARS);
+    var viaKnownDelta;
+    try { viaKnownDelta = reconstructKnownDeltaStream(raw); } catch (e) { viaKnownDelta = null; }
+    if (viaKnownDelta) return viaKnownDelta.slice(0, MAX_TEXT_CHARS);
+    var viaProse;
+    try { viaProse = extractProseStrings(raw); } catch (e) { viaProse = null; }
+    if (viaProse) return viaProse.slice(0, MAX_TEXT_CHARS);
+    return ""; // fail CLOSED -- skip classification rather than send the raw noisy blob
   }
 
   // Reads a Response's CLONE to text for classification, leaving the
@@ -258,17 +382,6 @@
       // see extractReplyText's docstring for why (content_len=73915 on a
       // two-word prompt, September 10 2026).
       var text = extractReplyText(rawText, ct);
-      // TEMPORARY diagnostic (remove once extraction is confirmed working
-      // against real chatgpt.com traffic) -- visible in the PAGE's own
-      // DevTools console (F12 on the chatgpt.com tab itself), NOT the
-      // extension service-worker console, because this file runs in the
-      // page's MAIN world.
-      try {
-        console.debug("[SKDLP web-activity v1.0.18] ct=" + ct + " rawLen=" + rawText.length +
-          " extractedLen=" + (text ? text.length : 0) +
-          " extractedSameAsRaw=" + (text === rawText) +
-          " preview=" + JSON.stringify((text || "").slice(0, 200)));
-      } catch (e) {}
       // Content-type alone (checked above) isn't a strong enough signal —
       // real genai chat UIs fire plenty of small, unrelated JSON/text
       // fetches to the same watched host alongside the actual completion

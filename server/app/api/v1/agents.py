@@ -2380,6 +2380,26 @@ async def evaluate_web_activity(
         has_matches = bool(classification_result.matched_rules)
         matched_rules = list(classification_result.matched_rules)
 
+        # GenAI-specific confidence floor (added September 10 2026, after a
+        # live false-positive incident: a two-word ChatGPT greeting kept
+        # firing MEDIUM "Internal"/"Confidential" alerts at 50-70%
+        # confidence). Conversational AI reply/prompt text is uniquely
+        # prone to low-confidence keyword coincidences compared to the
+        # deliberately-composed content this same 0.3/0.6/0.8 confidence
+        # ladder was tuned for elsewhere (documents, clipboard, uploads) --
+        # see classify_content()'s own confidence bands. Scoped to
+        # category == "genai" only (not webmail/collaboration/cloud, whose
+        # existing behavior is untouched) so this can't mask genuinely
+        # sensitive matches anywhere else in the product. A match below the
+        # floor still shows up in matched_rules/has_matches for visibility
+        # -- only the ALERT/BLOCK gate is raised, exactly the same pattern
+        # the custom-pattern block below uses to raise (never lower) the
+        # bar.
+        WEB_ACTIVITY_GENAI_MIN_CONFIDENCE = 0.5
+        if category == "genai" and classification_result.confidence_score < WEB_ACTIVITY_GENAI_MIN_CONFIDENCE:
+            is_sensitive_block = False
+            is_sensitive_alert = False
+
         # Policy-scoped Detection Patterns (config.patterns.custom -- the
         # picker on the Web Activity Control policy form, added September
         # 2026: previously this policy type had NO way to specify which
