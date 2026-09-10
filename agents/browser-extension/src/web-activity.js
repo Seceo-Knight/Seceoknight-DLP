@@ -428,6 +428,7 @@
 
       return resolveBodyText(input, init).then(function (text) {
         var reqDecisionPromise;
+        var usedExtractedContent = false;
         if (!text || text.length < MIN_SEND_TEXT_LENGTH) {
           // Too short to be a real composed message/prompt (or not a
           // text-ish body at all, e.g. a File — inject.js's concern) — skip
@@ -456,7 +457,61 @@
           // what an admin configured. Fixed server-side rather than by
           // teaching this client per-domain categories, so the fix took
           // effect immediately without an extension redeploy.)
-          reqDecisionPromise = requestDecision({ host: destHost, url: String(url), activity: "post", content: text });
+          //
+          // Content to classify: for a JSON-shaped body (genai chat UIs
+          // wrap the actual typed message in a request envelope carrying
+          // conversation id, model, history/context, etc. -- confirmed
+          // live, September 10 2026: a ~400-char cooking question produced
+          // a 7,001-char raw request body that scored Restricted at 90%
+          // confidence off that envelope, not the actual message), try
+          // extracting just the real text with the same
+          // patch/delta/prose pipeline maybeRedactResponse already uses for
+          // ai_response. Non-JSON bodies (webmail/collaboration compose
+          // forms, URLSearchParams, plain text) are left untouched -- those
+          // aren't wrapped in a vendor envelope the same way, and unlike
+          // genai's streaming context, don't have a demonstrated history of
+          // ballooning to multi-KB.
+          //
+          // For a JSON-shaped body, the raw envelope is NEVER sent to the
+          // classifier, on either outcome of extraction -- both directions
+          // were tried and rejected via isolated test (see the "hello
+          // vaibhav"-in-an-envelope case, which is exactly the bug this
+          // whole feature's false-positive saga started from):
+          //   - extraction finds real content but it's short (a real "hi"/
+          //     "continue"-length prompt padded out by a large envelope) --
+          //     falling back to classifying the noisy raw envelope here
+          //     would silently reintroduce that original bug, just moved
+          //     from the response side to the request side. Treat a short
+          //     extraction result as a short prompt and allow it, exactly
+          //     like the raw-short-text gate above.
+          //   - extraction finds nothing recognizable at all (an
+          //     unrecognized JSON shape -- not one of today's known genai
+          //     vendors, or conceivably a webmail/collaboration app that
+          //     also happens to POST JSON) -- fail closed and allow rather
+          //     than classify the raw envelope noise. This trades a
+          //     theoretical missed detection on an unrecognized JSON body
+          //     shape for eliminating a demonstrated, repeatedly-reproduced
+          //     false-positive class; the same trade-off already made for
+          //     ai_response.
+          // Net effect: a JSON-shaped body only ever reaches requestDecision
+          // with a genuinely long, cleanly-extracted excerpt -- never the
+          // raw envelope.
+          var contentToSend = text;
+          var looksLikeJson = /^\s*[{\[]/.test(text);
+          var skipJsonBody = false;
+          if (looksLikeJson) {
+            var extracted = "";
+            try { extracted = extractReplyText(text, ""); } catch (e) { extracted = ""; }
+            if (extracted && extracted.length >= MIN_SEND_TEXT_LENGTH) {
+              contentToSend = extracted;
+              usedExtractedContent = true;
+            } else {
+              skipJsonBody = true;
+            }
+          }
+          reqDecisionPromise = skipJsonBody
+            ? Promise.resolve({ action: "allow" })
+            : requestDecision({ host: destHost, url: String(url), activity: "post", content: contentToSend });
         }
 
         return reqDecisionPromise.then(function (dec) {
@@ -465,7 +520,7 @@
             announce(dec, "blocked");
             return new Response("", { status: 403, statusText: "Blocked by SeceoKnight DLP" });
           }
-          if (dec.action === "redact" && dec.redactedContent != null) {
+          if (dec.action === "redact" && dec.redactedContent != null && !usedExtractedContent) {
             announce(dec, "redacted");
             // Works for both calling conventions: when input is a plain
             // URL string, finalInit.body is all that matters. When input
@@ -474,6 +529,15 @@
             // body per the Fetch spec, so redaction reaches the wire
             // either way.
             finalInit = Object.assign({}, init, { body: dec.redactedContent });
+          } else if (dec.action === "redact" && usedExtractedContent) {
+            // We classified an EXTRACTED excerpt, not the full request
+            // body -- dec.redactedContent is a redacted version of just
+            // that excerpt, plain text with no conversation id/model/etc.
+            // Substituting it as the entire outgoing body would send an
+            // invalid payload to the destination and break the real
+            // request. Downgrade to alert instead: the sensitive match is
+            // still surfaced, the actual send just isn't live-modified.
+            announce({ action: "alert", appCategory: dec.appCategory, level: dec.level, reason: dec.reason }, "alerted");
           } else if (dec.action === "alert") {
             announce(dec, "alerted");
           }

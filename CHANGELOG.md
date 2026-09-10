@@ -8,6 +8,64 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: request-side ("post") false positives from classifying the raw JSON request envelope, not the typed message (September 10, 2026)
+
+All of the September 10 fixes above addressed the RESPONSE side (`ai_response`) -- what a genai vendor
+streams back. The REQUEST side (`post` -- what the user actually types and sends) had the exact same
+class of bug and had never been touched: `resolveBodyText()`/`requestBodyToText()` return the outgoing
+`fetch` body completely raw, and that raw text was sent straight to `requestDecision()` with no
+extraction at all.
+
+Live evidence: a benign ~330-character "I've been trying to get better at cooking..." question, typed
+into chatgpt.com and sent as the suggested "should stay Public" test prompt, produced a request body of
+`content_len=7001` and classified **Restricted, 90% confidence** -- purely off the surrounding JSON
+envelope (`conversation_id`, `parent_message_id`, `model`, `client_context`, etc. that ChatGPT's web
+client wraps every outgoing message in), not the actual question. Same root cause as the `ai_response`
+bug fixed earlier today, just on the other side of the same conversation.
+
+Fix, in the `window.fetch` wrapper's "post" branch (`agents/browser-extension/src/web-activity.js`):
+for a JSON-shaped request body (`{`/`[`-prefixed), reuse the existing patch/delta/prose extraction
+pipeline (`extractReplyText()`) instead of sending the raw body. Two outcomes, both keep the raw
+envelope out of the classifier entirely:
+  - Extraction finds a real message long enough to be worth classifying (>= `MIN_SEND_TEXT_LENGTH`,
+    150 chars) -> classify just that extracted excerpt.
+  - Extraction finds nothing recognizable, OR finds a real message that's genuinely short (e.g. an
+    actual "hello vaibhav" wrapped in a multi-KB envelope) -> allow directly, same as the existing
+    raw-short-text gate. Caught by an isolated regression test before this shipped: an earlier draft of
+    this fix fell back to classifying the raw envelope whenever extraction returned a short-but-nonempty
+    string, which would have silently reintroduced the original false-positive bug just relocated to the
+    request side. Fixed before it ever reached live testing.
+Non-JSON bodies (URLSearchParams/plain-text compose forms -- the shape webmail/collaboration "send"
+likely uses, sharing this same code path) are left completely untouched; no evidence they carry the same
+envelope-bloat problem, and extraction is only even attempted on JSON-shaped bodies to avoid risking
+silently stripping content this extractor wasn't built to recognize.
+
+One behavioral note for the "redact" action on this path: if the classified content was an EXTRACTED
+excerpt rather than the full body, a `redact` decision no longer overwrites the actual outgoing request
+body with `dec.redactedContent` (that redacted text is a stand-in for the excerpt only, not valid JSON
+for the real envelope -- substituting it would send a broken request to the destination and break the
+underlying send). It now downgrades to `alert` instead: the match is still surfaced and logged, the live
+request just isn't rewritten. `redact` on a raw (non-extracted) body is unaffected.
+
+Verified in isolation (not yet re-verified live) against: the exact reproduced cooking-question envelope
+(extracts cleanly, classifies ~292 real chars instead of 7001 raw), a PII-laden prompt in the same
+envelope shape (still classifies correctly, extraction isn't over-broad), a non-JSON webmail-style
+compose body (passes through unchanged), the "hello vaibhav"-in-envelope regression case described above
+(correctly skips instead of reclassifying the envelope), and a malformed/unrecognized JSON-looking body
+(fails closed to allow rather than guessing). Browser extension version bumped to 1.0.21.
+
+This is also expected to reduce (not necessarily eliminate) the "one prompt triggers multiple wa-request
+events" symptom reported alongside this bug: ChatGPT's SPA fires several internal background calls per
+user action (moderation precheck, title generation, the main completion request), each carrying
+different actual content, so the September 10 coalescing fix (content-signature-gated caching --
+see below) no longer collapses them into one decision -- correctly, since collapsing them was the
+detection-bypass bug that fix closed. What changes here is that each of those calls now gets its real,
+short, extracted content classified instead of a bloated raw envelope, so most of them should now
+resolve to a quiet "allow" instead of a visible alert -- the extra network calls and log lines
+themselves are a known, accepted trade-off from that earlier fix, not something addressed by this one.
+
+---
+
 ## Extended genai reply detection beyond chatgpt.com: Claude, Gemini, and OpenAI-API-style vendors (September 10, 2026)
 
 Web Activity Control's app_catalog watches five genai destinations (`039_app_catalog.py`): ChatGPT,
