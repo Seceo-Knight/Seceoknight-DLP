@@ -633,6 +633,39 @@ const DOWNLOAD_CONTENT_CAP_BYTES = 10 * 1024 * 1024; // matches inject.js's MAX_
 const DOWNLOAD_FETCH_TIMEOUT_MS = 15000;
 let dlSeq = 0; // own counter -- this file's other "seq" (web-activity.js's) lives in a different JS world entirely
 
+// Dedupe cache for repeated chrome.downloads.onCreated firings on the SAME
+// file (found September 10, 2026 -- CYBER-SEC(001) flooded dozens of
+// "PII-Dataset-Examples-US-SSN (N).csv" web_activity events a second, for
+// 90+ minutes, then again the next day just from opening Chrome -- with
+// chrome://downloads showing those exact files as a single already-completed
+// download from the day before, and no tab/download actually in progress.
+// So chrome.downloads.onCreated itself was re-firing for an already-settled
+// download record, not a genuine new download -- root cause not confirmed
+// (a Chrome-internal re-verification pass, e.g. Safe Browsing / Mark-of-the-
+// Web re-scan, is the leading theory, but nothing in this extension or the
+// native host was creating those firings). Whatever the browser-side cause,
+// this file had ZERO defense against it: every onCreated firing -- even for
+// literally the same file -- got its own native-host round trip and its own
+// emitted event, unlike the webActivity path's waRecentDecisions/
+// waInFlightByKey coalescing a few hundred lines up.
+//
+// Deliberately NOT reusing waRecentDecisions -- that cache is keyed by
+// host+activity only, which the download path's own comment (below) already
+// flagged as unsafe here: reusing one file's decision for a DIFFERENT file's
+// bytes would be a real bug. This key is content-specific (host + filename +
+// size) specifically to avoid that: two different files landing seconds
+// apart still get their own decisions; only the exact same file repeating
+// gets coalesced. A long window (10 minutes, refreshed on every repeat) is
+// intentional -- the observed flood was continuous for 90+ minutes straight,
+// so a short TTL would still let thousands of duplicate events through.
+const DL_COALESCE_WINDOW_MS = 10 * 60 * 1000;
+const dlRecentByKey = new Map(); // key -> last-seen timestamp (ms)
+
+function dlDedupeKey(host, item) {
+  const basename = ((item.filename || "").split(/[\\/]/).pop()) || item.url || "";
+  return host + "|" + basename + "|" + (item.fileSize > 0 ? item.fileSize : "?");
+}
+
 function isWatchedDownloadHost(host, catalogDomains) {
   if (!host) return false;
   host = host.toLowerCase();
@@ -810,6 +843,21 @@ function handleDownloadCreated(item) {
     const watched = isWatchedDownloadHost(host, catalog);
     dlog("downloads: resolved host=" + host + " watched=" + watched);
     if (!watched) return; // not from a catalogued app -- normal download, untouched
+
+    // See DL_COALESCE_WINDOW_MS's comment above -- chrome.downloads.onCreated
+    // has been observed firing repeatedly for the exact same already-settled
+    // file (no genuine new download involved). Collapse those into one
+    // inspection/event instead of hammering the native host and the server
+    // dashboard with duplicates every time it happens.
+    const dlKey = dlDedupeKey(host, item);
+    const lastSeen = dlRecentByKey.get(dlKey);
+    const now = Date.now();
+    if (lastSeen && (now - lastSeen) < DL_COALESCE_WINDOW_MS) {
+      dlRecentByKey.set(dlKey, now); // refresh -- keep suppressing for a continuous run
+      dlog("downloads: duplicate onCreated for " + dlKey + " within coalesce window -- suppressing");
+      return;
+    }
+    dlRecentByKey.set(dlKey, now);
 
     // The real download is already proceeding at this point and is never
     // interfered with -- this only ever inspects a copy for logging.

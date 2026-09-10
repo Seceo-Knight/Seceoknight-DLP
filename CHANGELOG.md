@@ -8,6 +8,35 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: Web Activity Control download events flooding on repeat chrome.downloads.onCreated firings (September 10, 2026)
+
+CYBER-SEC (001) flooded dozens of `web_activity`/download events a second for the same handful of
+`PII-Dataset-Examples-US-SSN (N).csv` files, first for 90+ minutes straight, then again the next day
+from simply opening Chrome with nothing downloading. Confirmed on the endpoint that `chrome://downloads`
+showed those exact files as a single already-completed download from the day before -- no tab open, no
+genuine new download in progress. So `chrome.downloads.onCreated` (the extension's own downloads hook,
+`agents/browser-extension/src/background.js`) was firing repeatedly for an already-settled download
+record, not a real new download. Root cause of the *browser's* repeated firing isn't confirmed (Chrome
+re-running a Safe Browsing / Mark-of-the-Web check is the leading theory) -- nothing in this extension
+or the native host (`skdlp_host.py`, which is spawned fresh per native-messaging connection and holds
+zero state between messages) was independently creating these.
+
+Regardless of the browser-side cause, the downloads path had zero defense against exactly this: every
+`onCreated` firing -- even for the identical file seconds apart -- got its own native-host round trip
+and its own emitted event. The `webActivity` (post/ai_response) path already has this kind of protection
+(`waRecentDecisions` / `waInFlightByKey`, fixed September 9), but that cache is deliberately keyed by
+host+activity only, which the downloads code's own existing comment already flagged as unsafe to reuse
+here (it would silently apply one file's decision to a different file's bytes).
+
+Added a separate dedupe cache (`dlRecentByKey`) keyed by host + filename + file size specifically to
+avoid that trap -- content-specific enough that two different files downloaded seconds apart still each
+get evaluated, but a genuinely repeated firing for the same file is coalesced into one inspection/event.
+Window is a generous 10 minutes, refreshed on every repeat, since the observed flood ran continuously
+for 90+ minutes -- a short TTL would still have let thousands of duplicates through. Browser extension
+version bumped to 1.0.13.
+
+---
+
 ## Fix: manage-agent.ps1 silently updates from a stale local copy with no warning (September 9, 2026)
 
 Root-caused a multi-week staleness bug on a live endpoint (CYBER-SEC 001): its browser-extension
