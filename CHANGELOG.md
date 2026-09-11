@@ -8,6 +8,56 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: Google Drive (Local) events triggered correctly but showed no dashboard indication of which policy matched (September 11, 2026)
+
+Follow-up to the two entries below. Live-tested by dropping a file into the configured Google Drive path:
+detection worked correctly (event fired, content classification ran, alert generated) — but nothing in the
+Events/Alerts UI distinguished it from a plain File System Monitoring match. Both share the same
+`event_type: "file"` and, without a distinguishing tag, an identical generic "file" badge.
+
+Root cause was two separate gaps stacked on top of each other:
+
+1. **Backend: the semantic tag never reached the stored document.** `EventCreate.source` (added in the
+   "built real detection" entry below) only ever flowed into the *ephemeral* `_build_processor_payload()`
+   payload consumed by `DatabasePolicyEvaluator` for condition matching — it was never merged back onto
+   the actual MongoDB document that `GET /events` returns to the dashboard. That document's `source` field
+   is set once at `create_event()`-time to `source_type` ("agent"/"endpoint") and, until this fix, never
+   touched again.
+
+   Found and deliberately avoided a trap here: `_merge_processed_event()` in `events.py` has its own
+   docstring stating it's dead code from a past mistaken fix — editing it would have had zero effect. The
+   real live merge happens inline inside `_process_event_background()`. Added there, immediately before
+   its `update_one(...)` call, narrowly scoped so it can never change what `source` means for any other
+   event type:
+   ```python
+   if processed.get("source"):
+       update_fields["source"] = processed["source"]
+   ```
+   `processed.get("source")` is only ever truthy for events the agent explicitly tagged (currently just
+   Google Drive Local file events), so every other event type's stored `source` is untouched. Verified the
+   tag survives intact: traced all 6 `EventProcessor.process_event()` pipeline stages (`validate_event`,
+   `normalize_event`, `enrich_event`, `classify_event`, `evaluate_policies`, `execute_actions`) and
+   confirmed every one of them mutates the event dict in place and returns it — none rebuild a fresh dict
+   or drop unrecognized top-level keys — so the `source` key set by `_build_processor_payload()` reaches
+   `_process_event_background`'s `processed` variable unchanged.
+
+2. **Frontend: no badge existed to render it even once populated.** `Events.tsx`'s only source-aware
+   conditional rendering was gated to `event.source === 'onedrive_cloud' || event.source ===
+   'google_drive_cloud'` (three separate spots) — none recognized `'google_drive_local'`. Added a new
+   "Google Drive (Local)" badge (indigo, `HardDrive` icon) in both the Events list row and the event detail
+   modal header, gated on `event.source === 'google_drive_local'`, deliberately NOT reusing the
+   cloud-specific `getEventSubtypeIcon/Tone/Label` helpers since they assume a different subtype vocabulary
+   (`"created"/"modified"` vs. the local agent's `"file_created"/"file_modified"`).
+
+Verified: Python `ast.parse()` on `events.py`, `tsc --noEmit` on the dashboard diffed against a pre-change
+baseline (44 pre-existing errors in unrelated files, zero new, zero in `Events.tsx`).
+
+**Note:** this fix only applies to *new* events processed after deployment — it's not retroactive, since it
+only runs during background processing at event-creation time. The test file already dropped will need to
+be dropped again (or a new one) to see the badge.
+
+---
+
 ## Google Drive (Local): added real content classification, closing the "production ready" gap (September 11, 2026)
 
 Follow-up to the "built real detection" entry below. That fix made the policy actually detect and act on

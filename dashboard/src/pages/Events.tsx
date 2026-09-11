@@ -357,6 +357,12 @@ function EventDetailModal({
                 {getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}
               </span>
             )}
+            {event.source === 'google_drive_local' && (
+              <span className={cn('inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border text-sm font-semibold', tone('indigo'))}>
+                <HardDrive className="w-4 h-4" />
+                Google Drive (Local)
+              </span>
+            )}
             <span className={cn('inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium uppercase', tone(severityTone))}>
               {event.severity}
             </span>
@@ -1227,6 +1233,26 @@ export default function Events() {
                       <span className={cn('inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-medium border', tone(getEventSubtypeTone(event.event_subtype)))}>
                         {getEventSubtypeIcon(event.event_subtype)}
                         {getEventSubtypeLabel(event.event_subtype, event.details?.change_type)}
+                      </span>
+                    )}
+                    {event.source === 'google_drive_local' && (
+                      // event.source is stamped "google_drive_local" server-side
+                      // (see server/app/api/v1/events.py's _process_event_background
+                      // merge, added alongside this badge) only when the agent's
+                      // ParsePolicyObject/HandleFileEvent matched a Google Drive
+                      // (Local) policy specifically -- distinct from a plain File
+                      // System Monitoring match on the same event_type "file",
+                      // which leaves event.source as "agent" and shows no badge
+                      // here. Without this, both policy types were visually
+                      // identical in the Events list (same generic "file" badge,
+                      // same create/modified subtype chip), so an analyst had no
+                      // way to tell which policy actually fired. Found live,
+                      // September 11 2026: a test file correctly triggered
+                      // detection but nothing in the dashboard identified it as a
+                      // Google Drive (Local) match.
+                      <span className={cn('inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-medium border', tone('indigo'))}>
+                        <HardDrive className="h-3 w-3" />
+                        Google Drive (Local)
                       </span>
                     )}
                     <Badge variant="info">

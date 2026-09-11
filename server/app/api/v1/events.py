@@ -668,6 +668,25 @@ async def _process_event_background(event_id: str, payload: Dict[str, Any]) -> N
                 update_fields["matched_policies"] = processed["matched_policies"]
             if processed.get("metadata"):
                 update_fields["metadata"] = processed["metadata"]
+            # Semantic destination tag (see EventCreate.source's own
+            # docstring) -- e.g. "google_drive_local". Deliberately narrow:
+            # only ever overwrites the stored event_doc["source"] (which
+            # otherwise holds source_type, "agent"/"endpoint", set at
+            # create_event()-time and left alone here for every OTHER event
+            # type -- `processed.get("source")` is only truthy for the one
+            # event type that actually sends this field today) when the
+            # agent explicitly tagged the event, so this can't silently
+            # change what "source" means for any existing event/dashboard
+            # reader. Without this, google_drive_local file events reached
+            # the classifier/policy-matcher correctly (the whole point of
+            # adding EventCreate.source) but the STORED, DISPLAYED document
+            # never got the tag -- so Events.tsx had no way to show "this
+            # came from the Google Drive (Local) policy" even once the
+            # detection itself started working. Found live, September 11
+            # 2026: a test file correctly triggered an alert, but nothing in
+            # the dashboard identified it as a Google Drive (Local) match.
+            if processed.get("source"):
+                update_fields["source"] = processed["source"]
 
             await events_collection.update_one(
                 {"id": event_id},
