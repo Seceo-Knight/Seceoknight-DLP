@@ -511,9 +511,17 @@ Full walkthrough (screenshots, troubleshooting, quick reference):
    ONEDRIVE_TENANT_ID=consumers
    ONEDRIVE_REDIRECT_URI=http://<your-server-ip>:55000/api/v1/onedrive/callback
    ```
-   Use `ONEDRIVE_TENANT_ID=consumers` for a personal Microsoft account (this
-   avoids a "Tenant does not have a SPO license" error) — use `organizations`
-   for a work/school account, or `common` to accept either.
+   `ONEDRIVE_TENANT_ID` isn't something you look up anywhere — it's a fixed
+   value you type in as-is, telling Microsoft what *kind* of account is
+   allowed to sign in through this app. Pick one of exactly three values:
+   - **`consumers`** — a personal Microsoft account (`@outlook.com`,
+     `@hotmail.com`, `@live.com`, or any personal account with OneDrive).
+     Use this if that's the account you're connecting.
+   - **`organizations`** — a work/school account (Microsoft 365 tied to a
+     company or school tenant).
+   - **`common`** — accepts either type, but personal accounts often hit a
+     "Tenant does not have a SPO license" error with this setting, so
+     prefer `consumers` when you know the account is personal.
 6. Apply it: `cd /opt/seceoknight && sudo bash update.sh`
 
 Full walkthrough (screenshots, troubleshooting, quick reference):
