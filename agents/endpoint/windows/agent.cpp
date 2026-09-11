@@ -7012,17 +7012,67 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
      std::string ExtractJsonString(const std::string& json, const std::string& key) {
          size_t keyPos = json.find("\"" + key + "\"");
          if (keyPos == std::string::npos) return "";
-         
+
          size_t colonPos = json.find(":", keyPos);
          if (colonPos == std::string::npos) return "";
-         
+
          size_t quoteStart = json.find("\"", colonPos);
          if (quoteStart == std::string::npos) return "";
-         
-         size_t quoteEnd = json.find("\"", quoteStart + 1);
-         if (quoteEnd == std::string::npos) return "";
-         
-         return json.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+
+         // Find the closing quote while skipping escaped characters (\" and
+         // \\), same scan ExtractJsonArray()'s element parser below already
+         // does -- otherwise a value ending in a backslash right before the
+         // closing quote (any Windows path does, once basePath/quarantinePath
+         // get a trailing separator added) or containing an escaped quote
+         // would terminate the string at the wrong position.
+         size_t quoteEnd = quoteStart + 1;
+         while (quoteEnd < json.length()) {
+             if (json[quoteEnd] == '\\') {
+                 quoteEnd += 2; // Skip escaped character
+                 continue;
+             }
+             if (json[quoteEnd] == '"') {
+                 break;
+             }
+             quoteEnd++;
+         }
+         if (quoteEnd >= json.length()) return "";
+
+         std::string rawval = json.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+
+         // Unescape backslash sequences -- previously this function returned
+         // the raw (still-escaped) substring verbatim, so any config field
+         // containing a backslash came out corrupted: a correctly
+         // JSON-encoded "basePath":"E:\\BackupDrive\\" (i.e. the real value
+         // "E:\BackupDrive\") was returned as the literal 2-backslash text
+         // "E:\\BackupDrive\\" instead of being unescaped to "E:\BackupDrive\".
+         // Windows' own filesystem APIs quietly tolerate the resulting
+         // doubled separators (so local file-watching/matching kept
+         // "working"), but that corrupted string then flows straight into
+         // this agent's own outgoing file events (file_path), which no
+         // longer starts with the server's clean, correctly-unescaped copy
+         // of the same basePath -- so DatabasePolicyEvaluator's "starts_with"
+         // condition silently failed to match, every time, for every path
+         // field this function ever populated. Found live, September 11
+         // 2026: a Google Drive (Local) test file correctly triggered
+         // detection (agent-side match still worked) but the Policies tab
+         // showed Violations: 0 and the raw event JSON showed
+         // matched_policies: null -- root-caused to file_path being stored as
+         // "E:\\BackupDrive\\\COI.pdf" instead of "E:\BackupDrive\COI.pdf".
+         // Uses the same simple "\\X -> X" unescape ExtractJsonArray's
+         // element parser already applies, rather than a fuller JSON
+         // decoder, to keep behavior identical between the two functions.
+         std::string result;
+         result.reserve(rawval.size());
+         for (size_t i = 0; i < rawval.length(); i++) {
+             if (rawval[i] == '\\' && i + 1 < rawval.length()) {
+                 result += rawval[i + 1];
+                 i++;
+             } else {
+                 result += rawval[i];
+             }
+         }
+         return result;
      }
 
      // Parses an array of JSON objects — e.g. patterns.custom =

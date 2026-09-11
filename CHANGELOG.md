@@ -8,6 +8,62 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: Windows agent's ExtractJsonString() corrupted every backslash-bearing config value, silently breaking server-side policy matching (September 11, 2026)
+
+Follow-up to the badge-display fix above. Even after that fix, the Policies tab kept showing Violations: 0
+for Google Drive (Local) despite a test event correctly firing, getting classified, and carrying the
+"Google Drive (Local)" badge. Pulled the event's raw JSON via Events' "View Raw Event Data" and found the
+real signal: `matched_policies: null`, `policy_id: null`, `action_taken: "logged"` -- the server's
+`DatabasePolicyEvaluator` never matched this event against ANY policy, despite the agent-side detection,
+classification, and badge tag all working correctly (those are three independent mechanisms from the
+server-side generic policy match).
+
+The event's own `file_path` gave it away: `"E:\\BackupDrive\\\COI.pdf"` instead of the expected
+`"E:\BackupDrive\COI.pdf"` -- two backslashes where there should be one, three where there should be one.
+The policy's own condition requires `file_path starts_with "E:\BackupDrive\"` (`_transform_google_drive_local_config`
+in `policy_transformer.py`, match: "all" alongside the `source` and `event_subtype` rules) -- a corrupted,
+doubled-backslash path silently fails that exact-prefix string comparison, so the "all" condition set never
+fully matched and `matched_policies` stayed empty, with no error anywhere in the pipeline.
+
+Root cause: `agent.cpp`'s `ExtractJsonString()` -- the hand-rolled JSON field parser used to read `basePath`,
+`quarantinePath`, and every other single-string config value out of the policy bundle JSON the server sends
+-- found the quoted substring but never unescaped it. A correctly JSON-encoded `"basePath":"E:\\BackupDrive\\"`
+(the real value `E:\BackupDrive\`) was returned verbatim as the literal two-backslash text `E:\\BackupDrive\\`
+instead of being unescaped to `E:\BackupDrive\`. Windows' own filesystem APIs silently tolerate doubled path
+separators (`CreateFile`/`FindFirstFile` treat `\\` same as `\` mid-path), which is exactly why the agent's
+own local file-watching and path-matching kept "working" the whole time -- masking the bug completely on the
+agent side. But that corrupted string then flows straight into the file events this agent sends to the
+server, where the server's own (correctly single-backslash) copy of the same `basePath` no longer matches it
+via exact string prefix.
+
+This wasn't limited to Google Drive (Local): `ExtractJsonString()` is the shared parser behind
+`quarantinePath` (this policy type and file_transfer_monitoring's nested quarantine object), and --
+via `ExtractJsonObjectArrayField()`, which reuses it per-object -- every custom regex pattern's `regex` and
+`description` fields for Clipboard/File System Monitoring's pattern picker. A custom regex like `\d{4}`
+(JSON-encoded as `"\\d{4}"`) was coming out of the old parser as the literal two-backslash text `\\d{4}`
+(backslash-backslash-d, matching a literal backslash then the letter "d") instead of the intended `\d`
+digit-class shorthand -- silently breaking any custom regex written with standard escapes (`\d`, `\s`, `\w`,
+`\.`, etc.), separately from anything Google Drive (Local) specific.
+
+Fixed `ExtractJsonString()` to unescape backslash sequences using the exact same simple `"\\X -> X"` rule
+`ExtractJsonArray()`'s own element parser already applies (kept identical rather than introducing a fuller
+JSON decoder, so behavior between the two functions stays consistent) -- and made its closing-quote search
+skip escaped characters the same way `ExtractJsonArray()`'s already does, so a value ending in a backslash no
+longer risks matching the wrong quote.
+
+No server or dashboard changes needed -- the corruption happened entirely agent-side, so this requires a
+full agent binary rebuild/update (`git push` triggers CI, then `manage-agent.ps1` → `[2] Update` on the
+endpoint), not just `update.sh`. No policy data needs fixing either: the stored `config.basePath` in Postgres
+was always correct (set from the dashboard's own JSON.stringify, never touched by this parser) -- only the
+events an unpatched agent sends are corrupted, so a fresh test file after the agent update should match
+immediately.
+
+Verified: custom Python brace/string-aware depth checker (same approach used throughout this session's other
+`agent.cpp` changes, no compiler available in this environment) shows identical depth metrics before and
+after the edit.
+
+---
+
 ## Fix: Google Drive (Local) events triggered correctly but showed no dashboard indication of which policy matched (September 11, 2026)
 
 Follow-up to the two entries below. Live-tested by dropping a file into the configured Google Drive path:
