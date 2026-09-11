@@ -8,6 +8,33 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Docs: Google Drive OAuth setup guide + .env.example gap (September 11, 2026)
+
+Follow-up to the Google Drive (Cloud) audit below. Found while walking through live setup: there was no
+documented way to actually configure Google OAuth for a fresh deployment. `TESTING_COMMANDS.md` section 10.1
+pointed at `INSTALLATION_GUIDE.md` for the OAuth setup steps -- that file doesn't exist anywhere in the repo,
+a dead reference. Separately, root `.env.example` (the template every fresh clone copies to `.env`) had no
+`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`GOOGLE_REDIRECT_URI` entries at all -- nor, it turns out,
+`ONEDRIVE_CLIENT_ID`/`ONEDRIVE_CLIENT_SECRET`/`ONEDRIVE_TENANT_ID`/`ONEDRIVE_REDIRECT_URI`, despite OneDrive
+(Cloud) already having its own dedicated `ONEDRIVE_SETUP_GUIDE.md`. Anyone deploying this project fresh had
+no discoverable path to either cloud integration without already knowing these variable names existed.
+
+Added `GOOGLE_DRIVE_SETUP_GUIDE.md` at the repo root, mirroring `ONEDRIVE_SETUP_GUIDE.md`'s structure
+(Prerequisites → Cloud project setup → OAuth consent screen → credentials → env config → verify → create
+policy → troubleshooting → quick reference) but for Google Cloud Console specifically: creating the project,
+enabling both the Drive API and the easy-to-miss Drive Activity API (`google_drive_polling.py`'s
+`build("driveactivity", "v2", ...)` silently fails polling, not OAuth, if this one's skipped), OAuth consent
+screen + test users, and the OAuth client's redirect URI. Also documents the log-only limitation, the
+per-connection polling-interval behavior from the fix above, and the exact `docker compose ... ps/logs`
+commands for this deployment's `docker-compose.prod.yml` setup (matching how `update.sh` actually manages
+containers, rather than generic restart instructions).
+
+Added a "CLOUD DRIVE INTEGRATIONS (OPTIONAL)" section to root `.env.example` with both Google Drive's and
+OneDrive's variables, each commented with what they need and a pointer to the relevant setup guide. Fixed
+`TESTING_COMMANDS.md`'s dead `INSTALLATION_GUIDE.md` reference to point at the new guide instead.
+
+---
+
 ## Google Drive (Cloud): audit + two fixes (September 11, 2026)
 
 Deep audit of the Google Drive (Cloud) policy type, same approach as the Local audit above. Unlike Local,

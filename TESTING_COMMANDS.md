@@ -454,8 +454,8 @@ curl -s "http://localhost:55000/api/v1/events?limit=5" \
 ## Step 10: Test Google Drive Integration
 
 ### 10.1 Prerequisites
-- Google Cloud Platform project with Google Drive API enabled
-- OAuth 2.0 credentials configured (see `INSTALLATION_GUIDE.md`)
+- Google Cloud Platform project with Google Drive API **and** Drive Activity API enabled
+- OAuth 2.0 credentials configured (see `GOOGLE_DRIVE_SETUP_GUIDE.md` for the full walkthrough)
 - Environment variables set in `.env`:
   ```bash
   GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
