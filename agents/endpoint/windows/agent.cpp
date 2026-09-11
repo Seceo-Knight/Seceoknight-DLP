@@ -6477,6 +6477,52 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                      hasFilePolices = true;
                      filePolicies.insert(filePolicies.end(), transferPolicies.begin(), transferPolicies.end());
                  }
+
+                 // Parse google_drive_local_monitoring policies (also enables file monitoring).
+                 //
+                 // BUG THIS FIXES (found in a policy audit, September 11 2026):
+                 // this bucket was never parsed here at all -- the server built
+                 // and sent it (agent_policy_transformer.py groups every policy
+                 // type into its own bundle key), the dashboard let an admin
+                 // create/enable/save a Google Drive (Local) policy with no
+                 // error at any layer, and none of it ever did anything: no
+                 // detection, no enforcement, no event, ever. Same merge-into-
+                 // filePolicies pattern as file_transfer_monitoring just above --
+                 // this reuses the SAME watch-path extraction, ShouldMonitorFile
+                 // path/extension pre-filter, and HandleFileEvent
+                 // classify-then-act pipeline that already works for File
+                 // System Monitoring, rather than building a second, separately
+                 // -maintained detection path from scratch. What's actually new
+                 // is ParsePolicyObject's special-case parsing below (this
+                 // type's raw config shape -- basePath/monitoredFolders/events{}
+                 // -- doesn't match the generic "monitoredPaths" key every other
+                 // file-ish policy type reads) and this event's "source" tag
+                 // (see HandleFileEvent below) so the server-side condition
+                 // policy_transformer.py already builds
+                 // ({"field": "source", "operator": "equals", "value":
+                 // "google_drive_local"}) can actually match something for the
+                 // first time -- that condition existed on the server for as
+                 // long as this policy type did, with literally nothing on
+                 // either the client or server side ever producing an event
+                 // that could satisfy it (the agent never set ANY "source" key
+                 // on file events, and until this same audit,
+                 // EventCreate/_build_processor_payload in events.py had no
+                 // "source" field declared at all -- Pydantic silently stripped
+                 // it even if something HAD sent one).
+                 std::vector<PolicyRule> gdriveLocalPolicies;
+                 bool hasGDriveLocalPolicies = false;
+                 ParsePolicyArray(bundleJson, "google_drive_local_monitoring", gdriveLocalPolicies, hasGDriveLocalPolicies);
+                 if (hasGDriveLocalPolicies) {
+                     hasFilePolices = true;
+                     filePolicies.insert(filePolicies.end(), gdriveLocalPolicies.begin(), gdriveLocalPolicies.end());
+                     logger.Info("Google Drive (Local) policies loaded: " + std::to_string(gdriveLocalPolicies.size()));
+                     for (const auto& policy : gdriveLocalPolicies) {
+                         logger.Info("  - Google Drive Local Policy: " + policy.name + " (Action: " + policy.action + ")");
+                         for (const auto& path : policy.monitoredPaths) {
+                             logger.Info("    * Monitoring: " + path);
+                         }
+                     }
+                 }
              }
          }
          
@@ -6772,6 +6818,88 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                     rule.transferDestinationPaths = ExtractJsonArray(configObj, "monitoredDestinations");
                 }
 
+                // Google Drive (Local) monitoring -- policyType ==
+                // "google_drive_local_monitoring". Its raw config shape
+                // (GoogleDriveLocalPolicyForm.tsx / GoogleDriveLocalConfig)
+                // is nothing like the generic "monitoredPaths" array every
+                // other file-ish policy type above reads:
+                //   { "basePath": "G:\\My Drive\\",
+                //     "monitoredFolders": ["Folder1", "Folder2/Sub"],
+                //     "fileExtensions": [".pdf", ...],
+                //     "events": {"create":true,"modify":true,"delete":false,"move":true},
+                //     "action": "alert"|"quarantine"|"block"|"log",
+                //     "quarantinePath": "C:\\Quarantine" }
+                // so the unconditional `rule.monitoredPaths =
+                // ExtractJsonArray(configObj, "monitoredPaths")` a few lines
+                // above always finds nothing for this type -- built here
+                // instead, mirroring exactly what the server's OWN
+                // _transform_google_drive_local_config() in
+                // policy_transformer.py does when it builds this same
+                // policy's "conditions.rules" for the generic
+                // DatabasePolicyEvaluator, so the agent's local path list and
+                // the server's independently-evaluated path condition agree.
+                if (policyType == "google_drive_local_monitoring") {
+                    std::string basePath = ExtractJsonString(configObj, "basePath");
+                    if (basePath.empty()) basePath = "G:\\My Drive\\";
+                    if (basePath.back() != '\\' && basePath.back() != '/') basePath += "\\";
+
+                    std::vector<std::string> monitoredFolders = ExtractJsonArray(configObj, "monitoredFolders");
+                    if (!monitoredFolders.empty()) {
+                        for (auto folder : monitoredFolders) {
+                            // Normalize separators, strip leading/trailing
+                            // slashes -- same normalization the server side
+                            // applies to the same field.
+                            for (auto& c : folder) { if (c == '/') c = '\\'; }
+                            while (!folder.empty() && folder.front() == '\\') folder.erase(folder.begin());
+                            while (!folder.empty() && folder.back() == '\\') folder.pop_back();
+                            if (!folder.empty()) {
+                                std::string fullPath = basePath + folder;
+                                if (fullPath.back() != '\\') fullPath += "\\";
+                                rule.monitoredPaths.push_back(fullPath);
+                            }
+                        }
+                    }
+                    if (rule.monitoredPaths.empty()) {
+                        // No folders specified -- monitor the entire base
+                        // path, same "else" fallback the server-side
+                        // transformer uses.
+                        rule.monitoredPaths.push_back(basePath);
+                    }
+
+                    // fileExtensions reuses the exact same field name/shape
+                    // as file_system_monitoring's, so the generic
+                    // rule.fileExtensions consumer (ShouldMonitorFile(),
+                    // HandleFileEvent()'s empty-monitoredEvents fallback)
+                    // needs no changes to already work for this type.
+                    rule.fileExtensions = ExtractJsonArray(configObj, "fileExtensions");
+
+                    // events.{create,modify,delete,move} booleans -> the
+                    // file_created/file_modified/file_deleted/file_moved
+                    // vocabulary HandleFileEvent() actually matches
+                    // eventSubtype against -- same event_name_map the server
+                    // side uses when building its own event_subtype "in"
+                    // condition, kept in sync by hand since this is a raw
+                    // string parse, not shared code.
+                    size_t gdEventsPos = configObj.find("\"events\"");
+                    if (gdEventsPos != std::string::npos) {
+                        size_t gdEventsStart = configObj.find("{", gdEventsPos);
+                        size_t gdEventsEnd = FindMatchingBracket(configObj, gdEventsStart, '{', '}');
+                        if (gdEventsStart != std::string::npos && gdEventsEnd != std::string::npos) {
+                            std::string gdEventsObj = configObj.substr(gdEventsStart, gdEventsEnd - gdEventsStart + 1);
+                            if (ExtractJsonBool(gdEventsObj, "create")) rule.monitoredEvents.push_back("file_created");
+                            if (ExtractJsonBool(gdEventsObj, "modify")) rule.monitoredEvents.push_back("file_modified");
+                            if (ExtractJsonBool(gdEventsObj, "delete")) rule.monitoredEvents.push_back("file_deleted");
+                            if (ExtractJsonBool(gdEventsObj, "move")) rule.monitoredEvents.push_back("file_moved");
+                        }
+                    }
+
+                    // quarantinePath sits directly on this type's config
+                    // (unlike file_transfer_monitoring's nested
+                    // actions.quarantine.path fallback above) -- see the
+                    // docstring on _transform_google_drive_local_config().
+                    rule.quarantinePath = ExtractJsonString(configObj, "quarantinePath");
+                }
+
                 // ============================================================
                 // CRITICAL: USB POLICY MUST BE PARSED FIRST
                 // ============================================================
@@ -6823,8 +6951,19 @@ if (!tempHasUsbDevicePolicies && previousUsbBlocking) {
                 // Continue with other config parsing (patterns, etc.)
                 // ... rest of your config parsing code ...
                 
-                // Extract patterns for clipboard/file policies
-                if (policyType == "clipboard_monitoring" || policyType == "file_system_monitoring") {
+                // Extract patterns for clipboard/file policies. Google Drive
+                // (Local) added here September 11 2026 -- it previously had
+                // no way to reach this branch at all, so it only ever did
+                // pure path/extension monitoring (rule.dataTypes always
+                // empty -> HandleFileEvent's hasPureMonitoringPolicy branch
+                // -> alerts/quarantines on ANY matching file regardless of
+                // content). Its raw config carries the exact same
+                // "patterns": {"predefined": [...], "custom": [...]} shape
+                // as file_system_monitoring's (GoogleDriveLocalConfig in
+                // policy.ts), so no new extraction logic is needed here --
+                // just letting this type reach the existing one.
+                if (policyType == "clipboard_monitoring" || policyType == "file_system_monitoring" ||
+                    policyType == "google_drive_local_monitoring") {
                     size_t patternsPos = configObj.find("\"patterns\"");
                     if (patternsPos != std::string::npos) {
                         size_t patternsStart = configObj.find("{", patternsPos);
@@ -9792,16 +9931,38 @@ if (isTransferDestination &&
                         }
                         
                         try {
-                            // Ensure quarantine folder exists
-                            if (!fs::exists(config.GetQuarantine().folder)) {
-                                fs::create_directories(config.GetQuarantine().folder);
+                            // Prefer a policy-configured quarantine folder over
+                            // the agent-wide default -- BUG FIX (found while
+                            // wiring Google Drive Local's own quarantinePath
+                            // UI, September 11 2026): this branch previously
+                            // always used config.GetQuarantine().folder
+                            // unconditionally, silently ignoring
+                            // relevantPolicies[...].quarantinePath even though
+                            // that field is parsed off the policy bundle
+                            // (ParsePolicyObject), stored on PolicyRule, and
+                            // exposed in the dashboard UI (FileSystemPolicyForm
+                            // .tsx / GoogleDriveLocalPolicyForm.tsx) as if it
+                            // took effect -- affects file_system_monitoring
+                            // too, not just Google Drive Local, since both
+                            // share this exact function.
+                            std::string quarantineFolder = config.GetQuarantine().folder;
+                            for (const auto& p : relevantPolicies) {
+                                if (!p.quarantinePath.empty()) {
+                                    quarantineFolder = p.quarantinePath;
+                                    break;
+                                }
                             }
-                            
+
+                            // Ensure quarantine folder exists
+                            if (!fs::exists(quarantineFolder)) {
+                                fs::create_directories(quarantineFolder);
+                            }
+
                             // Generate unique quarantine path
                             std::string timestamp = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
                             std::string fileName = fs::path(filePath).filename().string();
-                            std::string quarantinePath = config.GetQuarantine().folder + "\\" + timestamp + "_" + fileName;
-                            
+                            std::string quarantinePath = quarantineFolder + "\\" + timestamp + "_" + fileName;
+
                             // Write original content to quarantine location
                             std::ofstream quarantineFile(quarantinePath, std::ios::binary | std::ios::trunc);
                             if (quarantineFile.is_open()) {
@@ -9958,16 +10119,49 @@ if (isTransferDestination &&
                             filesBeingQuarantined.insert(filePath);
                         }
                         
-                        // Ensure quarantine folder exists
-                        if (!fs::exists(config.GetQuarantine().folder)) {
-                            fs::create_directories(config.GetQuarantine().folder);
+                        // Prefer a policy-configured quarantine folder over the
+                        // agent-wide default -- same fix as the deletion-
+                        // quarantine branch above, see its comment for why.
+                        std::string quarantineFolder = config.GetQuarantine().folder;
+                        for (const auto& p : relevantPolicies) {
+                            if (!p.quarantinePath.empty()) {
+                                quarantineFolder = p.quarantinePath;
+                                break;
+                            }
                         }
-                        
+
+                        // Ensure quarantine folder exists
+                        if (!fs::exists(quarantineFolder)) {
+                            fs::create_directories(quarantineFolder);
+                        }
+
                         // Generate a unique quarantine path
                         std::string timestamp = std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
-                        std::string quarantinePath = config.GetQuarantine().folder + "\\" + timestamp + "_" + fileName;
-                        
-                        fs::rename(filePath, quarantinePath);
+                        std::string quarantinePath = quarantineFolder + "\\" + timestamp + "_" + fileName;
+
+                        // std::filesystem::rename fails (throws
+                        // filesystem_error) when source and destination are
+                        // on different volumes -- Windows' underlying
+                        // MoveFileEx supports cross-volume moves only with a
+                        // flag std::filesystem::rename doesn't set. This
+                        // matters specifically for Google Drive (Local),
+                        // whose watched paths live on the virtual/network
+                        // drive Google Drive Desktop mounts (typically G:),
+                        // while the quarantine folder defaults to
+                        // C:\ProgramData\... -- a plain rename() would throw
+                        // on every single quarantine action for this policy
+                        // type. File System Monitoring watching any other
+                        // non-C: drive (a mapped network share, a second
+                        // physical disk) has the exact same latent risk; this
+                        // fixes it for both rather than just working around
+                        // it for one. Falls back to copy-then-delete-source,
+                        // which works across volumes.
+                        try {
+                            fs::rename(filePath, quarantinePath);
+                        } catch (const fs::filesystem_error&) {
+                            fs::copy_file(filePath, quarantinePath, fs::copy_options::overwrite_existing);
+                            fs::remove(filePath);
+                        }
                         logger.Warning("Quarantined file: " + filePath + " to " + quarantinePath);
                         detectedAction = "quarantined";
 
@@ -10135,12 +10329,39 @@ if (isTransferDestination &&
                 }
             }
             
+            // Semantic destination tag -- lets a server-side policy
+            // condition (policy_transformer.py's
+            // _transform_google_drive_local_config()) distinguish "this file
+            // event happened under a path a Google Drive (Local) policy
+            // watches" from an unrelated File System Monitoring policy that
+            // happens to watch an overlapping/parent path. Checked against
+            // relevantPolicies (the path+event-matched candidates for THIS
+            // event, computed above), not just any policy that happens to
+            // exist -- an event only carries this tag when a
+            // google_drive_local_monitoring policy is actually one of the
+            // reasons this event is being sent. Server events.py declares
+            // EventCreate.source (added alongside this fix -- see that
+            // field's own comment for why it didn't exist before) and
+            // forwards it into the payload DatabasePolicyEvaluator reads,
+            // so this is the other required half of making that condition
+            // matchable at all.
+            bool isGDriveLocalSource = false;
+            for (const auto& p : relevantPolicies) {
+                if (p.policyType == "google_drive_local_monitoring") {
+                    isGDriveLocalSource = true;
+                    break;
+                }
+            }
+
             JsonBuilder json;
             json.AddString("event_id", thisEventId);
             json.AddString("event_type", "file");
             json.AddString("event_subtype", eventSubtype);
             json.AddString("agent_id", config.agentId);
             json.AddString("source_type", "agent");
+            if (isGDriveLocalSource) {
+                json.AddString("source", "google_drive_local");
+            }
             json.AddString("user_email", GetUsername() + "@" + GetHostname());
             json.AddString("description", "File " + action + ": " + fileName + " - " + detectedSummary);
             json.AddString("severity", severity);

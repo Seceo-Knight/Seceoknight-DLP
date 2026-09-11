@@ -100,6 +100,17 @@ export interface GoogleDriveLocalConfig {
     delete: boolean
     move: boolean
   }
+  // Content patterns to check file contents against (including OCR'd text
+  // from images/screenshots) -- same shape as FileSystemConfig.patterns,
+  // added September 11 2026 so this policy type isn't limited to pure
+  // path/extension monitoring the way it originally shipped. Optional --
+  // leaving both empty falls back to "pure monitoring" (alert/quarantine on
+  // any matching file, regardless of content), same agent-side fallback
+  // File System Monitoring already relies on.
+  patterns?: {
+    predefined: string[]
+    custom: Array<{ regex: string, description?: string }>
+  }
   action: FileSystemAction
   quarantinePath?: string
 }

@@ -648,6 +648,7 @@ const getDefaultConfig = (type: PolicyType): any => {
         monitoredFolders: [],
         fileExtensions: [],
         events: { create: true, modify: false, delete: false, move: false },
+        patterns: { predefined: [], custom: [] },
         action: 'alert'
       }
     case 'google_drive_cloud_monitoring':

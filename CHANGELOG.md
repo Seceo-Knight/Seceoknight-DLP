@@ -8,6 +8,137 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Google Drive (Local): added real content classification, closing the "production ready" gap (September 11, 2026)
+
+Follow-up to the "built real detection" entry below. That fix made the policy actually detect and act on
+files under the configured Google Drive path — but purely by path/extension, with no awareness of what
+was actually IN a file, same as the config always advertised. Flagged as not good enough for production:
+a policy that quarantines/blocks every matching file regardless of content, or (worse) is scoped down to
+avoid false positives and then misses genuinely sensitive files, isn't real DLP.
+
+Traced why File System Monitoring has content classification and Google Drive (Local) didn't, given both
+share the exact same agent-side pipeline (`HandleFileEvent` → `ContentClassifier::Classify`): classification
+is driven entirely by `PolicyRule.dataTypes`, populated by a block in `agent.cpp`'s `ParsePolicyObject`
+that extracts a policy's `"patterns"` config (predefined SSN/credit-card/etc. types plus custom regex) —
+but that extraction was gated to `policyType == "clipboard_monitoring" || policyType ==
+"file_system_monitoring"` only. Google Drive (Local) could never reach it, so `dataTypes` was always
+empty, which routes into `HandleFileEvent`'s "pure monitoring" fallback: alert/quarantine/block on ANY
+file matching the path, never inspecting content. This is agent-side only — the server's
+`_transform_google_drive_local_config` (and file_system_monitoring's own transformer) never encode
+content patterns into their conditions either; classification decisions are made entirely by the agent's
+local `ContentClassifier`, confirmed by checking that file_system_monitoring's own transformer has the
+identical gap by design.
+
+Fix: added `google_drive_local_monitoring` to that gate — no new extraction logic needed, since this
+policy type's raw config already carries the exact same `"patterns": {"predefined": [...], "custom":
+[...]}` shape file_system_monitoring's does (`GoogleDriveLocalConfig` in `policy.ts`, mirrored from
+`FileSystemConfig`). Added the matching dashboard UI in `GoogleDriveLocalPolicyForm.tsx` — predefined
+pattern tiles (SSN, Credit Card, etc.), Rules-tab custom rules as selectable tiles, and a custom-regex
+builder with live test — copied directly from `FileSystemPolicyForm.tsx`'s own picker rather than
+inventing a second implementation of the same feature. `GoogleDriveLocalConfig.patterns` is optional and
+defaults to empty in both `PolicyCreatorModal.tsx` and `policyUtils.ts`'s default-config helpers, so an
+admin who leaves it empty keeps the previous pure-monitoring behavior — this isn't a breaking change for
+existing policies, just a capability that wasn't reachable before.
+
+Net effect: a Google Drive (Local) policy can now be scoped to only alert/quarantine/block on files whose
+CONTENT matches configured patterns (or predefined SSN/credit-card/etc. detection), exactly like File
+System Monitoring, instead of treating every file under the watched path as equally actionable regardless
+of what's in it.
+
+Verified: TypeScript typecheck against the full dashboard (`tsc --noEmit`) shows the identical error set
+before and after this change — zero new errors from any of the three modified files. Structural review of
+the `agent.cpp` diff (comment-and-string-aware brace-depth check shows zero net change from this edit,
+plus the extraction logic itself is reused verbatim, not rewritten). Not yet verified live — same caveat
+as the detection-build entry below, this needs a real test against a Google Drive Desktop install with
+content that should and shouldn't trigger. No new deploy steps beyond what that entry already describes
+(git push → CI rebuilds the agent binary → `update.sh` on the server → `manage-agent.ps1` → `[2] Update`
+on the endpoint).
+
+---
+
+## Built real detection for Google Drive (Local) — was a fully dead policy type end-to-end (September 11, 2026)
+
+Full audit requested of the Google Drive (Local) policy type. Unlike every other bug this document
+covers, this one wasn't a misfire or false positive — the policy type did **nothing at all**, on any
+layer, while looking completely normal in the dashboard: an admin could create, enable, and save a
+Google Drive (Local) policy with no error anywhere, and it would never detect, alert, block, or
+quarantine a single file, ever.
+
+Root cause, confirmed by tracing every layer:
+- The Windows agent (`agent.cpp`'s `ApplyPolicyBundle`) only ever parsed five hardcoded policy buckets.
+  `google_drive_local_monitoring` wasn't one of them — the server built and sent this policy type's
+  bundle like any other, and the agent silently dropped it on arrival. No detection code for it existed
+  anywhere in the agent at all.
+- Even hypothetically, the server-side condition this policy type's config compiles down to
+  (`{"field": "source", "operator": "equals", "value": "google_drive_local"}`, built by
+  `policy_transformer.py`) could never have matched anything: `EventCreate` (`server/app/api/v1/
+  events.py`) had no `source` field declared, so Pydantic silently stripped it from any agent-submitted
+  event before policy evaluation ever saw it — the same "undeclared field gets silently dropped" bug
+  class this document has hit before (file_hash, username, printer, channel).
+- `policy_transformer.py` additionally carried a byte-for-byte duplicate definition of
+  `_transform_google_drive_local_config` (905–1039 and 1287–1421) — harmless today since they were
+  identical, but a landmine for any future fix applied to only one copy.
+
+Built the missing pieces rather than papering over them:
+
+**Server** (`server/app/api/v1/events.py`): added `EventCreate.source`, forwarded into the policy-
+evaluation payload as `payload["source"]`. Deliberately distinct from the pre-existing `source_type`
+field (always `"agent"`/`"endpoint"` — who produced the event) and from the stored `dlp_events.source`
+column (which is `source_type` at rest, for unrelated historical reasons this fix didn't touch) — this
+is purely the ephemeral value `DatabasePolicyEvaluator` reads to resolve the condition above. Deleted
+the dead duplicate transformer function (`server/app/utils/policy_transformer.py`).
+
+**Windows agent** (`agent.cpp`):
+- `ApplyPolicyBundle` now parses the `google_drive_local_monitoring` bucket and merges it into
+  `filePolicies`, the same way `file_transfer_monitoring` already does — this reuses the existing,
+  already-working path-watch, extension-filter, and classify-then-act pipeline (`ShouldMonitorFile`/
+  `HandleFileEvent`) instead of building a second, separately-maintained detection path.
+- `ParsePolicyObject` special-cases this policy type's config shape (`basePath` + `monitoredFolders` +
+  `events{create,modify,delete,move}`), which looks nothing like the generic `monitoredPaths` array
+  every other file-ish policy type's raw config uses — without this, the merge above would have run
+  against silently-empty path lists.
+- `HandleFileEvent` now tags an emitted file event with `"source": "google_drive_local"` whenever one of
+  the policies that matched it is this type, so the server-side condition built above has something to
+  actually match for the first time.
+- Two bonus fixes found while wiring this up, both also benefiting File System Monitoring since they
+  share the same function: (1) the quarantine branches always used the agent's global default folder,
+  silently ignoring a per-policy `quarantinePath` even though that field was already parsed and exposed
+  in the dashboard UI; now a matched policy's own quarantine folder is honored when set. (2) the
+  create/modify quarantine move used a plain `fs::rename`, which throws when source and destination are
+  on different volumes — a near-certainty for this policy type specifically, since Google Drive Desktop
+  mounts its sync folder on a separate virtual drive (typically `G:`) while quarantine defaults to
+  `C:\ProgramData\...`; now falls back to copy-then-delete across volumes.
+
+**Dashboard** (`GoogleDriveLocalPolicyForm.tsx`): added the missing Quarantine action option and
+quarantine-path input — the config type and backend transformer already supported both, but the form
+only ever rendered Log/Alert/Block, so quarantine was unreachable without hand-crafting the API payload.
+
+**Known limitation, stated plainly**: this policy type is path/extension-based monitoring only, same as
+its config always advertised (no content-pattern field exists in `GoogleDriveLocalConfig`, unlike File
+System Monitoring's `patterns`). It does NOT classify file content for SSN/credit-card/etc. — it fires
+on any file matching the configured path, extension, and event-type conditions. This is consistent with
+what the dashboard form has always asked for, not a new gap introduced by this fix, but worth being
+explicit about rather than letting "real detection" imply more than it delivers.
+
+**Deploy is a three-part story this time**, not just `update.sh`:
+1. `git push` — this same push updates the server (events.py, policy_transformer.py), the dashboard
+   (GoogleDriveLocalPolicyForm.tsx), AND triggers `.github/workflows/build-windows-agent.yml`, which
+   cross-compiles a fresh `seceoknight_agent.exe` and commits it back to the repo (a few minutes).
+2. `sudo bash update.sh` on the server — rebuilds/restarts the server and dashboard containers.
+3. On the Windows endpoint, once CI has finished (check the Actions tab or just wait ~5 minutes): run
+   `manage-agent.ps1` → `[2] Update` — this is a full agent BINARY replacement, not the `[4] Browser` →
+   `[3]` extension-only reinstall used for the earlier browser-extension fixes this session.
+
+Verified: Python syntax (`ast.parse`) on both server files, TypeScript typecheck on the dashboard form
+(no new errors — pre-existing unrelated errors in other files confirmed via `git diff --stat` to be
+outside this change), and manual structural review of the `agent.cpp` diff (brace/paren balance, symbol
+existence and signatures for every helper called, forward-reference pattern already used elsewhere in
+the same class). No compiler available in this environment to build the Windows binary directly — actual
+compilation happens in CI per the deploy steps above, and this has not yet been tested live against a
+real Google Drive Desktop install.
+
+---
+
 ## Fix: Policies page "Violations (24h)" stat card stuck at 0 (September 11, 2026)
 
 Reported live: Policies tab lists 6 policies, each showing a real, nonzero lifetime "Violations: N" count

@@ -114,6 +114,27 @@ class EventCreate(BaseModel):
     # printer above; gap-scan of CyberSentinel-DLP commit 51343a4, August
     # 26, 2026).
     channel: Optional[str] = Field(None, description="Exfil channel, e.g. USB / PRINT / MESSAGING / WEB")
+    # Semantic destination tag consumed by DatabasePolicyEvaluator's generic
+    # rule engine (see policies/database_policy_evaluator.py's field_mappings
+    # -- "source": ["source", "event.source"]) for policy types whose
+    # transformed conditions distinguish events by WHERE they're headed, not
+    # just event_type/path -- e.g. google_drive_local_monitoring's
+    # policy_transformer.py adds a {"field": "source", "operator": "equals",
+    # "value": "google_drive_local"} rule so its path-prefix condition only
+    # ever matches events the agent itself tagged as belonging to that local
+    # sync-folder pipeline, not an unrelated File System Monitoring policy
+    # that happens to watch an overlapping path.
+    #
+    # NOT declared here before September 11 2026 -- meaning any "source" key
+    # an agent sent was silently stripped by Pydantic before
+    # _build_processor_payload() ever saw it (same undeclared-field bug class
+    # as file_hash/username/printer/channel above), so this condition could
+    # never match for ANY agent-originated event, ever, regardless of what
+    # the Windows/Linux agent itself did. Distinct from source_type (always
+    # "agent"/"endpoint" -- WHO produced the event) and source_path (a
+    # filesystem path) -- this is a free-form semantic tag naming WHICH
+    # destination/channel this event belongs to.
+    source: Optional[str] = Field(None, description="Semantic destination tag for policy condition matching, e.g. 'google_drive_local' -- distinct from source_type")
     # File Transfer Monitoring (Windows agent.cpp's HandleTransferDestinationEvent(),
     # September 2026) sends these four keys and none of them were declared
     # here -- same silently-stripped-by-Pydantic bug as file_hash/username/
@@ -931,6 +952,13 @@ def _build_processor_payload(event: EventCreate) -> Dict[str, Any]:
 
     if event.event_subtype:
         payload["event"]["subtype"] = event.event_subtype
+
+    if event.source:
+        # Top-level "source" -- matches DatabasePolicyEvaluator's
+        # field_mappings lookup path (["source", "event.source"]), see the
+        # field's own docstring on EventCreate above for why this needs to
+        # exist at all.
+        payload["source"] = event.source
 
     if event.usb_event_type:
         payload.setdefault("usb", {})["event_type"] = event.usb_event_type
