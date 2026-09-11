@@ -8,6 +8,49 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Google Drive (Cloud): audit + two fixes (September 11, 2026)
+
+Deep audit of the Google Drive (Cloud) policy type, same approach as the Local audit above. Unlike Local,
+this one was genuinely well-built already: real OAuth 2.0 flow with Fernet-encrypted token storage
+(`google_drive_oauth.py`), a Celery Beat task polling the real Drive Activity API every 5 minutes
+(`google_drive_polling.py`), real folder-to-database sync on policy create/update (`sync_google_drive_folders`
+in `policies.py`), correct event normalization (`google_drive_event_normalizer.py`), and a policy-condition
+transformer (`_transform_google_drive_cloud_config`) whose field names actually match what
+`DatabasePolicyEvaluator._extract_field_value`'s `field_mappings` expects (`connection_id`/`folder_id` both
+resolve via their `metadata.*` fallback path, which is exactly where `_build_processor_payload` puts them) --
+none of the class of bug that broke Local (corrupted paths, dead code, unwired server fields) was present
+here. Two real issues found and fixed:
+
+1. **Decorative "Polling Interval" selector.** `GoogleDriveCloudPolicyForm.tsx` lets you pick 5/10/15/30/60
+   minutes or a custom interval per policy, but nothing server-side ever read `config.pollingInterval` --
+   Celery Beat's schedule is a fixed `crontab(minute="*/5")`, so every connection was polled every 5 minutes
+   regardless of what the UI showed as configured. Fixed in `GoogleDrivePollingService.poll_connection()`:
+   added `_get_min_polling_interval()`, which looks up the shortest `pollingInterval` configured across all
+   active `google_drive_cloud_monitoring` policies pointing at that connection (falling back to 5 minutes,
+   matching the old always-5 behavior, when none is set) and skips the actual Drive Activity API call if
+   `last_polled_at` is more recent than that interval. The Celery Beat tick itself is still every 5 minutes
+   (a dynamic per-connection schedule would be a much bigger change), but a 30/60-minute policy now visibly
+   skips most ticks instead of the UI lying about it.
+2. **OAuth-not-configured error swallowed into a generic toast.** `GoogleDriveOAuthService._ensure_oauth_config()`
+   already returns a clear 503 ("Google OAuth is not configured. Provide GOOGLE_CLIENT_* env vars or
+   credentials.json") when `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` aren't set -- but `GoogleDriveCloudPolicyForm.tsx`'s
+   `handleConnect` catch block discarded it in favor of a generic "Failed to initiate connection" toast, giving
+   an admin no way to tell "OAuth isn't configured on this server" apart from any other failure. Fixed to use
+   the existing `extractErrorDetail()` util (already used elsewhere in the dashboard for the same FastAPI
+   `detail` pattern) so the real backend reason now surfaces.
+
+Verified: Python `ast.parse()` on `google_drive_polling.py`; the new interval-check code path only runs when
+`connection.last_polled_at` is already set, so the existing `test_poll_connection_inserts_events` test (which
+polls a freshly-created, never-before-polled connection) is unaffected; `tsc --noEmit` on the dashboard shows
+zero new errors (the one pre-existing unused-import warning in `GoogleDriveCloudPolicyForm.tsx` predates this
+change).
+
+Not yet confirmed: whether `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`GOOGLE_REDIRECT_URI` are actually set on
+this deployment's `.env` -- required before "Connect Account" can do anything at all. See
+`TESTING_COMMANDS.md` section 10.1 for the exact variables needed.
+
+---
+
 ## Fix: Windows agent's ExtractJsonString() corrupted every backslash-bearing config value, silently breaking server-side policy matching (September 11, 2026)
 
 Follow-up to the badge-display fix above. Even after that fix, the Policies tab kept showing Violations: 0

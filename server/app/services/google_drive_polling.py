@@ -5,7 +5,7 @@ Polling service that fetches Google Drive Activity events and ingests them into 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import structlog
@@ -17,12 +17,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_mongodb
 from app.models.google_drive import GoogleDriveConnection, GoogleDriveProtectedFolder
+from app.models.policy import Policy
 from app.services.event_processor import EventProcessor, get_event_processor
 from app.services.google_drive_event_normalizer import (
     TRACKED_EVENT_SUBTYPES,
     normalize_drive_activity,
 )
 from app.services.google_drive_oauth import GoogleDriveOAuthService
+
+
+# Celery Beat ticks poll_google_drive_activity every 5 minutes (see
+# reporting_tasks.py's beat_schedule) -- that tick rate is the finest
+# granularity any connection can actually be polled at, so it's also the
+# default/floor a connection uses when no policy has configured its own
+# (shorter or longer) pollingInterval.
+_DEFAULT_POLL_INTERVAL_MINUTES = 5
 
 
 logger = structlog.get_logger(__name__)
@@ -65,6 +74,31 @@ class GoogleDrivePollingService:
             logger.debug("Skipping connection with no protected folders", connection_id=str(connection.id))
             return 0
 
+        # Per-connection cadence -- GoogleDriveCloudPolicyForm.tsx lets the
+        # user pick a "Polling Interval" (5/10/15/30/60 min, or custom) per
+        # policy, but until now nothing server-side ever read it: this
+        # function ran unconditionally on every 5-minute Celery Beat tick,
+        # so the selector was pure decoration. The tick rate itself is still
+        # fixed (changing that needs a dynamic beat schedule, a bigger
+        # change than this warrants), but each connection now decides
+        # whether it's actually due based on the shortest pollingInterval
+        # configured across its own policies -- so a 30/60-minute policy
+        # now visibly skips most ticks instead of the UI lying about it.
+        if connection.last_polled_at:
+            min_interval = await self._get_min_polling_interval(connection.id)
+            last_polled = connection.last_polled_at
+            if last_polled.tzinfo is None:
+                last_polled = last_polled.replace(tzinfo=timezone.utc)
+            elapsed = datetime.now(timezone.utc) - last_polled
+            if elapsed < timedelta(minutes=min_interval):
+                logger.debug(
+                    "Skipping Google Drive connection -- not due yet",
+                    connection_id=str(connection.id),
+                    elapsed_seconds=elapsed.total_seconds(),
+                    min_interval_minutes=min_interval,
+                )
+                return 0
+
         if connection.is_token_expired():
             await self.oauth_service.refresh_access_token(connection)
 
@@ -100,6 +134,47 @@ class GoogleDrivePollingService:
 
         logger.info("Google Drive polling completed", connection_id=str(connection.id), events=total)
         return total
+
+    async def _get_min_polling_interval(self, connection_id) -> int:
+        """
+        Shortest pollingInterval (minutes) configured across this
+        connection's enabled google_drive_cloud_monitoring policies.
+        Multiple policies can point at the same Drive account with
+        different intervals configured -- a connection can only be polled
+        at one cadence, so the most demanding (smallest) interval wins,
+        same "most permissive/most demanding policy wins" precedence used
+        elsewhere in this codebase for overlapping policy conditions.
+        Falls back to _DEFAULT_POLL_INTERVAL_MINUTES if no matching policy
+        sets one (e.g. a connection with no policy yet, or one that never
+        touched the interval selector), which matches the 5-minute cadence
+        this connection was already being polled at before this fix.
+
+        Filters connectionId in Python rather than a JSON-path SQL query --
+        deliberately: config is a generic JSON column with no index on
+        connectionId, and the number of google_drive_cloud_monitoring
+        policies in any real deployment is small, so fetching the type-
+        filtered set and matching in Python (the same pattern
+        DatabasePolicyEvaluator's own policy cache already uses) is simpler
+        and more portable than a Postgres-specific JSON operator.
+        """
+        stmt = select(Policy).where(
+            Policy.type == "google_drive_cloud_monitoring",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        )
+        result = await self.db.execute(stmt)
+        policies = result.scalars().all()
+
+        intervals: List[int] = []
+        for policy in policies:
+            config = policy.config or {}
+            if config.get("connectionId") != str(connection_id):
+                continue
+            interval = config.get("pollingInterval")
+            if isinstance(interval, (int, float)) and interval > 0:
+                intervals.append(int(interval))
+
+        return min(intervals) if intervals else _DEFAULT_POLL_INTERVAL_MINUTES
 
     def _build_credentials(self, connection: GoogleDriveConnection) -> Credentials:
         config = self.oauth_service.get_client_config()

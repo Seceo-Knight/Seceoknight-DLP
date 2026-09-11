@@ -11,6 +11,7 @@ import { Loader2, Plus, Cloud, RefreshCcw, Check } from 'lucide-react'
 import ProtectedFolderSelector from '../google-drive/ProtectedFolderSelector'
 import { toast } from 'react-hot-toast'
 import { formatDate } from '@/lib/utils'
+import { extractErrorDetail } from '@/utils/errorUtils'
 
 interface GoogleDriveCloudPolicyFormProps {
   config: GoogleDriveCloudConfig
@@ -103,7 +104,12 @@ export default function GoogleDriveCloudPolicyForm({
       toast.success('Please complete authentication in the popup window')
     } catch (error) {
       console.error(error)
-      toast.error('Failed to initiate connection')
+      // Surface the backend's actual reason (e.g. "Google OAuth is not
+      // configured. Provide GOOGLE_CLIENT_* env vars or credentials.json",
+      // returned as a 503 by GoogleDriveOAuthService._ensure_oauth_config())
+      // instead of a generic message that gives the admin no way to tell
+      // "OAuth isn't set up on this server" apart from any other failure.
+      toast.error(extractErrorDetail(error, 'Failed to initiate connection'))
     } finally {
       setConnecting(false)
     }
