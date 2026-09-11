@@ -500,7 +500,12 @@ Full walkthrough (screenshots, troubleshooting, quick reference):
 3. *API permissions* → **+ Add a permission** → **Microsoft Graph** →
    **Delegated permissions** → add `Files.Read` and `Files.Read.All`
    (`User.Read` is added by default). Click **Grant admin consent** if it's
-   offered.
+   offered — **if you're connecting a work/school (Microsoft 365) account,
+   this step usually isn't optional**: org tenants commonly block a regular
+   user from granting `Files.Read.All` themselves, so you'll need to be
+   signed in as a Global Admin or Application Administrator for that tenant
+   to click it (or have one approve it when the OAuth popup asks during
+   Connect Account in 6.3).
 4. *Certificates & secrets* → **+ New client secret** → any description,
    24-month expiry → **Add** → immediately copy the **Value** shown (not the
    Secret ID — it's only displayed once).
@@ -508,20 +513,21 @@ Full walkthrough (screenshots, troubleshooting, quick reference):
    ```bash
    ONEDRIVE_CLIENT_ID=your-application-client-id
    ONEDRIVE_CLIENT_SECRET=your-client-secret-value
-   ONEDRIVE_TENANT_ID=consumers
+   ONEDRIVE_TENANT_ID=organizations
    ONEDRIVE_REDIRECT_URI=http://<your-server-ip>:55000/api/v1/onedrive/callback
    ```
    `ONEDRIVE_TENANT_ID` isn't something you look up anywhere — it's a fixed
    value you type in as-is, telling Microsoft what *kind* of account is
    allowed to sign in through this app. Pick one of exactly three values:
+   - **`organizations`** — a work/school account (Microsoft 365 tied to a
+     company or school tenant). **Most orgs deploying this platform will use
+     this one.**
    - **`consumers`** — a personal Microsoft account (`@outlook.com`,
      `@hotmail.com`, `@live.com`, or any personal account with OneDrive).
-     Use this if that's the account you're connecting.
-   - **`organizations`** — a work/school account (Microsoft 365 tied to a
-     company or school tenant).
    - **`common`** — accepts either type, but personal accounts often hit a
      "Tenant does not have a SPO license" error with this setting, so
-     prefer `consumers` when you know the account is personal.
+     prefer the specific one (`organizations` or `consumers`) that matches
+     the account you're actually connecting.
 6. Apply it: `cd /opt/seceoknight && sudo bash update.sh`
 
 Full walkthrough (screenshots, troubleshooting, quick reference):

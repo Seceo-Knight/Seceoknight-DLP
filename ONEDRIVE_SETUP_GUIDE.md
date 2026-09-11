@@ -147,6 +147,14 @@ Add the following permissions one by one:
 - Users will be prompted to consent during the OAuth flow
 - This is normal for personal Microsoft accounts
 
+**If you're connecting a work/school (Microsoft 365) account, this step
+usually isn't optional.** Org tenants commonly block a regular user from
+granting `Files.Read.All` themselves — you need to be signed in as a Global
+Admin or Application Administrator for that tenant to click "Grant admin
+consent" here, or have one approve it when the OAuth popup asks during
+policy setup. If you get an "insufficient privileges" or "need admin
+approval" error at this step, that's why.
+
 ---
 
 ## Create Client Secret
@@ -608,7 +616,7 @@ If you see an error, check:
 ```bash
 ONEDRIVE_CLIENT_ID=<Azure Application (client) ID>
 ONEDRIVE_CLIENT_SECRET=<Azure Client Secret Value>
-ONEDRIVE_TENANT_ID=common
+ONEDRIVE_TENANT_ID=organizations  # work/school account -- use "consumers" for a personal account
 ONEDRIVE_REDIRECT_URI=http://YOUR_SERVER_IP:55000/api/v1/onedrive/callback
 ```
 
