@@ -379,6 +379,12 @@ If you see an error, check:
 2. **Polling Interval**:
    - Select how often to check for changes (default: 10 minutes)
    - Options: 5, 10, 15, 30, 60 minutes, or Custom
+   - This is enforced per-connection: the underlying Celery Beat tick still
+     runs every 5 minutes, but a connection is only actually polled once its
+     configured interval has elapsed since it was last checked (the shortest
+     interval across all policies on that connection wins if there's more
+     than one). A 30/60-minute policy genuinely means fewer API calls, not
+     just a label.
 
 3. **Status**:
    - **Enabled**: Toggle to enable/disable the policy
@@ -708,7 +714,7 @@ ONEDRIVE_REDIRECT_URI=http://YOUR_SERVER_IP:55000/api/v1/onedrive/callback
 
 If you encounter issues not covered in this guide:
 
-1. Check the main [INSTALLATION_GUIDE.md](./INSTALLATION_GUIDE.md)
+1. Check the main [README.md](./README.md)
 2. Review service logs: `docker-compose logs`
 3. Verify Azure app registration configuration
 4. Check Microsoft Graph API status

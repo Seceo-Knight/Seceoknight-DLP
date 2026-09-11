@@ -449,6 +449,96 @@ to turn off protection for Gmail, Drive, or any other built-in destination.
 
 ---
 
+## Step 6 — Cloud Drive Monitoring (Google Drive & OneDrive) — Optional
+
+Watches files in someone's **Google Drive** or **OneDrive** account (create,
+edit, delete, move) and applies the dashboard's policy checks to them — no
+agent install needed on any PC for this one. It's entirely server-side: the
+DLP server periodically asks Google/Microsoft's API "what changed in this
+account's watched folders?" using an OAuth connection the account owner
+approves once.
+
+Both work the same way: register an app with the provider so the DLP server
+is allowed to ask, put the resulting ID/secret in `.env`, then connect an
+account and pick folders from the dashboard.
+
+### 6.1 — Google Drive (Cloud)
+
+1. **Google Cloud Console** ([console.cloud.google.com](https://console.cloud.google.com)):
+   create/select a project, then enable both the **Google Drive API** and the
+   **Drive Activity API** (*APIs & Services → Library* — search for each,
+   click **Enable**). Missing the Activity API is easy to miss and breaks
+   polling silently, not the connection itself.
+2. *APIs & Services → OAuth consent screen* — set it up (External is fine for
+   most orgs), add yourself as a test user if it stays in "Testing" mode.
+3. *APIs & Services → Credentials → + Create Credentials → OAuth client ID* →
+   type **Web application** → Authorized redirect URI:
+   `http://<your-server-ip>:55000/api/v1/google-drive/callback`
+4. Copy the **Client ID** and **Client Secret** it gives you.
+5. On the server, add to `/opt/seceoknight/.env`:
+   ```bash
+   GOOGLE_CLIENT_ID=your-client-id
+   GOOGLE_CLIENT_SECRET=your-client-secret
+   GOOGLE_REDIRECT_URI=http://<your-server-ip>:55000/api/v1/google-drive/callback
+   ```
+6. Apply it: `cd /opt/seceoknight && sudo bash update.sh`
+
+Full walkthrough (screenshots, troubleshooting, quick reference):
+[`GOOGLE_DRIVE_SETUP_GUIDE.md`](GOOGLE_DRIVE_SETUP_GUIDE.md)
+
+### 6.2 — OneDrive (Cloud)
+
+1. **Azure Portal** ([portal.azure.com](https://portal.azure.com)) → search
+   **"App registrations"** → **+ New registration**.
+   - Name: anything (e.g. `SeceoKnight DLP`)
+   - Supported account types: **"Accounts in any organizational directory
+     and personal Microsoft accounts"**
+   - Redirect URI: platform **Web**,
+     `http://<your-server-ip>:55000/api/v1/onedrive/callback`
+   - Click **Register**
+2. On the Overview page, copy the **Application (client) ID**.
+3. *API permissions* → **+ Add a permission** → **Microsoft Graph** →
+   **Delegated permissions** → add `Files.Read` and `Files.Read.All`
+   (`User.Read` is added by default). Click **Grant admin consent** if it's
+   offered.
+4. *Certificates & secrets* → **+ New client secret** → any description,
+   24-month expiry → **Add** → immediately copy the **Value** shown (not the
+   Secret ID — it's only displayed once).
+5. On the server, add to `/opt/seceoknight/.env`:
+   ```bash
+   ONEDRIVE_CLIENT_ID=your-application-client-id
+   ONEDRIVE_CLIENT_SECRET=your-client-secret-value
+   ONEDRIVE_TENANT_ID=consumers
+   ONEDRIVE_REDIRECT_URI=http://<your-server-ip>:55000/api/v1/onedrive/callback
+   ```
+   Use `ONEDRIVE_TENANT_ID=consumers` for a personal Microsoft account (this
+   avoids a "Tenant does not have a SPO license" error) — use `organizations`
+   for a work/school account, or `common` to accept either.
+6. Apply it: `cd /opt/seceoknight && sudo bash update.sh`
+
+Full walkthrough (screenshots, troubleshooting, quick reference):
+[`ONEDRIVE_SETUP_GUIDE.md`](ONEDRIVE_SETUP_GUIDE.md)
+
+### 6.3 — Create the policy and test it
+
+1. Dashboard → **Policies** → **Create Policy** → select **"Google Drive
+   (Cloud)"** or **"OneDrive (Cloud)"** → **Next**.
+2. Click **Connect Account**, complete the OAuth popup with the account to
+   monitor. If this fails immediately, the error toast now tells you the
+   real reason (e.g. "OAuth is not configured") instead of a generic
+   failure — recheck the `.env` values from above.
+3. Select the folder(s) to protect, set policy name/severity/conditions, and
+   a **Polling Interval** (how often the DLP server checks that account —
+   this is honored, so a 30/60-minute interval genuinely means fewer checks,
+   not just a label).
+4. **Save**.
+5. To test: add, edit, or delete a file in a protected folder, then wait for
+   the configured interval (or use the **Data Matching**/API manual-poll
+   endpoint documented in the setup guides) and check the **Events** and
+   **Policies** tabs for the resulting violation.
+
+---
+
 ## Updating to a New Version
 
 ```bash
@@ -558,6 +648,7 @@ docker compose -f docker-compose.prod.yml down
 |----------|-------------|
 | [Classification System](CLASSIFICATION_SYSTEM.md) | How sensitive data is detected |
 | [Classification Policies Guide](CLASSIFICATION_POLICIES_GUIDE.md) | How to configure detection policies |
+| [Google Drive Setup](GOOGLE_DRIVE_SETUP_GUIDE.md) | Connecting Google Drive cloud monitoring |
 | [OneDrive Setup](ONEDRIVE_SETUP_GUIDE.md) | Connecting OneDrive cloud monitoring |
 | [SMTP Relay (Email DLP)](smtp-relay/README.md) | Full setup for Google Workspace **and** Microsoft 365, config vars, limitations |
 | [Browser Extension — Windows Install](agents/browser-extension/INSTALL_WINDOWS.md) | Complete step-by-step Cloud Upload Guard install + troubleshooting |
