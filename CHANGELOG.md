@@ -8,6 +8,50 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: Web Activity Control alerts carried no evidence of what matched (September 11, 2026)
+
+Found live: a Restricted/100%-confidence "Web Activity Detection" alert fired for
+`outlook.cloud.microsoft` from simply logging into Outlook web -- no email composed or
+sent. The event's raw JSON showed `classification_rules_matched: []`, `detected_content:
+null`, `content: null` alongside the Restricted/100% verdict, making it impossible to tell
+whether this was a real detection or a false positive.
+
+Root cause: `classify_content()` server-side only ever returns Restricted + 100% confidence
+via two short-circuit paths (fingerprint match or an authoritative Data Matching hit), and
+both **always** populate `matched_rules` -- so the classification itself was very likely
+genuine (something in a background POST Outlook's web app made while loading the inbox --
+autosave, sync, telemetry -- matched a fingerprinted file or a Data Matching record). The
+evidence was real; it just never reached the stored event. `evaluate_web_activity()` in
+`skdlp_host.py` (the browser extension's native host) calls the server's
+`/agents/{id}/web-activity/evaluate` endpoint, which already returns `matched_rules` in
+`WebActivityEvaluationResponse` -- but the client discarded it, and `emit_web_activity_event()`
+never included `classification_rules_matched`/`detected_content` in its `/events/` POST at
+all, despite `EventCreate` supporting both fields. Every `web_activity_post`/`send`/
+`ai_response` alert -- correctly detected or not -- landed with an unexplained verdict.
+
+Fixed in `agents/browser-extension/native-host/skdlp_host.py`:
+- `evaluate_web_activity()` now also returns the server's `matched_rules` list.
+- `handle_web_activity()` unpacks and forwards it to every `emit_web_activity_event()` call
+  (block/redact/alert/download paths).
+- `emit_web_activity_event()` now sends `classification_rules_matched` (the matched rules'
+  `rule_name` values, matching `EventCreate`'s `List[str]` shape) and `detected_content` (a
+  semicolon-joined summary of those names) on the `/events/` POST.
+
+Verified: `python3 -c "import ast; ast.parse(...)"` on `skdlp_host.py`; confirmed no other
+caller of `evaluate_web_activity()`/`emit_web_activity_event()` exists in the repo to break
+from the return-tuple/signature change.
+
+**Deploy note:** this changes `skdlp_host.py`, which CI compiles into `skdlp_host.exe`
+(`build-windows-agent.yml`'s `build-native-host` job triggers on any push touching this
+file and auto-commits the rebuilt binary back to `master`). Getting the new binary onto an
+already-installed endpoint is **not automatic** -- the "SeceoKnight DLP Browser Extension
+Guard" scheduled task only reconciles policy/manifest/registry state every ~2 minutes and
+never re-downloads or version-checks the exe. Each Windows endpoint needs
+`manage-agent.ps1` -> **[2] Update** run once (which its `Update-NativeHost` step handles)
+to actually pick up the fix, same as an `agent.cpp` change.
+
+---
+
 ## OneDrive (Cloud): audit + two fixes (September 11, 2026)
 
 Deep audit of the OneDrive (Cloud) policy type, same approach as the Google Drive (Cloud) audit above. Also

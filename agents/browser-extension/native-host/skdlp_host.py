@@ -298,7 +298,7 @@ def fetch_app_catalog():
 def evaluate_web_activity(meta):
     """Web Activity Control decision. Returns (action, category, level,
     reason, redacted_content, labels_redacted, policy_id, policy_name,
-    confidence). action in {allow, alert, block, redact}. See
+    confidence, matched_rules). action in {allow, alert, block, redact}. See
     app/core/web_activity.py / app/api/v1/agents.py's evaluate_web_activity()
     server-side for the actual matrix logic -- this is a thin client, same
     design as evaluate() below for the older cloud-upload-only path.
@@ -323,7 +323,18 @@ def evaluate_web_activity(meta):
     at 0 for Web Activity Control even while matching events showed up fine
     in the Events log, because the generic server-side policy evaluator
     that normally stamps that count can't match a matrix-shaped
-    web_activity_control policy at all (found August 19, 2026)."""
+    web_activity_control policy at all (found August 19, 2026).
+
+    matched_rules: WebActivityEvaluationResponse.matched_rules -- the exact
+    classification rules (fingerprint / Data Match / regex / keyword) the
+    server's classify_content() matched against this activity's content.
+    The server always computes and returns this (evaluate_web_activity() in
+    agents.py builds its human-readable `reason` string from these same
+    rule names), but until now this function discarded it -- so a Restricted
+    100%-confidence alert would land in the dashboard with no way to tell
+    what was actually detected (e.g. a background webmail sync POST that
+    happened to carry a fingerprinted/Data-Matched value). Threaded through
+    to emit_web_activity_event() below the same way confidence already is."""
     if requests is None or not CFG["agent_key"]:
         return "allow", None, None, "host-unconfigured", None, [], None, None, 0.0
     try:
@@ -353,10 +364,11 @@ def evaluate_web_activity(meta):
             body.get("policy_id"),
             body.get("policy_name"),
             body.get("confidence") or 0.0,
+            body.get("matched_rules") or [],
         )
     except Exception as e:
         log("evaluate_web_activity failed: %s" % e)
-        return "allow", None, None, "evaluate-error", None, [], None, None, 0.0
+        return "allow", None, None, "evaluate-error", None, [], None, None, 0.0, []
 
 
 def _web_activity_alert_severity(level, confidence):
@@ -380,7 +392,8 @@ def _web_activity_alert_severity(level, confidence):
 
 
 def emit_web_activity_event(meta, category, activity, action_taken, severity, level, blocked,
-                             policy_id=None, policy_name=None, policy_action=None, confidence=None):
+                             policy_id=None, policy_name=None, policy_action=None, confidence=None,
+                             matched_rules=None):
     """Emit one Web Activity Control event. Mirrors emit_event() below --
     field names match the server's EventCreate schema.
 
@@ -415,6 +428,15 @@ def emit_web_activity_event(meta, category, activity, action_taken, severity, le
     if requests is None or not CFG["agent_key"]:
         return
     try:
+        # EventCreate.classification_rules_matched wants rule NAMES (List[str]),
+        # not the {"rule_name": ..., ...} dicts classify_content()/
+        # WebActivityEvaluationResponse.matched_rules returns -- same shape
+        # agents.py's own `reason` string is built from (see evaluate_web_activity()
+        # docstring above). detected_content is a short human-readable summary
+        # built from those same names, since the actual matched substrings
+        # aren't sent back by the server for this evaluation path (avoids
+        # putting raw sensitive content in a second field unnecessarily).
+        rule_names = [r.get("rule_name") for r in (matched_rules or []) if r.get("rule_name")]
         requests.post(
             "%s/events/" % CFG["server_url"].rstrip("/"),
             headers={"X-Agent-Key": CFG["agent_key"], "Content-Type": "application/json"},
@@ -431,6 +453,8 @@ def emit_web_activity_event(meta, category, activity, action_taken, severity, le
                 "file_path": meta.get("fileName"),
                 "classification_level": level,
                 "classification_score": confidence or 0.0,
+                "classification_rules_matched": rule_names,
+                "detected_content": ("; ".join(rule_names) if rule_names else None),
                 "description": "Web activity (%s/%s) %s to %s" % (
                     category or "unclassified", activity or "?", action_taken, meta.get("host")
                 ),
@@ -448,7 +472,7 @@ def emit_web_activity_event(meta, category, activity, action_taken, severity, le
 def handle_web_activity(meta):
     activity = meta.get("activity") or ""
     (action, category, level, reason, redacted_content, labels_redacted,
-     policy_id, policy_name, confidence) = evaluate_web_activity(meta)
+     policy_id, policy_name, confidence, matched_rules) = evaluate_web_activity(meta)
 
     # Downloads (August 26, 2026): the extension can no longer actually
     # block a download -- it used to cancel-then-re-issue, but that broke
@@ -463,18 +487,23 @@ def handle_web_activity(meta):
     # actually deliver for downloads.
     if action == "block" and activity == "download":
         emit_web_activity_event(meta, category, activity, "alerted", "critical", level, blocked=False,
-                                 policy_id=policy_id, policy_name=policy_name, policy_action=action, confidence=confidence)
+                                 policy_id=policy_id, policy_name=policy_name, policy_action=action, confidence=confidence,
+                                 matched_rules=matched_rules)
     elif action == "block":
         emit_web_activity_event(meta, category, activity, "alerted", "high", level, blocked=False,
-                                 policy_id=policy_id, policy_name=policy_name, policy_action=action, confidence=confidence)
+                                 policy_id=policy_id, policy_name=policy_name, policy_action=action, confidence=confidence,
+                                 matched_rules=matched_rules)
         emit_web_activity_event(meta, category, activity, "blocked", "critical", level, blocked=True,
-                                 policy_id=policy_id, policy_name=policy_name, policy_action=action, confidence=confidence)
+                                 policy_id=policy_id, policy_name=policy_name, policy_action=action, confidence=confidence,
+                                 matched_rules=matched_rules)
     elif action == "redact":
         emit_web_activity_event(meta, category, activity, "redacted", "medium", level, blocked=False,
-                                 policy_id=policy_id, policy_name=policy_name, policy_action=action, confidence=confidence)
+                                 policy_id=policy_id, policy_name=policy_name, policy_action=action, confidence=confidence,
+                                 matched_rules=matched_rules)
     elif action == "alert":
         emit_web_activity_event(meta, category, activity, "alerted", _web_activity_alert_severity(level, confidence), level, blocked=False,
-                                 policy_id=policy_id, policy_name=policy_name, policy_action=action, confidence=confidence)
+                                 policy_id=policy_id, policy_name=policy_name, policy_action=action, confidence=confidence,
+                                 matched_rules=matched_rules)
     else:
         # action == "allow": there are only four possible matrix actions
         # (ACTIONS in web_activity.py: allow/alert/block/redact) and "allow"
