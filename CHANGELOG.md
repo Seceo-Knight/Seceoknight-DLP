@@ -8,6 +8,51 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: routine JWT + address-book traffic forced Web Activity Control to Restricted (September 11, 2026)
+
+Follow-up to the matched_rules/detected_content fix above -- once that landed, the same
+Outlook-login alert's raw event showed exactly what matched: "JSON Web Token (JWT)",
+"Email Address" (x2), and a "Correlation: Bank Account (context)" entry. All three are
+routine noise, not a leak: `classify_content()`'s combined weight from a bare session JWT
+(weight 0.75) plus 2+ email addresses in the same JSON blob (weight 0.3, scaled to its 2x
+cap by hitting just 2 occurrences -- `classification_engine.py`'s threshold scaling) already
+sums past the 0.8 Restricted cutoff with no multiplier needed -- true for any authenticated
+webmail/collaboration/cloud page load, since a session JWT and multiple address-book entries
+are present in essentially all of them.
+
+Two fixes:
+
+1. **Phantom correlation entry.** `_correlate_signals()` in `classification_engine.py` builds
+   a "Correlation: Bank Account (context)" `extra_rules` entry whenever a 9-18 digit run and a
+   banking keyword (`"account"`, `"check"`, `"balance"`, etc. -- trivially present in Outlook
+   Web's own JSON field names like `isDefaultAccount`) both appear anywhere in the content --
+   but zeroes its own `bonus_weight` when the rules that already fired (JWT+Email here) already
+   cleared 0.8, since the correlation shouldn't double-count. The zeroed-out entry was still
+   being returned and appended to `matched_rules`/the stored event regardless, appearing as
+   apparent evidence for a detection it played no part in. Fixed to drop the entry when
+   `bonus_weight <= 0`, keeping it (unchanged) when it's a genuine contributor.
+2. **Structural-signal-only floor.** Added to `evaluate_web_activity()` in
+   `server/app/api/v1/agents.py`, mirroring the existing GenAI confidence-floor pattern already
+   in the same function: when EVERY matched rule's `classification_labels` fall within a
+   defined "structural/technical" set (`CREDENTIAL`, `JWT`, `API_KEY`, `CONTACT`, `EMAIL`) --
+   nothing else (an SSN, card number, health record, real financial document, custom pattern)
+   also matched -- alert/block/redact no longer trigger for `webmail`/`collaboration`/`cloud`
+   web activity. Deliberately scoped to the web-activity evaluation endpoint only, NOT to
+   `classification_engine.py`'s rule weights, so a genuinely leaked JWT in a file upload or a
+   bulk email-address export via clipboard/USB -- where these same signals legitimately matter
+   -- keeps its existing (unchanged) behavior. GenAI is excluded (already has its own floor)
+   and file_sharing is excluded (downloads/uploads keep the stricter existing behavior).
+
+Verified: `python3 -c "import ast; ast.parse(...)"` on both files; no existing test in
+`server/tests/` exercises `_correlate_signals()` or `evaluate_web_activity()` to check against;
+confirmed no other code references the `"correlation-bank"` rule_id being removed.
+
+**Deploy note:** server-only change (`server/app/services/classification_engine.py` and
+`server/app/api/v1/agents.py`) -- `git push` + `sudo bash update.sh` on the server, no agent or
+browser-extension rebuild needed, unlike the matched_rules/detected_content fix above.
+
+---
+
 ## Fix: Web Activity Control alerts carried no evidence of what matched (September 11, 2026)
 
 Found live: a Restricted/100%-confidence "Web Activity Detection" alert fired for

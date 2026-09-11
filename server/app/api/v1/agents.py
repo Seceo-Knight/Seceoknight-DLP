@@ -2380,6 +2380,47 @@ async def evaluate_web_activity(
         has_matches = bool(classification_result.matched_rules)
         matched_rules = list(classification_result.matched_rules)
 
+        # Structural-signal-only floor (found September 11 2026): a bare
+        # session JWT plus a couple of the user's own address-book entries
+        # is routine background noise on almost every authenticated webmail/
+        # collaboration/cloud page load -- NOT evidence someone is leaking
+        # data. Live example: simply opening Outlook Web (no email composed
+        # or sent) fired a Restricted/100%-confidence alert purely from its
+        # own background auth-sync POST, which matched "JSON Web Token
+        # (JWT)" (weight 0.75) and "Email Address" (weight 0.3, scaled to
+        # 2x by hitting just 2 occurrences -- see classify_content()'s
+        # threshold scaling) -- 1.05+ combined weight alone clears the 0.8
+        # Restricted cutoff with no multiplier even needed. Both rules are
+        # correctly tuned for OTHER channels (a leaked JWT in a file upload,
+        # or a bulk email-address export via clipboard/USB, genuinely IS
+        # sensitive) -- deliberately fixed HERE rather than by lowering
+        # those rules' weights in classification_engine.py, so this doesn't
+        # weaken detection anywhere else. If literally every matched rule's
+        # classification_labels fall within this "structural/technical"
+        # set -- nothing else (an SSN, card number, health record, real
+        # financial document, custom pattern, etc.) also matched -- don't
+        # let it drive alert/block for webmail/collaboration/cloud traffic.
+        # Still fully visible in matched_rules/has_matches/the stored event
+        # for anyone auditing it -- only the ALERT/BLOCK gate is raised,
+        # same non-destructive pattern the GenAI floor below and the phone-
+        # number no-context discount above both already use. GenAI is
+        # excluded here (it already has its own, separately-tuned floor
+        # just below) and file_sharing is excluded (an actual file
+        # download/upload deserves the stricter existing behavior).
+        _STRUCTURAL_ONLY_LABELS = {"CREDENTIAL", "JWT", "API_KEY", "CONTACT", "EMAIL"}
+        if category in ("webmail", "collaboration", "cloud") and matched_rules:
+            _matched_labels = set()
+            for _mr in matched_rules:
+                _matched_labels.update(_mr.get("classification_labels") or [])
+            if _matched_labels and _matched_labels.issubset(_STRUCTURAL_ONLY_LABELS):
+                is_sensitive_block = False
+                is_sensitive_alert = False
+                # Also clear has_matches so a policy in "redact" mode (the
+                # one action gate that doesn't check is_sensitive_*, see
+                # cell_action == "redact" below) doesn't redact routine
+                # technical noise either -- nothing here is worth redacting.
+                has_matches = False
+
         # GenAI-specific confidence floor (added September 10 2026, after a
         # live false-positive incident: a two-word ChatGPT greeting kept
         # firing MEDIUM "Internal"/"Confidential" alerts at 50-70%

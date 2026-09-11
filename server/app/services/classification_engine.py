@@ -1085,10 +1085,28 @@ class ClassificationEngine:
         if existing_weight >= 0.8:
             bonus_weight = max(0, bonus_weight - existing_weight)
 
+        bonus_weight = round(bonus_weight, 4)
+
+        # When existing_weight already zeroed the bonus out above, the
+        # "Correlation: Bank Account (context)" entry built into extra_rules
+        # earlier contributes literally nothing to the score (its own
+        # "weight" field is hardcoded 0.0 regardless -- see comment above,
+        # "Weight handled by correlation score" -- so it can't be filtered
+        # on that) but was still being returned and appended to
+        # matched_rules/the stored event, showing up as apparent evidence
+        # for a detection it played no part in. Found live September 11
+        # 2026: a Web Activity alert's matched_rules included "Correlation:
+        # Bank Account (context)" purely as a phantom entry riding along
+        # with an already-Restricted JWT+Email match, with nothing to do
+        # with the actual finding. Drop it here when it didn't genuinely
+        # contribute -- keep it (unchanged) when bonus_weight is real.
+        if bonus_weight <= 0:
+            extra_rules = [r for r in extra_rules if r.get("rule_id") != "correlation-bank"]
+
         return {
             "score": score,
             "signals": signals,
-            "bonus_weight": round(bonus_weight, 4),
+            "bonus_weight": bonus_weight,
             "extra_rules": extra_rules,
             "extra_matches": len(uncaught_candidates),
             "extra_types": extra_types,
