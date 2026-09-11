@@ -5,7 +5,7 @@ Polling service that fetches OneDrive Graph API delta events and ingests them in
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse, parse_qs
 
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_mongodb
 from app.core.cache import get_cache
 from app.models.onedrive import OneDriveConnection, OneDriveProtectedFolder
+from app.models.policy import Policy
 from app.services.event_processor import EventProcessor, get_event_processor
 from app.services.onedrive_event_normalizer import (
     TRACKED_EVENT_SUBTYPES,
@@ -27,6 +28,12 @@ from app.services.onedrive_oauth import OneDriveOAuthService
 
 
 logger = structlog.get_logger(__name__)
+
+# Celery Beat ticks poll_onedrive_activity every 5 minutes (see
+# reporting_tasks.py's beat_schedule) -- see GoogleDrivePollingService's
+# identical constant/fix for the full rationale; same bug, same fix, applied
+# here for parity between the two cloud connectors.
+_DEFAULT_POLL_INTERVAL_MINUTES = 5
 
 
 class OneDrivePollingService:
@@ -63,6 +70,33 @@ class OneDrivePollingService:
             processed += await self.poll_connection(connection)
         return processed
 
+    async def _get_min_polling_interval(self, connection_id) -> int:
+        """
+        Look up the shortest pollingInterval (minutes) configured across any
+        active onedrive_cloud_monitoring policy bound to this connection, so
+        the dashboard's per-policy "Polling Interval" selector actually
+        controls how often this connection is polled instead of being purely
+        decorative. Mirrors GoogleDrivePollingService._get_min_polling_interval.
+        """
+        stmt = select(Policy).where(
+            Policy.type == "onedrive_cloud_monitoring",
+            Policy.status == "active",
+            Policy.deleted_at.is_(None),
+        )
+        result = await self.db.execute(stmt)
+        policies = result.scalars().all()
+
+        intervals: List[int] = []
+        for policy in policies:
+            config = policy.config or {}
+            if config.get("connectionId") != str(connection_id):
+                continue
+            interval = config.get("pollingInterval")
+            if isinstance(interval, (int, float)) and interval > 0:
+                intervals.append(int(interval))
+
+        return min(intervals) if intervals else _DEFAULT_POLL_INTERVAL_MINUTES
+
     async def poll_connection(self, connection: OneDriveConnection) -> int:
         """
         Poll a single connection and ingest events.
@@ -71,6 +105,21 @@ class OneDrivePollingService:
         if not connection.folders:
             logger.debug("Skipping connection with no protected folders", connection_id=str(connection.id))
             return 0
+
+        if connection.last_polled_at:
+            min_interval = await self._get_min_polling_interval(connection.id)
+            last_polled = connection.last_polled_at
+            if last_polled.tzinfo is None:
+                last_polled = last_polled.replace(tzinfo=timezone.utc)
+            elapsed = datetime.now(timezone.utc) - last_polled
+            if elapsed < timedelta(minutes=min_interval):
+                logger.debug(
+                    "Skipping OneDrive connection -- not due yet",
+                    connection_id=str(connection.id),
+                    elapsed_seconds=elapsed.total_seconds(),
+                    min_interval_minutes=min_interval,
+                )
+                return 0
 
         if connection.is_token_expired():
             await self.oauth_service.refresh_access_token(connection)

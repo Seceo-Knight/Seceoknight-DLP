@@ -8,6 +8,41 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## OneDrive (Cloud): audit + two fixes (September 11, 2026)
+
+Deep audit of the OneDrive (Cloud) policy type, same approach as the Google Drive (Cloud) audit above. Also
+found to be well-built already: real Microsoft Graph API delta-query polling with automatic fallback to
+`_fetch_folder_events_via_children()` for accounts hitting the "SPO license" limitation
+(`onedrive_polling.py`), Fernet-encrypted token storage (`OneDriveConnection`, structurally identical to
+`GoogleDriveConnection`), Redis-backed hybrid modification detection comparing ETags to distinguish real
+content changes from Graph API's sometimes-misleading `created`/`updated` change-type reporting, and a
+policy-condition transformer (`_transform_onedrive_cloud_config`) matching
+`DatabasePolicyEvaluator._extract_field_value`'s `field_mappings` the same way Google Drive Cloud's does.
+It shared the exact same two issues, though -- same fixes applied:
+
+1. **Decorative "Polling Interval" selector.** `OneDriveCloudPolicyForm.tsx` offers the identical 5/10/15/30/60
+   or custom interval per policy, but `OneDrivePollingService.poll_connection()` had no interval-check at all --
+   every connection polled on every Celery Beat tick (`crontab(minute="*/5")`) regardless of what was configured.
+   Fixed with the same pattern as Google Drive Cloud: added `_get_min_polling_interval()` (looks up the
+   shortest `pollingInterval` across active `onedrive_cloud_monitoring` policies pointing at that connection,
+   falling back to 5 minutes) and a gate in `poll_connection()` that skips the poll if `last_polled_at` is more
+   recent than that interval.
+2. **OAuth-not-configured error swallowed into a generic toast.** `OneDriveOAuthService._ensure_oauth_config()`
+   already returns a clear 503 ("OneDrive OAuth is not configured. Provide ONEDRIVE_CLIENT_ID and
+   ONEDRIVE_CLIENT_SECRET env vars") -- but `OneDriveCloudPolicyForm.tsx`'s `handleConnect` catch block
+   discarded it for a generic "Failed to initiate connection" toast. Fixed to use the existing
+   `extractErrorDetail()` util, same as the Google Drive Cloud fix.
+
+Verified: Python `ast.parse()` on `onedrive_polling.py`; no existing `test_onedrive_polling_service.py` (or
+similar) was found in the repo to check against, so there's nothing this change could regress there; `tsc
+--noEmit` on the dashboard shows zero new errors (the same pre-existing unused-import warning now appears in
+`OneDriveCloudPolicyForm.tsx` too, identical to `GoogleDriveCloudPolicyForm.tsx`'s).
+
+Not yet updated: `ONEDRIVE_SETUP_GUIDE.md` predates this fix and doesn't yet document the polling-interval
+behavior the way `GOOGLE_DRIVE_SETUP_GUIDE.md` does.
+
+---
+
 ## Docs: Google Drive OAuth setup guide + .env.example gap (September 11, 2026)
 
 Follow-up to the Google Drive (Cloud) audit below. Found while walking through live setup: there was no

@@ -11,6 +11,7 @@ import { Loader2, Plus, Cloud, RefreshCcw, Check } from 'lucide-react'
 import ProtectedFolderSelector from '../onedrive/ProtectedFolderSelector'
 import { toast } from 'react-hot-toast'
 import { formatDate } from '@/lib/utils'
+import { extractErrorDetail } from '@/utils/errorUtils'
 
 interface OneDriveCloudPolicyFormProps {
   config: OneDriveCloudConfig
@@ -103,7 +104,11 @@ export default function OneDriveCloudPolicyForm({
       toast.success('Please complete authentication in the popup window')
     } catch (error) {
       console.error(error)
-      toast.error('Failed to initiate connection')
+      // Surface the backend's actual reason (e.g. "OneDrive OAuth is not
+      // configured. Provide ONEDRIVE_CLIENT_ID and ONEDRIVE_CLIENT_SECRET
+      // env vars", returned as a 503 by OneDriveOAuthService._ensure_oauth_config())
+      // instead of a generic message -- same fix as GoogleDriveCloudPolicyForm.
+      toast.error(extractErrorDetail(error, 'Failed to initiate connection'))
     } finally {
       setConnecting(false)
     }
