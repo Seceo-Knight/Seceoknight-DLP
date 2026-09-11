@@ -8,6 +8,39 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: Policies page "Violations (24h)" stat card stuck at 0 (September 11, 2026)
+
+Reported live: Policies tab lists 6 policies, each showing a real, nonzero lifetime "Violations: N" count
+in its own row (Web Activity Detection: 49, USB Device detection: 5, etc.), but the "VIOLATIONS (24H)"
+card at the top of the page showed 0 -- including immediately after a Web Activity Detection alert had
+just fired, which should have counted.
+
+Root cause: `GET /policies/stats/summary` (`server/app/api/v1/policies.py`) queries the MongoDB `alerts`
+collection with `{"created_at": {"$gte": <a Python datetime>}}`. The ONLY writer of that collection,
+`execute_alert()` in `server/app/actions/action_executor.py`, stores `created_at` as
+`datetime.now(timezone.utc).isoformat()` -- an ISO-8601 STRING, never a BSON Date. A prior commit's
+comment on this exact line claimed the opposite (that `created_at` is a native BSON Date) and "fixed" a
+different bug by comparing against a raw datetime instead of a string -- which was backwards. Mongo/BSON
+sorts Date > String unconditionally regardless of value, so a Date `$gte` a String-valued field matches
+nothing at all: the card was always 0, at every time of day, on every install, not just when there
+happened to be no recent violations. (The earlier version of this bug -- comparing a Date field against
+a string -- had the opposite failure mode: Date > String meant `$gte` against a string matched EVERY
+document, silently showing an all-time count instead of a 24h one. Both versions were wrong in opposite
+directions; neither was ever actually time-bounded.)
+
+The per-policy "Violations: N" counts shown in each row were never affected -- those come from a
+different endpoint entirely (`GET /policies/`, same file) querying the `dlp_events` collection, whose
+`timestamp` field genuinely is written as a native Python `datetime` elsewhere in the codebase, so that
+comparison was type-matched all along.
+
+Fix: compare `created_at` against `lookback.isoformat()` -- a string built the same way
+(`datetime.now(timezone.utc)`, so the two strings share the same `+00:00`-suffixed format and sort
+lexicographically the same as chronologically) instead of against a raw datetime. Server-only change, no
+browser extension or agent involved -- takes effect after `sudo bash update.sh` rebuilds the API
+container, no extension version bump needed.
+
+---
+
 ## Fix: request-side ("post") false positives from classifying the raw JSON request envelope, not the typed message (September 10, 2026)
 
 All of the September 10 fixes above addressed the RESPONSE side (`ai_response`) -- what a genai vendor

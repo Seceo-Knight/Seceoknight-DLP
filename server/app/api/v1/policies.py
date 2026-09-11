@@ -962,20 +962,30 @@ async def get_policy_stats(
     # Count alerts rather than blocked events — policies that alert (not block)
     # still generate violations and should be counted here.
     #
-    # BUG FIX: `created_at` is stored as a native BSON Date (see
-    # alerts.py's `isinstance(alert_dict[dt_field], datetime)` normalization
-    # -- it only converts to a string for the API *response*, the stored
-    # value is a real datetime). Comparing it against `lookback.isoformat()`
-    # (a Python string) was a cross-type Mongo comparison: BSON sorts Date
-    # strictly greater than String regardless of value, so `$gte` against a
-    # string matched *every* Date-valued document in the collection, not
-    # just the last 24h. This "Violations (last 24h)" stat was silently
-    # counting all-time violations. Passing the raw datetime fixes the
-    # comparison to actually be type-matched and time-bounded.
+    # BUG FIX (September 11, 2026): the previous version of this comment
+    # claimed `created_at` is stored as a native BSON Date and compared it
+    # against a raw Python `datetime`. That premise was false -- the only
+    # writer of this collection, `execute_alert()` in
+    # app/actions/action_executor.py, inserts
+    # `"created_at": datetime.now(timezone.utc).isoformat()`, an ISO-8601
+    # STRING, never a BSON Date. `alerts.py`'s `isinstance(..., datetime)`
+    # checks elsewhere are a defensive *read-path* normalization (in case a
+    # future/legacy writer ever does store a real Date) -- they say nothing
+    # about what's actually in the collection today.
+    #
+    # Comparing a string-valued field with `$gte` against a Python datetime
+    # is a cross-type Mongo comparison: BSON's type-ordering sorts
+    # Date > String unconditionally, so a Date `$gte` a String matches
+    # NOTHING -- confirmed live, this card was showing "Violations (24h): 0"
+    # even minutes after a real alert had just fired. Comparing against a
+    # STRING built the same way the field is actually written (`.isoformat()`
+    # on a timezone-aware UTC datetime, so the two strings share the same
+    # "+00:00"-suffixed format and sort lexicographically == chronologically)
+    # fixes the comparison to actually be type-matched and time-bounded.
     mongo = get_mongodb()
-    lookback = datetime.utcnow() - timedelta(hours=24)
+    lookback = datetime.now(timezone.utc) - timedelta(hours=24)
     violations = await mongo.get_collection("alerts").count_documents(
-        {"created_at": {"$gte": lookback}}
+        {"created_at": {"$gte": lookback.isoformat()}}
     )
     stats["violations"] = violations
 
