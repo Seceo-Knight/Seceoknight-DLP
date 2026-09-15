@@ -8,6 +8,50 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: missing Channel field in Classification Policy condition builder + Cloud Upload Guard dropped its matched policy (September 15, 2026)
+
+Two follow-ups found during a live test of the Browser Upload Monitoring fixes above, both surfaced
+by the user while walking through the test policy in the dashboard.
+
+1. **`ClassificationPolicyForm.tsx` never offered "Channel" as a selectable condition Field.** The
+   backend fully supports a `channel` condition (`DatabasePolicyEvaluator`'s `field_mappings`, and
+   the seeded "Detect Browser Upload" policy already matches on `channel == "BROWSER"`), but the
+   dropdown's `FIELD_OPTIONS` list never included it -- so a new condition using `channel` could only
+   ever be authored by editing a policy's JSON directly (migration/seed), never through the UI. Fixed:
+   added `channel` as a select-type option with the three real values any agent code path actually
+   emits (`CLI`, `BROWSER`, `MESSAGING` -- cross-checked against `network_exfil_monitor.cpp` and
+   `messaging_text_monitor.cpp`; `USB`/`PRINT`/`WEB` were only ever illustrative examples in a
+   docstring, never sent by any agent).
+
+2. **Cloud Upload Guard (`skdlp_host.py`) silently blocked uploads but never told the dashboard which
+   policy caused it.** Live-tested: a policy with condition `event_type equals cloud_upload`, action
+   Block, correctly blocked a real browser upload to filebin.net -- the server-side
+   `/agents/{id}/policy/evaluate` call already resolves and returns exactly which policy matched
+   (`PolicyEvaluationResponse.policies_triggered`). But `skdlp_host.py`'s `evaluate()` discarded that
+   list entirely, and `emit_event()` never sent `policy_id`/`policy_name` when creating the event --
+   so the dashboard's Event Details showed `blocked` with no "Matched Policy" section, and the
+   policy's own violations count stayed at 0 even for a real, successful block. `EventCreate` already
+   declares `policy_id`/`policy_name` specifically for this purpose (the same mechanism Web Activity
+   Control uses, fixed September 11), so no server change was needed -- fixed by threading
+   `policy_id`/`policy_name` from `evaluate()`'s response through `handle()` into `emit_event()`.
+
+Also worth recording: this session clarified that Browser Upload Monitoring's condition needs to
+target the right one of *two* separate browser-related detection mechanisms. `channel` conditions
+only ever match `network_exfil_monitor.cpp`'s dialog-selection detector (alert-only, can never
+block -- see the audit above). To build a policy that can genuinely **block** a browser upload, the
+condition must match what Cloud Upload Guard's real-time `evaluate()` call actually sends:
+`event_type` (`cloud_upload`), `destination_type` (`cloud`), `destination_path`, `file_name`,
+`file_size`, or classification results -- never `channel`, which that call doesn't send at all.
+
+Verified: `tsc --noEmit` on the dashboard diffed against baseline (21 pre-existing errors, no new
+ones); Python `ast.parse()` on `skdlp_host.py`; live end-to-end test confirmed a real block with the
+policy now correctly attributed in the Event Details view. This `skdlp_host.py` change is part of the
+browser extension's native host, not `network_exfil_monitor.cpp`/`agent.cpp` -- deploys via the
+standard browser-extension repackage path (`update.sh` on the server, then Force extension reinstall
+or a full Update on the endpoint), not the full agent-binary CI rebuild.
+
+---
+
 ## Browser Upload Monitoring: audit + fixes (September 15, 2026)
 
 Deep audit of `browser_upload_monitoring`, following directly from the Classification Aware

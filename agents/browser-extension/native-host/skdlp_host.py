@@ -173,9 +173,20 @@ def send_message(obj):
 
 # ---- DLP server calls ----
 def evaluate(meta):
-    """Return (action, level, reason). action in {block, alert, allow}."""
+    """Return (action, level, reason, policy_id, policy_name). action in {block, alert, allow}.
+
+    policy_id/policy_name identify WHICH policy the server's
+    /agents/{id}/policy/evaluate call actually matched (it already computes
+    this -- see PolicyEvaluationResponse.policies_triggered on the server).
+    Previously discarded entirely: a blocked/alerted cloud upload's event
+    showed no "Matched Policy" anywhere in the dashboard, even though the
+    server had already resolved exactly which policy caused the decision.
+    Same evidence-dropping bug class fixed for Web Activity Control on
+    September 11, 2026 (see emit_web_activity_event()'s matched_rules) --
+    this is the equivalent gap for Cloud Upload Guard's own event path.
+    """
     if requests is None or not CFG["agent_key"]:
-        return "allow", None, "host-unconfigured"
+        return "allow", None, "host-unconfigured", None, None
     try:
         # CRITICAL: send the raw bytes as file_content_b64, NOT decoded to
         # UTF-8 text. inject.js already base64-encodes the real file bytes
@@ -210,40 +221,64 @@ def evaluate(meta):
         r.raise_for_status()
         body = r.json()
         level = (body.get("classification") or {}).get("level")
+        # Just take the first triggered policy, same single-value simplification
+        # emit_web_activity_event() already uses for its own policy_id/policy_name
+        # -- in practice only one policy is normally configured to match a given
+        # cloud-upload condition at a time.
+        triggered = body.get("policies_triggered") or []
+        policy_id = triggered[0].get("policy_id") if triggered else None
+        policy_name = triggered[0].get("policy_name") if triggered else None
         if body.get("action") == "block":
-            return "block", level, body.get("reason")
+            return "block", level, body.get("reason"), policy_id, policy_name
         if body.get("alert_severity"):
-            return "alert", level, body.get("reason")
-        return "allow", level, body.get("reason")
+            return "alert", level, body.get("reason"), policy_id, policy_name
+        return "allow", level, body.get("reason"), policy_id, policy_name
     except Exception as e:
         log("evaluate failed: %s" % e)
-        return "allow", None, "evaluate-error"
+        return "allow", None, "evaluate-error", None, None
 
 
-def emit_event(meta, action_taken, severity, level, subtype, blocked):
+def emit_event(meta, action_taken, severity, level, subtype, blocked, policy_id=None, policy_name=None):
     """Emit one DLP event. Field names match the server's EventCreate schema
     (undeclared fields are silently dropped), so we map the browser upload onto
     event_id/agent_id/action/destination/blocked/event_subtype/etc."""
     if requests is None or not CFG["agent_key"]:
         return
     try:
+        payload = {
+            "event_id": "clupload-" + uuid.uuid4().hex,
+            "agent_id": CFG["agent_id"],
+            "event_type": "network_exfil",
+            "event_subtype": subtype,
+            "severity": severity,
+            "action": action_taken,               # logged | alerted | blocked
+            "blocked": bool(blocked),
+            "destination": meta.get("host") or meta.get("url"),
+            "destination_type": "cloud",
+            "file_path": meta.get("fileName"),
+            "classification_level": level,
+            "description": "Cloud upload %s (%s) to %s" % (subtype, level or "Unknown", meta.get("host")),
+        }
+        if policy_id:
+            # EventCreate.policy_id/policy_name (events.py) exists exactly for
+            # this: a caller that already resolved its own policy match ahead
+            # of time gets that result written directly into the stored
+            # event's matched_policies at creation, instead of relying on the
+            # generic background DatabasePolicyEvaluator -- which can't
+            # re-derive it anyway, since this event's stored event_type
+            # ("network_exfil") doesn't match the condition that actually
+            # fired ("event_type equals cloud_upload", evaluated against the
+            # real-time request body, not the stored event doc). Without
+            # this, the Policies page's "Violations" count for this policy
+            # stayed 0 and the event's "Matched Policy" was blank forever,
+            # even for a correctly-blocked upload.
+            payload["policy_id"] = policy_id
+        if policy_name:
+            payload["policy_name"] = policy_name
         requests.post(
             "%s/events/" % CFG["server_url"].rstrip("/"),
             headers={"X-Agent-Key": CFG["agent_key"], "Content-Type": "application/json"},
-            json={
-                "event_id": "clupload-" + uuid.uuid4().hex,
-                "agent_id": CFG["agent_id"],
-                "event_type": "network_exfil",
-                "event_subtype": subtype,
-                "severity": severity,
-                "action": action_taken,               # logged | alerted | blocked
-                "blocked": bool(blocked),
-                "destination": meta.get("host") or meta.get("url"),
-                "destination_type": "cloud",
-                "file_path": meta.get("fileName"),
-                "classification_level": level,
-                "description": "Cloud upload %s (%s) to %s" % (subtype, level or "Unknown", meta.get("host")),
-            },
+            json=payload,
             timeout=5,
             verify=CFG.get("verify_tls", False),  # see the comment in evaluate()
         )
@@ -559,15 +594,15 @@ def fetch_extra_hosts():
 
 
 def handle(meta):
-    action, level, reason = evaluate(meta)
+    action, level, reason, policy_id, policy_name = evaluate(meta)
     if action == "block":
         # Explicit attempt + prevention pair, per the policy requirement.
-        emit_event(meta, "alerted", "high", level, "cloud_upload_attempt", blocked=False)
-        emit_event(meta, "blocked", "critical", level, "cloud_upload_prevented", blocked=True)
+        emit_event(meta, "alerted", "high", level, "cloud_upload_attempt", blocked=False, policy_id=policy_id, policy_name=policy_name)
+        emit_event(meta, "blocked", "critical", level, "cloud_upload_prevented", blocked=True, policy_id=policy_id, policy_name=policy_name)
     elif action == "alert":
-        emit_event(meta, "alerted", "medium", level, "cloud_upload_internal", blocked=False)
+        emit_event(meta, "alerted", "medium", level, "cloud_upload_internal", blocked=False, policy_id=policy_id, policy_name=policy_name)
     else:
-        emit_event(meta, "logged", "info", level, "cloud_upload_allowed", blocked=False)
+        emit_event(meta, "logged", "info", level, "cloud_upload_allowed", blocked=False, policy_id=policy_id, policy_name=policy_name)
     return action, level, reason
 
 
