@@ -843,9 +843,33 @@ def _transform_file_identity_denylist_config(config: Dict[str, Any]) -> Tuple[Di
     database_policy_evaluator.py's _extract_field_value), so an ordinary "in"
     rule is sufficient.
 
-    Applies to any event carrying a file_path/file_hash -- file system,
-    file transfer, USB transfer, and print events all populate these fields,
-    so one denylist policy covers a file however it's encountered.
+    IMPORTANT -- despite this transform producing generic conditions/rules
+    that COULD in principle match any event carrying file_path/file_hash,
+    real enforcement today only actually happens on two channels, and via a
+    completely separate, dedicated mechanism (not the conditions/rules this
+    function builds): USB removable-drive transfers and network-share
+    transfers. Those are matched agent-side, synchronously, by
+    IsFileDenylisted()/QuarantineDenylistedFile() (agent.cpp), fed by the
+    dedicated GET /agents/{id}/file-identity-denylist polling endpoint that
+    reads policy.config directly -- NOT by the conditions/rules built here.
+    Print jobs DO reach this function's rules for real, pre-emptive blocking
+    (same synchronous /policy/evaluate call as USB/network-share, and
+    file_hash is forwarded there -- see PolicyEvaluationRequest.file_hash's
+    docstring in agents.py). File System Monitoring's plain create/modify/
+    delete watcher never calls IsFileDenylisted() at all (consistent with
+    it being a detect-only channel by design), and File Transfer Monitoring
+    always pre-resolves its own policy decision before its event reaches
+    the server, which causes the background event processor to skip the
+    generic evaluator (these rules) entirely for that channel -- so a
+    denylist policy's extension/hash rules never get evaluated against File
+    Transfer Monitoring events either. Where these rules DO get evaluated
+    only via the background (already-completed-event) path rather than a
+    synchronous pre-action call, "block"/"quarantine" actions are cosmetic
+    (the file operation already finished) -- real, pre-emptive blocking
+    only happens via the dedicated USB/network-share mechanism above, or
+    via this function's rules when reached through a synchronous real-time
+    /policy/evaluate call (currently: print only). Found and documented
+    during the September 2026 File Identity Denylist audit.
 
     Frontend format:
     {

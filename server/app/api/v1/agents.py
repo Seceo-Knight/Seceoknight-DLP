@@ -1860,6 +1860,22 @@ class PolicyEvaluationRequest(BaseModel):
         None, description="Why the caller could not inspect: too_large | unreadable"
     )
     file_size: Optional[int] = Field(None, description="File size in bytes")
+    # agent.cpp's EvaluatePrintContent() has always sent this (the spooled
+    # document's SHA-256, computed agent-side since the print channel only
+    # forwards extracted text, not raw bytes the server could hash itself) --
+    # but this field was never declared here, so it was silently dropped by
+    # Pydantic before evaluate_policy_realtime() ever built its event_data
+    # dict, and a File Identity Denylist policy's `file_hash in [...]` rule
+    # could never match a print job despite the agent-side plumbing existing
+    # specifically for that purpose (see the agent's own comment at the
+    # call site). Declaring it here and forwarding it below makes print
+    # denylist matching real -- and since print already goes through this
+    # same synchronous, pre-job evaluate call (like USB/network-share
+    # transfers), a matched "block" action now genuinely stops the print
+    # job, not just logs it. USB/network-share transfers compute their own
+    # hash server-side from file_content_b64 and don't need this field, but
+    # declaring it generically here doesn't change that path.
+    file_hash: Optional[str] = Field(None, description="SHA-256 hash (hex) of the file/document, when the caller already computed it (e.g. print jobs)")
     event_type: str = Field("clipboard_copy", description="Event type (e.g., 'usb_file_transfer', 'clipboard_copy')")
     destination_type: Optional[str] = Field(None, description="Destination type (e.g., 'removable_drive', 'network')")
     source_path: Optional[str] = Field(None, description="Source file path")
@@ -2031,6 +2047,13 @@ async def evaluate_policy_realtime(
             "extraction_status": extraction_status,
             "extraction_kind": extract_kind,
         }
+        if request.file_hash:
+            # See PolicyEvaluationRequest.file_hash's docstring above -- this
+            # is what makes File Identity Denylist's `file_hash in [...]`
+            # rule (DatabasePolicyEvaluator's field_mappings already looks
+            # up the top-level "file_hash" key) actually reachable for the
+            # print channel.
+            event_data["file_hash"] = request.file_hash
 
         # 3. Evaluate classification-aware policies
         policy_evaluator = DatabasePolicyEvaluator()

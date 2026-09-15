@@ -84,8 +84,17 @@ export default function FileIdentityDenylistPolicyForm({ config: rawConfig, onCh
     <div className="space-y-6">
       <div className="p-4 bg-warning/10 border border-warning/30 rounded-lg text-sm text-warning">
         Blocks files by <strong>what they are</strong> -- extension or exact-content hash -- independent of
-        DLP content classification. Matches against file system, file transfer, USB transfer, and print events.
-        At least one extension or hash is required.
+        DLP content classification. At least one extension or hash is required.
+        <p className="mt-2 text-xs text-warning/80">
+          {/* Corrected during the September 2026 audit -- this previously
+              claimed coverage of File System Monitoring and File Transfer
+              Monitoring too, which was never true. See
+              _transform_file_identity_denylist_config()'s docstring in
+              policy_transformer.py for the full breakdown of why. */}
+          Real, pre-emptive enforcement today covers USB removable-drive transfers, network-share transfers,
+          and print jobs. File System Monitoring and File Transfer Monitoring events do not consult this
+          policy at all -- a denylisted file copied through either of those paths will not be caught.
+        </p>
       </div>
 
       {/* Extensions */}

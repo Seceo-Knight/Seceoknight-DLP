@@ -8,6 +8,66 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## File Identity Denylist: audit + fixes (September 15, 2026)
+
+Deep audit of `file_identity_denylist`, same rigor as the other policy-type audits this
+session. Found a genuine two-mechanism architecture: a dedicated polling endpoint
+(`GET /agents/{id}/file-identity-denylist`) feeds the agent's own `IsFileDenylisted()`/
+`QuarantineDenylistedFile()` check, which provides real, working, pre-emptive blocking --
+but only for USB removable-drive transfers and network-share transfers. Separately, this
+policy type also produces generic `file_extension`/`file_hash` conditions/rules (via
+`_transform_file_identity_denylist_config()`) evaluated by the same shared
+`DatabasePolicyEvaluator` every other condition-based policy uses. The dashboard and the
+transformer's own docstring both claimed this second path additionally covered File System
+Monitoring, File Transfer Monitoring, and Print -- untrue for two different reasons, one of
+which was a real, fixable bug:
+
+1. **Print: file_hash silently dropped (fixed).** `agent.cpp`'s `EvaluatePrintContent()` has
+   always computed the spooled document's SHA-256 and sent it to
+   `/agents/{id}/policy/evaluate` specifically so a hash-denylist rule could match -- but
+   `PolicyEvaluationRequest` (agents.py) never declared a `file_hash` field, so it was
+   silently stripped by Pydantic before `evaluate_policy_realtime()` ever built its
+   `event_data` dict. Same undeclared-field bug class as several earlier fixes this session.
+   Fixed: declared `file_hash` on the request model and forwarded it into `event_data`. Since
+   print already goes through this same synchronous, pre-job `/policy/evaluate` call used by
+   USB/network-share transfers, a matched "block" action now genuinely stops the print job --
+   not just logs it.
+
+2. **File System Monitoring: no enforcement hook exists, by design.** `IsFileDenylisted()` is
+   never called from the plain file create/modify/delete watcher -- consistent with that
+   channel being detect-only, the same architectural pattern already documented for
+   Classification Aware Policy's own File System Monitoring scope gap.
+
+3. **File Transfer Monitoring: architectural bypass, documented not fixed.** FTM always
+   pre-resolves its own policy decision before its event reaches the server, which causes the
+   background event processor to skip the generic evaluator entirely for that channel -- a
+   denylist policy's extension/hash rules never get a chance to run against FTM events. Left
+   as a documented gap rather than fixed, since resolving it means deciding how FTM's own
+   pre-resolved decision should interact with an independently-matching generic policy, not a
+   contained bug fix.
+
+4. **Coverage claims corrected.** `FileIdentityDenylistPolicyForm.tsx`'s info box and
+   `_transform_file_identity_denylist_config()`'s docstring both previously claimed coverage
+   of File System Monitoring and File Transfer Monitoring. Corrected to state plainly what's
+   actually enforced today: USB, network-share, and (after fix 1) print -- and that File
+   System Monitoring and File Transfer Monitoring events don't consult this policy at all.
+
+Not fixed, left as-is: even where the generic rules/conditions path is only reached via the
+background (already-completed-event) processor rather than a synchronous pre-action call,
+its "block"/"quarantine" actions are cosmetic -- the file operation has already finished by
+the time an async event is evaluated. Real, pre-emptive enforcement only ever happens via the
+dedicated USB/network-share mechanism, or via the generic rules when reached through a
+synchronous real-time `/policy/evaluate` call (now: print, previously: none).
+
+Verified: Python `ast.parse()` on `agents.py` and `policy_transformer.py`; `tsc --noEmit` on
+the dashboard diffed against baseline (21 pre-existing errors, no new ones). This is a
+server/dashboard-only change (`agents.py`, `policy_transformer.py`,
+`FileIdentityDenylistPolicyForm.tsx`) -- no `agent.cpp`/`network_exfil_monitor.cpp` change, so
+no CI agent-binary rebuild and no Windows-endpoint update needed; `git push` + `sudo bash
+update.sh` on the server is sufficient.
+
+---
+
 ## Fix: missing Channel field in Classification Policy condition builder + Cloud Upload Guard dropped its matched policy (September 15, 2026)
 
 Two follow-ups found during a live test of the Browser Upload Monitoring fixes above, both surfaced
