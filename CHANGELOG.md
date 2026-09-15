@@ -8,6 +8,79 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Classification Aware Policy + Email Send Prevention: audit + fixes (September 2026)
+
+Deep audit of `classification_aware_policy` and `email_send_prevention`, same rigor as the
+Google Drive Local/Cloud, OneDrive Cloud, and Web Activity Control audits above. Unlike those,
+this policy type's evaluation pipeline itself was found sound -- classification_level is
+correctly populated before evaluation on every channel that reaches it, and real enforcement
+exists for USB file transfer, network share transfer (content-aware mode), print jobs,
+outbound email, and clipboard actions. The bugs were all further up the stack: the dashboard
+never actually asked for the right thing, or asked for something that could never match.
+
+1. **`type` never persisted for classification_aware_policy / browser_upload_monitoring.**
+   `PolicyCreatorModal.tsx`'s save branch for these two policy types omitted the `type` field
+   entirely -- every such policy was stored with `type = NULL`. Server-side, `type` is passed
+   through to `create_policy()`/`update_policy()` regardless of whether `config` is set (the
+   `if policy.config and policy.type` check only decides whether conditions/actions get
+   *derived from config*, not whether `type` gets saved), so this was purely a missing field on
+   the frontend payload. Consequences: RBAC domain scoping fell back to "general" instead of
+   "data_protection" (`domain_for_policy_type(None)`), the Policies list rendered a generic
+   icon and the label "Unknown" for every one of these policies (`policyUtils.ts` also had no
+   `case 'classification_aware_policy'` in either switch, compounding it), and editing *any*
+   policy of either type always re-opened it mislabeled as Classification-Aware (both shared
+   the same `type=NULL` fallback in the editor). Fixed: added `type: policyType` to the save
+   payload, added the missing switch cases (Shield icon, matching `PolicyTypeSelector.tsx`'s
+   own icon for this type). Existing policies created before this fix still have `type=NULL` in
+   the database and won't self-heal -- they need to be re-saved once to pick up the correct type.
+
+2. **Classification Aware Policy's "Event Type" condition offered five values that could never
+   match a real event.** `ClassificationPolicyForm.tsx`'s dropdown included `file_create`,
+   `file_modify`, `file_delete`, `usb_connect`, and `cloud_upload`(uncertain at audit time,
+   confirmed real on inspection and kept) against the actual strings `agent.cpp` sends: File
+   System Monitoring sends `event_type="file"` with `event_subtype="file_created"` /
+   `"file_modified"` / `"file_deleted"` (not a top-level `event_type` of `"file_create"` etc.),
+   and USB events always send `event_type="usb"` or `"usb_file_transfer"`, never
+   `"usb_connect"` (that string only exists inside USB Device Monitoring's own unrelated
+   `monitoredEvents` config). Selecting any of the four genuinely-dead values produced a
+   condition that could never evaluate true, with no error anywhere. Fixed: removed the four
+   dead values, added the confirmed-real `usb_file_transfer`, `network_share_transfer`, and
+   `print` (cross-checked against every real-time `/policy/evaluate` call site in `agent.cpp`).
+   The Event Subtype dropdown had the identical problem (`file_upload`/`paste`/`drag_drop` were
+   never real values anywhere) -- replaced with confirmed-real `file_created`/`file_modified`/
+   `file_deleted` and `messaging_file_selection` (alongside the already-correct
+   `browser_file_selection`).
+
+3. **Email Send Prevention: unchecking all trigger levels fired on every email instead of
+   none.** `EmailPolicyForm.tsx` tells the admin "Selecting no levels means the action never
+   fires." But `_transform_email_config()` in `policy_transformer.py` omitted the
+   `classification_level` condition entirely when `triggerLevels` was empty, leaving just
+   `destination_type == "email"` with `match: "all"` -- which matches *every* outbound email
+   regardless of classification. Fixed: the condition is now always appended, using
+   `triggerLevels` as-is (including empty). `DatabasePolicyEvaluator`'s `in` operator against an
+   empty `value` list is always False for any event value, so an empty selection now correctly
+   makes the whole policy unsatisfiable, matching the documented behavior. Verified with a
+   direct call to `_transform_email_config({'action': 'block', 'triggerLevels': []})`.
+
+4. **Documented, not fixed: two scope gaps.** File System Monitoring's plain create/modify/
+   delete path (`agent.cpp`'s `HandleFileEvent`) deliberately ignores this policy type's
+   evaluation result for its own action decision, to avoid one policy type's verdict bleeding
+   into an unrelated one -- so a Classification Aware policy can alert-log on file events (now
+   that Fix 2 makes the condition matchable) but never block/quarantine one. Web Activity
+   (GenAI/webmail/cloud collaboration) traffic skips the generic policy evaluator entirely --
+   `event_processor.py` routes it through `web_activity_control`'s own matrix-based evaluator
+   instead, so a Classification Aware policy can never match it at all. Both are likely
+   intentional architectural choices (avoiding cross-policy-type interference), but neither was
+   previously disclosed anywhere an admin configuring this policy type would see it. Added an
+   explanatory note directly in `ClassificationPolicyForm.tsx`'s info box.
+
+Verified: `tsc --noEmit` on the dashboard shows zero new errors across all three dashboard
+file changes (only the same pre-existing baseline noise); Python `ast.parse()` on
+`policy_transformer.py`; no existing test in `server/tests/` exercises `_transform_email_config()`
+or the classification-aware save path to check against.
+
+---
+
 ## Fix: routine JWT + address-book traffic forced Web Activity Control to Restricted (September 11, 2026)
 
 Follow-up to the matched_rules/detected_content fix above -- once that landed, the same

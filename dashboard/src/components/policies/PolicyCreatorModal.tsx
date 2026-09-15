@@ -438,6 +438,21 @@ export default function PolicyCreatorModal({
       policy = {
         name: policyName.trim(),
         description: description.trim() || undefined,
+        // Was missing entirely -- server's create_policy()/update_policy()
+        // still persist whatever `type` is passed regardless of whether
+        // `config` is set (see policies.py: the `if policy.config and
+        // policy.type` check only decides whether to derive
+        // conditions/actions FROM config, not whether type gets saved), so
+        // omitting it here meant every classification_aware_policy and
+        // browser_upload_monitoring policy was stored with type=NULL.
+        // That broke RBAC domain scoping (domain_for_policy_type(None)
+        // falls back to "general" instead of "data_protection" --
+        // domains.py), and left the Policies list unable to tell the two
+        // types apart or render their real icon/label (PolicyRow.tsx /
+        // policyUtils.ts fall back to a generic icon + "Unknown" for a
+        // null type). Found in the September 2026 Classification Aware
+        // Policy audit.
+        type: policyType,
         severity: derivedSeverity,
         priority,
         enabled,
@@ -445,7 +460,15 @@ export default function PolicyCreatorModal({
         conditions: conditionsArray,
         actions: actionsArray,
         agentIds: agentId ? [agentId] : [],
-      } as Partial<Policy> & { match: 'all' | 'any' }
+        // `conditions`/`actions` here are the flat API request shapes
+        // (PolicyCondition[] / {type,parameters}[]), not Policy's own
+        // richer `conditions?: {match,rules}` / `actions?: {alert:{...}}`
+        // display shapes -- this object is what gets POSTed, not a real
+        // Policy. Adding `type` above was enough new overlap for TS's
+        // assertion check to flag the cast as unsafe; go through `unknown`
+        // as the compiler itself suggests, same as before -- no behavior
+        // change, this is what actually gets sent over the wire either way.
+      } as unknown as Partial<Policy> & { match: 'all' | 'any' }
     } else {
       // Traditional policy uses type/severity/config format
       policy = {

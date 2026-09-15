@@ -38,10 +38,29 @@ const FIELD_OPTIONS = [
   { value: 'classification_level', label: 'Classification Level', type: 'select', options: ['Public', 'Internal', 'Confidential', 'Restricted'] },
   { value: 'confidence_score', label: 'Confidence Score', type: 'number' },
   { value: 'classification_labels', label: 'Classification Labels (contains)', type: 'text' },
-  { value: 'event_type', label: 'Event Type', type: 'select', options: ['file_transfer', 'clipboard', 'file_create', 'file_modify', 'file_delete', 'usb_connect', 'cloud_upload', 'email_send'] },
+  // 'file_create'/'file_modify'/'file_delete'/'usb_connect' were removed and
+  // 'usb_file_transfer'/'network_share_transfer'/'print' added below --
+  // cross-checked against every place agent.cpp actually sets `event_type`
+  // on a real request. The removed values never matched anything: File
+  // System Monitoring sends event_type="file" with an event_subtype of
+  // "file_created"/"file_modified"/"file_deleted" (see the Event Subtype
+  // options below), not "file_create" etc. as a top-level event_type; USB
+  // events always send event_type="usb" or "usb_file_transfer", never
+  // "usb_connect" (that string only ever appears inside USB Device
+  // Monitoring's own unrelated `monitoredEvents` config). A condition using
+  // any of the removed values could never evaluate true against a real
+  // event -- silently dead, no error shown anywhere. Found in the
+  // September 2026 Classification Aware Policy audit.
+  { value: 'event_type', label: 'Event Type', type: 'select', options: ['file_transfer', 'clipboard', 'usb_file_transfer', 'network_share_transfer', 'print', 'cloud_upload', 'email_send'] },
   { value: 'destination_type', label: 'Destination Type', type: 'select', options: ['removable_drive', 'email', 'cloud_storage', 'cloud', 'network'] },
   { value: 'file_extension', label: 'File Extension', type: 'text' },
-  { value: 'event_subtype', label: 'Event Subtype', type: 'select', options: ['browser_file_selection', 'file_upload', 'paste', 'drag_drop'] },
+  // 'file_upload'/'paste'/'drag_drop' were never real event_subtype values
+  // anywhere in the codebase -- same dead-value bug as event_type above.
+  // Replaced with confirmed-real subtypes: "file_created"/"file_modified"/
+  // "file_deleted" (File System Monitoring, event_type="file") and
+  // "messaging_file_selection" (the messaging counterpart to the existing,
+  // already-real "browser_file_selection").
+  { value: 'event_subtype', label: 'Event Subtype', type: 'select', options: ['browser_file_selection', 'messaging_file_selection', 'file_created', 'file_modified', 'file_deleted'] },
 ]
 
 const OPERATOR_OPTIONS = [
@@ -151,6 +170,27 @@ export default function ClassificationPolicyForm({ policy, onChange }: Classific
             <p className="font-semibold mb-1">Classification-Aware Policies</p>
             <p>Create policies based on content classification, confidence scores, and labels.
             The classification engine analyzes content using 20+ rules and assigns a level (Public/Internal/Confidential/Restricted).</p>
+            {/* Scope limitation, documented rather than silently discovered:
+                File System Monitoring (agent.cpp's HandleFileEvent) deliberately
+                ignores this evaluation's action for plain file create/modify/
+                delete events -- it only ever applies its OWN policy's configured
+                action, specifically to avoid one policy type's decision bleeding
+                into an unrelated one. Web Activity (GenAI/webmail/cloud
+                collaboration traffic) skips the generic policy evaluator
+                entirely -- event_processor.py routes it through
+                web_activity_control's own matrix-based evaluator instead, so a
+                Classification-Aware policy never even gets a chance to match it.
+                Found in the September 2026 Classification Aware Policy audit;
+                documented here so this isn't discovered by a policy silently
+                not firing. */}
+            <p className="mt-2 text-xs text-primary/70">
+              Note: this policy type can enforce USB transfers, network share
+              transfers (content-aware mode), print jobs, outbound email, and
+              clipboard actions -- but cannot govern plain file create/modify/
+              delete events (File System Monitoring) or GenAI/webmail/cloud
+              collaboration traffic (Web Activity Control), which are each
+              evaluated by their own dedicated policy type instead.
+            </p>
           </div>
         </div>
       </div>

@@ -22,7 +22,7 @@ import {
   EmailConfig,
   WebActivityControlConfig
 } from '@/types/policy'
-import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail, Bot } from 'lucide-react'
+import { Clipboard, FileText, Usb, HardDrive, Cloud, Ban, FolderInput, AppWindow, Bluetooth, Printer, MessageSquare, Mail, Bot, Shield } from 'lucide-react'
 
 /**
  * Get icon component for policy type
@@ -63,6 +63,15 @@ export const getPolicyTypeIcon = (type: PolicyType) => {
       return Mail
     case 'web_activity_control':
       return Bot
+    case 'classification_aware_policy':
+      // Was missing here (and in getPolicyTypeLabel below) -- combined with
+      // the type=NULL persistence bug this switch's own `default` fallback
+      // masked, every Classification-Aware policy rendered with the
+      // generic FileText icon and "Unknown" label on the Policies list,
+      // even once type is correctly saved. Matches the Shield icon
+      // PolicyTypeSelector.tsx already shows for this type at creation
+      // time. Found in the September 2026 Classification Aware Policy audit.
+      return Shield
     default:
       return FileText
   }
@@ -107,6 +116,8 @@ export const getPolicyTypeLabel = (type: PolicyType): string => {
       return 'Email DLP (Outbound)'
     case 'web_activity_control':
       return 'Web Activity Control (GenAI DLP)'
+    case 'classification_aware_policy':
+      return 'Classification-Aware Policy'
     default:
       return 'Unknown'
   }

@@ -482,14 +482,27 @@ def _transform_email_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dic
             "value": "email",
         }
     ]
-    if trigger_levels:
-        rules.append(
-            {
-                "field": "classification_level",
-                "operator": "in",
-                "value": trigger_levels,
-            }
-        )
+    # Always append this condition, even when trigger_levels is empty --
+    # EmailPolicyForm.tsx explicitly tells the admin "Selecting no levels
+    # means the action never fires -- the policy still records the
+    # underlying email event either way." Previously this condition was
+    # omitted entirely when trigger_levels was empty, leaving `rules` as
+    # just `destination_type == "email"` with match:"all" -- which matches
+    # EVERY outbound email regardless of classification, the exact opposite
+    # of "never fires". DatabasePolicyEvaluator's "in" operator against an
+    # empty `value` list is always False for any event_value (see
+    # database_policy_evaluator.py's `in`/`not_in` handling: `options = []`
+    # -> `is_in` can never be True), so this now correctly makes the
+    # condition -- and therefore the whole "all"-matched policy -- never
+    # satisfiable, matching the UI's stated guarantee. Found in the
+    # September 2026 Classification Aware Policy audit.
+    rules.append(
+        {
+            "field": "classification_level",
+            "operator": "in",
+            "value": trigger_levels,
+        }
+    )
 
     conditions = {
         "match": "all",
