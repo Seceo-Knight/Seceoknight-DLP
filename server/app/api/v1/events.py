@@ -158,6 +158,23 @@ class EventCreate(BaseModel):
     # the recorded metadata honest instead of a server-guessed path that
     # doesn't match where the agent actually put the file.
     quarantined: Optional[bool] = Field(None, description="Whether the agent already quarantined the file itself")
+    # network_exfil_monitor.cpp's EmitEvent() (CLI-upload interception +
+    # browser-dialog file-selection detection) has always sent these four
+    # keys, none of which were declared here -- same silently-stripped-by-
+    # Pydantic bug as file_hash/username/printer/channel/source above.
+    # process_name/process_id/command_line identify WHAT initiated the
+    # exfil attempt (e.g. "curl.exe", pid 4821, the full command line
+    # including any URL/destination argument) -- needed for SOC
+    # investigation and SIEM export; a network_exfil event without them
+    # only says a transfer was attempted, not by what. evasion records the
+    # obfuscation heuristic that tripped (e.g. "base64_encoded_payload",
+    # "powershell_encoded_command", "zip_compressed_payload") when the
+    # agent's local content inspection detected an attempt to disguise the
+    # payload -- a real security signal that was being silently discarded.
+    process_name: Optional[str] = Field(None, description="Name of the process that initiated the transfer (e.g. curl.exe), network_exfil events")
+    process_id: Optional[int] = Field(None, description="PID of the process that initiated the transfer, network_exfil events")
+    command_line: Optional[str] = Field(None, description="Full command line of the initiating process, network_exfil events")
+    evasion: Optional[str] = Field(None, description="Obfuscation/evasion heuristic that matched (e.g. base64_encoded_payload), network_exfil events")
 
 
 class DLPEvent(BaseModel):
@@ -381,6 +398,14 @@ async def create_event(
         # Uppercased so the /events channel filter (dashboard-driven from a
         # fixed vocabulary) matches whatever casing an agent happens to send.
         event_doc["channel"] = str(event.channel).strip().upper()
+    if event.process_name:
+        event_doc["process_name"] = event.process_name
+    if event.process_id is not None:
+        event_doc["process_id"] = event.process_id
+    if event.command_line:
+        event_doc["command_line"] = event.command_line
+    if event.evasion:
+        event_doc["evasion"] = event.evasion
     if event.policy_id:
         # Web Activity Control (and anything else that resolves its own
         # policy ahead of time -- see EventCreate.policy_id's docstring)
@@ -978,6 +1003,20 @@ def _build_processor_payload(event: EventCreate) -> Dict[str, Any]:
         # field's own docstring on EventCreate above for why this needs to
         # exist at all.
         payload["source"] = event.source
+
+    if event.channel:
+        # Same bug class as "source" above: EventCreate.channel is already
+        # persisted onto the Mongo event_doc (see event_doc["channel"] a few
+        # lines up) and DatabasePolicyEvaluator's field_mappings already
+        # knows how to look it up (["channel", "event.channel"]) -- but
+        # nothing ever copied it into this payload, so any policy condition
+        # on "channel" (e.g. the seeded "Detect Browser Upload" policy's
+        # `channel == BROWSER` leg) could never match via this background
+        # /events path. Uppercased to match the same normalization applied
+        # to event_doc["channel"] above, so a policy's stored value (e.g.
+        # "BROWSER") compares consistently regardless of what case the
+        # agent sent.
+        payload["channel"] = str(event.channel).strip().upper()
 
     if event.usb_event_type:
         payload.setdefault("usb", {})["event_type"] = event.usb_event_type

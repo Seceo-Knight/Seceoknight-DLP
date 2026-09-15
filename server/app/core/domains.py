@@ -89,6 +89,15 @@ POLICY_TYPE_DOMAIN = {
     # gap-scan (task #134/#135) -- was previously unmapped, which would have
     # silently fallen back to the "general" domain via domain_for_policy_type().
     "email_send_prevention": PolicyDomain.DATA_PROTECTION,
+    # Browser Upload Monitoring -- detects file uploads via the browser's
+    # native file-selection dialog (network_exfil_monitor.cpp's
+    # BrowserDetectorThread) and browser-extension cloud uploads. Content
+    # handling, same category as clipboard/file/email above. Was previously
+    # unmapped, which silently fell back to the "general" domain via
+    # domain_for_policy_type() -- meaning a DATA_PROTECTION_ADMIN could never
+    # see or manage this policy type, and it would leak into every other
+    # domain-admin's unfiltered "general" bucket instead.
+    "browser_upload_monitoring": PolicyDomain.DATA_PROTECTION,
 }
 
 # Event ``event_type`` → domain, so events without a resolvable matched-policy

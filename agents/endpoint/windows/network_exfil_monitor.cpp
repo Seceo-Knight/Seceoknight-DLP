@@ -509,7 +509,21 @@ void EmitEvent(const EventFields& f) {
         j << "\"classification_score\":"   << f.classificationScore     << ",";
     }
     if (!f.matchedRule.empty()) {
-        j << "\"classification_rule_matched\":\"" << EscapeJson(f.matchedRule) << "\",";
+        // EventCreate on the server declares this field as
+        // "classification_rules_matched" (plural, JSON array of rule
+        // names) -- matches the shape the Classification-Aware Policy /
+        // Web Activity Control evidence trail already uses everywhere
+        // else (see skdlp_host.py's emit_web_activity_event() rule_names
+        // list, fixed for the same reason on September 11, 2026). This
+        // event only ever carries a single matched rule name, so it's
+        // sent as a one-element array rather than adding a second,
+        // singular-named field to the schema. Was previously sent as
+        // "classification_rule_matched" (singular string) -- a name
+        // Pydantic's EventCreate model has never declared, so this
+        // evidence was silently dropped for every network-exfil event
+        // (CLI upload / browser-dialog file selection) before it ever
+        // reached the database.
+        j << "\"classification_rules_matched\":[\"" << EscapeJson(f.matchedRule) << "\"],";
     }
     if (!f.labels.empty()) {
         j << "\"classification_labels\":[";

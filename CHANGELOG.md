@@ -8,6 +8,73 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Browser Upload Monitoring: audit + fixes (September 15, 2026)
+
+Deep audit of `browser_upload_monitoring`, following directly from the Classification Aware
+Policy audit above (both share the same condition-based save branch in `PolicyCreatorModal.tsx`
+and the same `ClassificationPolicyForm.tsx` UI). Two architectural facts surfaced during the
+audit, documented here rather than "fixed" since they're by design: this policy type is
+detection/alert-only end-to-end -- `network_exfil_monitor.cpp`'s `BrowserDetectorThread` uses UI
+Automation hooks to detect a file-selection dialog but explicitly never terminates the browser
+process regardless of policy ("Browsers are NEVER terminated regardless of policy" per the
+agent's own comment), and it cannot inspect HTTPS payload to block a genuine upload; and it is
+structurally disjoint from the browser extension's Cloud Upload Guard, which *can* inspect
+content and block via the extension's native host (`skdlp_host.py`) -- that mechanism runs
+independent of any `browser_upload_monitoring`-typed policy row entirely. Four real bugs were
+found and fixed:
+
+1. **Missing RBAC domain entry.** `browser_upload_monitoring` had no entry in `domains.py`'s
+   `POLICY_TYPE_DOMAIN` dict (unlike `classification_aware_policy`, which was already mapped),
+   so `domain_for_policy_type()` silently fell back to `PolicyDomain.GENERAL` for every policy of
+   this type. Since the domain is persisted onto the `Policy.domain` column at create time (not
+   computed live), this permanently mis-scoped the policy: a `DATA_PROTECTION_ADMIN` could never
+   see or manage it, while it would show up in every other domain-admin's unfiltered "general"
+   bucket instead. Fixed: added `"browser_upload_monitoring": PolicyDomain.DATA_PROTECTION` to
+   the map. Existing policies created before this fix still have the wrong stored domain and
+   won't self-heal -- they need to be re-saved once to pick up the correct domain.
+
+2. **Dead Severity dropdown.** `PolicyCreatorModal.tsx` excluded the Severity field (both the
+   step-1 input and the step-3 summary display) only for `policyType === 'classification_aware_policy'`,
+   even though `browser_upload_monitoring` shares the exact same condition-based save branch that
+   builds `actions.alert.severity` from `classificationPolicy` directly and never reads the
+   top-level `severity` state. The field was shown and appeared settable, but any value chosen was
+   silently discarded on save -- an asymmetric exclusion bug. Fixed: both exclusions now use the
+   existing `isConditionBased` flag (`policyType === 'classification_aware_policy' ||
+   policyType === 'browser_upload_monitoring'`) instead of the single-type check.
+
+3. **`channel` condition could never match.** The seeded "Detect Browser Upload" default policy
+   matches on `event_subtype == "browser_file_selection"` OR `channel == "BROWSER"`
+   (`match: "any"`). The second leg was dead: `EventCreate.channel` is declared and already
+   persisted onto the stored Mongo event doc, and `DatabasePolicyEvaluator`'s `field_mappings`
+   already knows how to look it up -- but `_build_processor_payload()` in `events.py`, which
+   shapes what reaches the evaluator on the background `/events` path, never copied `channel`
+   into the payload at all. Fixed: added the mapping, uppercased to match the same normalization
+   already applied to the stored event doc.
+
+4. **Dropped/mismatched event fields from `network_exfil_monitor.cpp`.** Two related gaps in the
+   same `EmitEvent()` function that emits browser-upload-detection events: (a) `process_name`,
+   `process_id`, `command_line`, and `evasion` were sent on every event but never declared on
+   `EventCreate`, so Pydantic silently stripped all four before `create_event()` ever saw them --
+   losing the "what initiated this" and "was obfuscation detected" evidence entirely; (b) the
+   classification match was sent as `classification_rule_matched` (singular, one string) but
+   `EventCreate` declares `classification_rules_matched` (plural, a list) -- the name mismatch
+   meant this evidence was silently dropped too, same bug class as the Web Activity Control fix
+   from September 11. Fixed: declared all four fields on `EventCreate` and threaded them onto the
+   stored event doc; changed the C++ side to emit `classification_rules_matched` as a one-element
+   JSON array under the correct plural key, matching the shape used everywhere else in the
+   codebase (`skdlp_host.py`'s `rule_names` list) instead of adding a second, singular-named field
+   to the schema.
+
+Verified: Python `ast.parse()` on `domains.py` and `events.py`; `tsc --noEmit` on the dashboard
+diffed against baseline shows the identical 21 pre-existing errors, zero new ones; the C++ change
+was checked with a custom brace/string/comment-depth-counting script (no C++ compiler available
+in this environment) diffed against the same script's output on the pre-edit file, confirming no
+new imbalance was introduced. This `network_exfil_monitor.cpp` change requires the standard
+CI-rebuild + `manage-agent.ps1` -> [2] Update deploy path on the Windows endpoint, unlike the
+pure server/dashboard fixes above which only need `update.sh` on the server.
+
+---
+
 ## Classification Aware Policy + Email Send Prevention: audit + fixes (September 2026)
 
 Deep audit of `classification_aware_policy` and `email_send_prevention`, same rigor as the

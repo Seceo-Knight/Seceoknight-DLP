@@ -619,8 +619,16 @@ export default function PolicyCreatorModal({
                       placeholder="Describe what this policy does..."
                     />
                   </div>
-                  <div className={`grid ${policyType === 'classification_aware_policy' ? 'grid-cols-1' : 'grid-cols-2'} gap-4`}>
-                    {policyType !== 'classification_aware_policy' && (
+                  <div className={`grid ${isConditionBased ? 'grid-cols-1' : 'grid-cols-2'} gap-4`}>
+                    {/* Severity here is discarded on save for condition-based
+                        policy types (classification_aware_policy AND
+                        browser_upload_monitoring) -- their save branch
+                        builds actions.alert.severity from classificationPolicy
+                        directly and never reads this top-level `severity`
+                        state. Showing/setting it for browser_upload_monitoring
+                        was a silent no-op bug: it displayed as settable but
+                        any value the user picked here was thrown away. */}
+                    {!isConditionBased && (
                       <div>
                         <label className="block text-sm font-medium text-foreground/90 mb-2">Severity Level</label>
                         <select
@@ -834,7 +842,7 @@ export default function PolicyCreatorModal({
                     <span className="text-muted-foreground">Type:</span>
                     <span className="text-foreground font-medium">{policyType ? policyType.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'Not set'}</span>
                   </div>
-                  {policyType !== 'classification_aware_policy' && (
+                  {!isConditionBased && (
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Severity:</span>
                       <span className="text-foreground font-medium uppercase">{severity}</span>
