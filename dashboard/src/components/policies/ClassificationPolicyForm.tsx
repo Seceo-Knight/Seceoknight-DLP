@@ -61,6 +61,21 @@ const FIELD_OPTIONS = [
   // "messaging_file_selection" (the messaging counterpart to the existing,
   // already-real "browser_file_selection").
   { value: 'event_subtype', label: 'Event Subtype', type: 'select', options: ['browser_file_selection', 'messaging_file_selection', 'file_created', 'file_modified', 'file_deleted'] },
+  // Added during the Browser Upload Monitoring audit/fix (September 15,
+  // 2026): DatabasePolicyEvaluator's field_mappings has always supported a
+  // "channel" condition, and the seeded "Detect Browser Upload" default
+  // policy (server/data/default_policies.json) already matches on
+  // `channel == "BROWSER"` -- but this dropdown never offered "channel" as
+  // a selectable Field at all, so there was no way to author a NEW
+  // channel-based condition from the UI (only pre-seeded/migration-authored
+  // policies could have one). Options cross-checked against every literal
+  // "channel" value network_exfil_monitor.cpp and messaging_text_monitor.cpp
+  // actually send: "CLI" (CLI upload tools like curl/rclone),
+  // "BROWSER" (browser file-selection dialog), "MESSAGING" (Teams/WhatsApp/
+  // Telegram/Slack/Discord/Signal attachment dialogs). "USB"/"PRINT"/"WEB"
+  // (mentioned in EventCreate's field docstring as illustrative examples)
+  // are not values any agent code path actually emits today.
+  { value: 'channel', label: 'Channel', type: 'select', options: ['CLI', 'BROWSER', 'MESSAGING'] },
 ]
 
 const OPERATOR_OPTIONS = [
