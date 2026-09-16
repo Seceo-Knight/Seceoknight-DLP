@@ -1876,6 +1876,20 @@ class PolicyEvaluationRequest(BaseModel):
     # hash server-side from file_content_b64 and don't need this field, but
     # declaring it generically here doesn't change that path.
     file_hash: Optional[str] = Field(None, description="SHA-256 hash (hex) of the file/document, when the caller already computed it (e.g. print jobs)")
+    # EvaluatePolicyRealtime() (agent.cpp -- the shared helper behind USB,
+    # network-share, and file-system-monitoring real-time evaluation) never
+    # sent this, and it was never declared here either, so it was always
+    # silently missing. Found during the Network Share Transfer Control
+    # audit (September 2026): _transform_network_share_transfer_config()'s
+    # `exception_file_types` rule filters on `file_extension` with
+    # `match: "all"` -- since the field was never reachable,
+    # _extract_field_value() always returned None, the rule always
+    # evaluated False, and the WHOLE policy (not just the excepted
+    # extensions) silently stopped matching anything the moment an admin
+    # configured even one file-type exception. Declaring it here and
+    # forwarding it below fixes this for every EvaluatePolicyRealtime()
+    # caller, not just network-share.
+    file_extension: Optional[str] = Field(None, description="File extension without the leading dot, lowercase (e.g. 'pdf'), when the caller already computed it")
     event_type: str = Field("clipboard_copy", description="Event type (e.g., 'usb_file_transfer', 'clipboard_copy')")
     destination_type: Optional[str] = Field(None, description="Destination type (e.g., 'removable_drive', 'network')")
     source_path: Optional[str] = Field(None, description="Source file path")
@@ -2054,6 +2068,9 @@ async def evaluate_policy_realtime(
             # up the top-level "file_hash" key) actually reachable for the
             # print channel.
             event_data["file_hash"] = request.file_hash
+        if request.file_extension:
+            # See PolicyEvaluationRequest.file_extension's docstring above.
+            event_data["file_extension"] = request.file_extension
 
         # 3. Evaluate classification-aware policies
         policy_evaluator = DatabasePolicyEvaluator()

@@ -720,10 +720,27 @@ def _transform_network_share_transfer_config(config: Dict[str, Any]) -> Tuple[Di
     {
         "mode": "block_all" | "content_aware" | "off",
         "action": "audit" | "block",
-        "exception_shares": [...],   // not yet wired -- no matching agent
-                                      // event field exists to key off (see
-                                      // note below)
-        "exception_users": [...],    // same
+        // exception_shares/exception_users are NOT enforced via this
+        // function's conditions/rules -- they never reach
+        // DatabasePolicyEvaluator at all. They're checked entirely
+        // agent-side, earlier and separately, by IsNetShareExceptionMatch()
+        // in agent.cpp, BEFORE HandleNetworkShareNewFile() even looks at
+        // mode/content_aware -- an exempted share/user short-circuits the
+        // whole flow with no server round-trip. (Corrected September 2026
+        // -- this previously and incorrectly claimed none of these three
+        // were "wired".) exception_paths is different: it DOES also become
+        // a rule below (source_path not_in ...), evaluated server-side --
+        // but "source_path" here is fed from the file's DESTINATION
+        // location on the share (see EvaluatePolicyRealtime()'s call site
+        // in agent.cpp), not any local source path -- the reactive
+        // share-diff detector never observes where a file originated. So
+        // exception_paths ends up checked TWICE against the same
+        // (destination) location -- once agent-side via
+        // IsNetShareExceptionMatch(), once server-side via this rule --
+        // and neither is a genuine "source" exemption despite the name.
+        // See NetworkShareControlPolicyForm.tsx's corrected label/copy.
+        "exception_shares": [...],
+        "exception_users": [...],
         "exception_paths": [...],
         "exception_file_types": [...]
     }
@@ -766,11 +783,33 @@ def _transform_network_share_transfer_config(config: Dict[str, Any]) -> Tuple[Di
             }
         )
         if exception_paths:
+            # Was a flat "source_path not_in exception_paths" rule -- exact
+            # whole-string comparison (DatabasePolicyEvaluator's "in"/
+            # "not_in" handling does str(event_value).lower() ==
+            # str(opt).lower(), no prefix semantics). An admin exempting a
+            # folder like "\\fileserver\public\reports\" would only ever
+            # match a file whose source_path was that EXACT string, never
+            # anything inside it -- folder-prefix exemption is the entire
+            # point of a path exception, so this was effectively dead for
+            # any real subfolder file. Fixed using a nested "none" group
+            # around the existing matches_any_prefix operator (already used
+            # elsewhere for the same folder-prefix need -- see
+            # _prefix_match()'s docstring in database_policy_evaluator.py),
+            # rather than adding a new negated operator: "none" of these
+            # rules match == the path does NOT start with any exempted
+            # prefix. _evaluate_conditions() already recurses into nested
+            # rule groups (`if "rules" in rule`), so no evaluator change is
+            # needed.
             rules.append(
                 {
-                    "field": "source_path",
-                    "operator": "not_in",
-                    "value": exception_paths,
+                    "match": "none",
+                    "rules": [
+                        {
+                            "field": "source_path",
+                            "operator": "matches_any_prefix",
+                            "value": exception_paths,
+                        }
+                    ],
                 }
             )
         if exception_file_types:

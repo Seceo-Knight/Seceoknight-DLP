@@ -11852,9 +11852,35 @@ if (isTransferDestination &&
             }
             json.AddInt("file_size", static_cast<int>(fileSize));
             json.AddString("event_type", eventType);
-            json.AddString("destination_type", "removable_drive");
+            // Was unconditionally "removable_drive" regardless of eventType
+            // -- harmless for the default usb_file_transfer caller, but
+            // wrong for every other caller of this shared helper. Found
+            // during the Network Share Transfer Control audit (September
+            // 2026): a network-share transfer was being tagged
+            // destination_type=removable_drive, so any policy elsewhere
+            // conditioning on destination_type would misclassify it as USB
+            // activity. "network" matches the value already used elsewhere
+            // in the dashboard's destination_type vocabulary (see
+            // ClassificationPolicyForm.tsx's FIELD_OPTIONS).
+            std::string destType = "removable_drive";
+            if (eventType == "network_share_transfer") destType = "network";
+            else if (eventType == "file_system_monitoring") destType = "local";
+            json.AddString("destination_type", destType);
             json.AddString("source_path", filePath);
             json.AddString("destination_path", destinationPath);
+            // Same undeclared-field-class bug as file_hash was for print:
+            // _transform_network_share_transfer_config()'s
+            // exception_file_types rule filters on file_extension, but this
+            // function never sent it and the server never declared it --
+            // see PolicyEvaluationRequest.file_extension's docstring in
+            // agents.py for the full impact (the whole policy silently
+            // stopped matching anything once an exception was configured).
+            {
+                std::string ext = fs::path(fileName).extension().string();
+                if (!ext.empty() && ext[0] == '.') ext.erase(0, 1);
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (!ext.empty()) json.AddString("file_extension", ext);
+            }
 
             std::string requestBody = json.Build();
 

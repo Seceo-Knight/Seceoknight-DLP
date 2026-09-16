@@ -8,6 +8,68 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Network Share Transfer Control: audit + fixes (September 15, 2026)
+
+Deep audit of `network_share_transfer_control`, same rigor as the other policy-type audits this
+session. Architecture was mostly sound here -- type persistence, RBAC domain mapping, dashboard
+icon/label wiring, and the File Transfer Monitoring-style background-evaluator bypass were all
+already correct -- but found one severe bug and three smaller correctness/documentation gaps.
+
+1. **Configuring any file-type exception silently disabled ALL content-aware blocking, for every
+   file, not just the excepted types (fixed -- severe).** `_transform_network_share_transfer_config()`
+   builds a `match: "all"` policy whose rules include a `file_extension not_in [...]` check whenever
+   `exception_file_types` is set. But `EvaluatePolicyRealtime()` (the shared agent.cpp helper behind
+   USB, network-share, and file-system-monitoring real-time evaluation) never sent `file_extension`,
+   and the server's `PolicyEvaluationRequest` never declared it either -- so the extracted value was
+   always `None`, the rule always evaluated `False`, and since it's `match: "all"`, the *entire
+   policy* stopped matching anything the moment an admin added even one harmless exception (e.g.
+   `.log`). No error surfaced anywhere. Fixed: declared `file_extension` on the request model,
+   forwarded it into `event_data`, and had the agent compute+send it -- fixes this for every
+   `EvaluatePolicyRealtime()` caller, not just network-share.
+
+2. **`destination_type` was hardcoded to `"removable_drive"` regardless of channel (fixed).** The
+   same shared helper always sent `destination_type: "removable_drive"`, a copy-paste artifact from
+   its original USB-only design -- so a network-share transfer (and a file-system-monitoring check)
+   was tagged as USB activity to any policy conditioning on `destination_type`. Fixed: mapped the
+   value from the `eventType` parameter (`"network"` for network-share, `"local"` for
+   file-system-monitoring, `"removable_drive"` unchanged for USB).
+
+3. **"Source Paths / Folders" exception field never did what its label/placeholder implied (fixed --
+   documentation/UI copy).** Both the agent-side pre-check (`IsNetShareExceptionMatch()`) and the
+   server-side `source_path not_in [...]` rule this transform builds are fed from the file's
+   *destination* location on the share -- `NetworkShareTransferMonitor()` is a reactive diff-based
+   "new file appeared on the share" detector that never observes where a file actually originated,
+   so a genuine local-source exemption isn't something this channel can express. The UI (label
+   "Source Paths / Folders", placeholder `C:\Public\`) and the transformer's own docstring (which
+   also, separately, incorrectly claimed `exception_shares`/`exception_users` were "not yet wired" --
+   they are, agent-side) both overstated this. Corrected the label to "Destination Path Prefixes"
+   with an explanatory note, and corrected the docstring.
+
+4. **`exception_paths` used exact-string matching, incompatible with folder-prefix semantics
+   (fixed).** The rule was a flat `source_path not_in exception_paths` -- `DatabasePolicyEvaluator`'s
+   `in`/`not_in` does whole-string comparison, so an admin exempting `\\fileserver\public\reports\`
+   would only ever match a file whose `source_path` was that *exact* string, never a file inside that
+   folder -- dead for any real use. Fixed by wrapping the existing `matches_any_prefix` operator in a
+   nested `match: "none"` rule group (`_evaluate_conditions()` already recurses into nested rule
+   groups, so no evaluator change was needed) instead of adding a new negated operator.
+
+Verified: Python `ast.parse()` on `agents.py` and `policy_transformer.py`; a custom brace/string/
+comment-depth-counting script on `agent.cpp` diffed against the pre-edit baseline (identical, no new
+imbalance -- no C++ compiler available in this environment); `tsc --noEmit` on the dashboard diffed
+against baseline (21 pre-existing errors, unchanged); and a direct call to
+`_transform_network_share_transfer_config()` piped through `DatabasePolicyEvaluator._evaluate_conditions()`
+against four synthetic events, confirming: a normal Restricted file outside any exception matches
+(blocks), a file inside an exempted destination-path prefix does not match, a file with an exempted
+extension does not match, and -- the key regression check for fix #1 -- a Restricted file with a
+*non*-exempted extension still matches and blocks even with exceptions configured (this last case is
+exactly what silently broke before the fix).
+
+This change touches `agent.cpp`, so it triggers the standard CI agent-binary rebuild and needs
+`manage-agent.ps1` -> [2] Update on the Windows endpoint, in addition to `git push` + `sudo bash
+update.sh` on the server.
+
+---
+
 ## File Identity Denylist: audit + fixes (September 15, 2026)
 
 Deep audit of `file_identity_denylist`, same rigor as the other policy-type audits this

@@ -141,14 +141,24 @@ export default function NetworkShareControlPolicyForm({ config: rawConfig, onCha
             />
           </div>
           <div>
-            <label className="block text-xs text-muted-foreground mb-1">Source Paths / Folders</label>
+            {/* Was labeled "Source Paths / Folders" with a local-folder
+                placeholder ("C:\Public\") -- corrected during the September
+                2026 audit. NetworkShareTransferMonitor() only ever observes
+                a file appearing on the destination share; it never sees
+                where that file originated, so this can only ever exempt by
+                DESTINATION path (same thing "Network Shares" above already
+                does, just as a path prefix instead of a whole share). */}
+            <label className="block text-xs text-muted-foreground mb-1">Destination Path Prefixes</label>
             <input
               type="text"
               defaultValue={fromList(config.exception_paths)}
               onChange={(e) => onChange({ ...config, exception_paths: toList(e.target.value) })}
-              placeholder="C:\Public\"
+              placeholder="\\fileserver\public\reports\"
               className="w-full px-3 py-2 bg-muted/30 border-2 border-border rounded-lg text-foreground placeholder-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all font-mono text-sm"
             />
+            <p className="text-xs text-muted-foreground mt-1">
+              Exempts a subfolder within a share, matched against where the file lands -- not where it came from.
+            </p>
           </div>
           <div>
             <label className="block text-xs text-muted-foreground mb-1">File Types</label>
