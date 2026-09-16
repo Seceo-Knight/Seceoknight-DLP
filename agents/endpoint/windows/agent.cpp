@@ -5118,6 +5118,20 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              auto chans   = lc(ExtractJsonArray(response, "channels"));
              auto exApps  = lc(ExtractJsonArray(response, "exception_applications"));
              auto exUsers = lc(ExtractJsonArray(response, "exception_users"));
+             // ApplicationControlPolicyForm.tsx's own placeholder tells admins
+             // to enter "DOMAIN\admin", but IsAppActionAllowed() compares
+             // against GetUsername() (agent.cpp), which calls the bare
+             // GetUserNameA() -- no domain prefix is ever available locally.
+             // An exception entered exactly as instructed could therefore
+             // never match, silently leaving that user un-exempted. Strip a
+             // "domain\" prefix here (keep only the part after the last
+             // backslash) so both "contoso\jdoe" and a bare "jdoe" normalize
+             // to the same "jdoe" the agent will actually compare against.
+             // Found during the Application Control audit (September 2026).
+             for (auto& u : exUsers) {
+                 size_t slash = u.find_last_of('\\');
+                 if (slash != std::string::npos) u = u.substr(slash + 1);
+             }
              auto exPaths = lc(ExtractJsonArray(response, "exception_paths"));
              auto exTypes = lc(ExtractJsonArray(response, "exception_file_types"));
 

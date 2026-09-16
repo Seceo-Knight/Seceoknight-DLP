@@ -9,9 +9,30 @@ interface ApplicationControlPolicyFormProps {
   onChange: (config: ApplicationControlConfig) => void
 }
 
-// Common CLI transfer tools admins reach for first -- the same set the
-// Windows agent's network-exfil CLI-interception path already recognizes.
-const commonApps = ['curl.exe', 'wget.exe', 'powershell.exe', 'bitsadmin.exe', 'certutil.exe', 'rclone.exe']
+// The COMPLETE, fixed set of executables the Windows agent's network-exfil
+// CLI-interception path (IsMonitoredExe(), network_exfil_monitor.cpp) will
+// ever recognize -- not just a curated "common" subset. This distinction
+// matters: before this list was corrected (September 2026 Application
+// Control audit), the free-text "Add" box below let an admin type in ANY
+// executable name -- e.g. onedrive.exe, dropbox.exe, teams.exe, chrome.exe
+// -- which the dashboard happily saved, but the agent silently never even
+// asks whether that process is allowed, since it isn't hooked at all. There
+// was no warning anywhere that such an entry was a no-op. Showing the real,
+// complete list (as selectable chips) and validating free-text entries
+// against it (see MONITORED_EXES/isMonitored below) makes that limitation
+// visible instead of silent.
+const commonApps = [
+  'curl.exe', 'wget.exe',
+  'powershell.exe', 'pwsh.exe', 'powershell_ise.exe',
+  'python.exe', 'python3.exe', 'pythonw.exe', 'py.exe',
+  'bitsadmin.exe', 'certutil.exe',
+  'aws.exe', 'rclone.exe', 's3cmd.exe', 'azcopy.exe',
+  'scp.exe', 'pscp.exe', 'winscp.com',
+]
+const MONITORED_EXES = new Set(commonApps)
+function isMonitored(app: string): boolean {
+  return MONITORED_EXES.has(app.trim().toLowerCase())
+}
 
 function toList(text: string): string[] {
   return text.split(',').map((s) => s.trim()).filter(Boolean)
@@ -135,6 +156,11 @@ export default function ApplicationControlPolicyForm({ config: rawConfig, onChan
               {config.applications.map((app) => (
                 <div key={app} className="flex items-center gap-2 px-3 py-1 bg-primary/10 border border-primary/30 rounded-lg text-sm">
                   <code className="text-primary">{app}</code>
+                  {!isMonitored(app) && (
+                    <span className="text-warning text-xs" title="Not in the agent's monitored-executable list -- this entry has no effect">
+                      ⚠ not monitored
+                    </span>
+                  )}
                   <button type="button" onClick={() => handleRemoveApp(app)} className="text-muted-foreground hover:text-critical transition-colors">
                     <X className="w-3 h-3" />
                   </button>
@@ -162,6 +188,13 @@ export default function ApplicationControlPolicyForm({ config: rawConfig, onChan
             Add
           </button>
         </div>
+        {newApp.trim() !== '' && !isMonitored(newApp) && (
+          <p className="text-xs text-warning mt-2">
+            &quot;{newApp.trim()}&quot; is not one of the executables the agent actually watches for (see the chips
+            above for the complete list). Adding it will save, but it will have no effect -- the agent never even
+            checks whether an unmonitored process is allowed.
+          </p>
+        )}
       </div>
 
       {/* Channels */}
@@ -225,7 +258,10 @@ export default function ApplicationControlPolicyForm({ config: rawConfig, onChan
 
       <p className="text-xs text-muted-foreground">
         Enforced by the Windows agent&apos;s network-exfil CLI-transfer interception path -- a block here fires
-        regardless of what the application is uploading.
+        regardless of what the application is uploading. The agent only ever watches the fixed set of executables
+        shown as chips above (CLI transfer/scripting tools) -- everyday applications (browsers, Office, Teams,
+        OneDrive, Dropbox, etc.) are not covered by this policy type at all, regardless of what you type into the
+        box below.
       </p>
     </div>
   )

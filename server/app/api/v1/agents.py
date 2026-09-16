@@ -1284,9 +1284,22 @@ async def get_application_control(
 
     enforced = policy is not None
     cfg = (policy.config or {}) if enforced else {}
-    mode = str(cfg.get("mode") or "allowlist").lower()
+    # Was "allowlist" here, but the dashboard's own default (PolicyCreatorModal.tsx,
+    # policyUtils.ts) is "blocklist" -- a mismatch found during the Application
+    # Control audit (September 2026). In normal use the dashboard always writes
+    # `mode` explicitly, so this fallback only matters for a hand-edited or
+    # migrated config missing/misspelling it. Note the trade-off either way isn't
+    # free: "allowlist" + empty applications fails CLOSED (blocks all 16 monitored
+    # tools for everyone, possibly surprising); "blocklist" + empty applications
+    # fails OPEN (blocks nothing despite enforced=True, a false sense of
+    # protection). Aligned to "blocklist" here for consistency with the
+    # dashboard's own default rather than a claim that fail-open is strictly
+    # safer -- an admin relying on this fallback either way has a malformed
+    # config that should be fixed, not silently compensated for in either
+    # direction.
+    mode = str(cfg.get("mode") or "blocklist").lower()
     if mode not in ("allowlist", "blocklist"):
-        mode = "allowlist"
+        mode = "blocklist"
     exc = cfg.get("exceptions") or {}
 
     def _str_list(v):

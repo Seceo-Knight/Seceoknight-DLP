@@ -492,7 +492,30 @@ void EmitEvent(const EventFields& f) {
     j << "\"source_type\":\""    << "agent"                             << "\",";
     j << "\"user_email\":\""     << EscapeJson(g_cfg.username + "@" + g_cfg.hostname) << "\",";
     j << "\"severity\":\""       << EscapeJson(f.severity)              << "\",";
-    j << "\"action\":\""         << EscapeJson(f.action)                << "\",";
+    // f.action is "BLOCK" / "ALERT" / "ALLOW" (uppercase -- see EventFields'
+    // own declaration comment), used internally throughout this file for
+    // branching. But EventCreate.action's established vocabulary everywhere
+    // ELSE in this codebase is lowercase -- "logged"/"alerted"/"blocked"
+    // (see events.py's own field docstring, and skdlp_host.py's
+    // action_taken values). Two real consequences of sending the raw
+    // uppercase string instead, found during the Application Control audit
+    // (September 2026): (1) Events.tsx's red "blocked" badge logic checks
+    // `event.action_taken === 'blocked'` (lowercase) -- never true for
+    // these events, so a real, successful Application Control block
+    // (process actually terminated) rendered with no blocked indicator at
+    // all; (2) EventCreate.blocked was never sent as a separate key either
+    // (see below), so create_event() defaulted it to False regardless of
+    // what actually happened -- excluding real blocks from the dashboard's
+    // "blocked" event-count stat. Translating to the shared lowercase
+    // vocabulary, and sending the boolean explicitly, fixes both -- for
+    // every EmitEvent() caller, including Browser Upload Monitoring's own
+    // BLOCK events which go through this same function.
+    std::string actionLower = (f.action == "BLOCK")  ? "blocked" :
+                               (f.action == "ALERT")  ? "alerted" :
+                               (f.action == "ALLOW")  ? "logged"  :
+                               ToLower(f.action);
+    j << "\"action\":\""         << EscapeJson(actionLower)             << "\",";
+    j << "\"blocked\":"          << (f.action == "BLOCK" ? "true" : "false") << ",";
     j << "\"channel\":\""        << EscapeJson(f.channel)               << "\",";
     j << "\"process_name\":\""   << EscapeJson(f.processName)           << "\",";
     j << "\"process_id\":"       << f.pid                               << ",";

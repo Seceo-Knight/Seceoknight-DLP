@@ -8,6 +8,66 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Application Control: audit + fixes (September 16, 2026)
+
+Deep audit of `application_control`, same rigor as the other policy-type audits this session.
+Architecture was sound overall -- type persistence, RBAC domain mapping, and dashboard icon/label
+wiring were all already correct, and enforcement is genuinely agent-side and preventive (not
+reactive-scan-only like several other channels found this session). Four real issues found and
+fixed:
+
+1. **Real blocks never rendered as blocked -- shared bug, also affects Browser Upload
+   Monitoring.** `network_exfil_monitor.cpp`'s `EmitEvent()` (the function behind every CLI-tool
+   interception event, including Application Control's) never sent a `blocked` key at all, and sent
+   `action: "BLOCK"` (uppercase) instead of the lowercase `"blocked"/"alerted"/"logged"` vocabulary
+   used everywhere else in the codebase. Server-side, an absent `blocked` key defaults to `False`
+   (`events.py`), and the dashboard's red-badge logic checks `action_taken === 'blocked'`
+   (lowercase) -- so a real, successful Application Control block (process actually terminated)
+   rendered with no blocked indicator, was miscounted as alert-only, and was excluded from the
+   blocked-event stat. Fixed by translating to the shared lowercase vocabulary and sending the
+   `blocked` boolean explicitly at serialization time -- fixes this for every `EmitEvent()` caller,
+   including Browser Upload Monitoring's own (cosmetic, per the earlier audit) BLOCK-labeled events
+   from the dialog-detection path.
+
+2. **Domain-qualified exception users could never match.** `ApplicationControlPolicyForm.tsx`'s own
+   placeholder tells admins to enter `DOMAIN\admin`, but the agent's `GetUsername()` only ever
+   returns the bare local username (`GetUserNameA()`, no domain prefix available). An admin
+   following the UI's own instructions created an exception that could never match -- that user
+   stayed subject to the policy despite believing they were exempted. Fixed: strip a `domain\`
+   prefix from each configured exception value at fetch time, so both `contoso\jdoe` and a bare
+   `jdoe` normalize to what the agent will actually compare against.
+
+3. **Dashboard silently accepted arbitrary app names outside the agent's fixed, hardcoded
+   16-tool monitored list.** The free-text "Add" box let an admin type any executable name
+   (`onedrive.exe`, `teams.exe`, `chrome.exe`, ...) and the UI's own copy ("restrict uploads to an
+   approved allowlist of tools") implied general coverage. In reality `IsMonitoredExe()`
+   (`network_exfil_monitor.cpp`) only ever recognizes a fixed set of CLI/scripting tools (curl,
+   wget, powershell variants, python variants, bitsadmin, certutil, and several cloud-CLI/SSH
+   copy tools) -- anything else is accepted and saved but the agent never even checks it, a silent
+   no-op. Fixed: the quick-select chips now show the complete real list (not a curated "common"
+   subset), a warning appears live while typing an unmonitored name, and already-saved unmonitored
+   entries are flagged with a visible warning badge.
+
+4. **Minor: mismatched fallback default (`allowlist` vs the dashboard's `blocklist`).** The
+   `GET /agents/{id}/application-control` endpoint's `mode` fallback (for a hand-edited/migrated
+   config missing the field) defaulted to `allowlist`, opposite the dashboard's own `blocklist`
+   default. Aligned to `blocklist` for consistency -- noted in-code that this isn't a strict safety
+   improvement either direction (an `allowlist` fallback fails closed and blocks all 16 tools
+   unexpectedly; a `blocklist` fallback fails open and silently provides zero protection despite
+   `enforced: true`), just removes the surprise of the two layers disagreeing.
+
+Verified: Python `ast.parse()` on `agents.py`; a custom brace/string/comment-depth-counting script
+on `agent.cpp` and `network_exfil_monitor.cpp`, each diffed against its pre-edit baseline (identical
+depth/unclosed-brace pattern, only line-number shifts -- no C++ compiler available in this
+environment); `tsc --noEmit` on the dashboard diffed against baseline (21 pre-existing errors,
+unchanged).
+
+This change touches both `agent.cpp` and `network_exfil_monitor.cpp`, so it triggers the standard CI
+agent-binary rebuild and needs `manage-agent.ps1` -> [2] Update on the Windows endpoint, in addition
+to `git push` + `sudo bash update.sh` on the server.
+
+---
+
 ## Network Share Transfer Control: audit + fixes (September 15, 2026)
 
 Deep audit of `network_share_transfer_control`, same rigor as the other policy-type audits this
