@@ -45,6 +45,8 @@ def transform_frontend_config_to_backend(
         return _transform_application_control_config(config)
     elif policy_type == "network_share_transfer_control":
         return _transform_network_share_transfer_config(config)
+    elif policy_type == "wireless_transfer_control":
+        return _transform_wireless_transfer_config(config)
     elif policy_type == "web_activity_control":
         return _transform_web_activity_config(config)
     else:
@@ -635,12 +637,14 @@ def _transform_application_control_config(config: Dict[str, Any]) -> Tuple[Dict[
     here (e.g. messaging_app_control) matches on event_subtype alone rather
     than re-deriving the agent's own decision.
 
-    NOTE: wireless_transfer_control, print_content_prevention and
-    printer_control are the same agent-polled-config-toggle style as this
-    policy and messaging_app_control, and are currently ALSO missing from
-    this dispatcher -- same "0 violations" display bug likely applies to
-    all three. Not fixed here (out of scope for this pass); flagging for a
-    follow-up.
+    NOTE: print_content_prevention and printer_control are the same
+    agent-polled-config-toggle style as this policy and
+    messaging_app_control, and are currently ALSO missing from this
+    dispatcher -- same "0 violations" display bug likely applies to both.
+    Not fixed here (out of scope for this pass); flagging for a follow-up.
+    (wireless_transfer_control was in this same list originally -- fixed
+    during the September 2026 Wireless/Bluetooth Transfer Control audit,
+    see _transform_wireless_transfer_config below.)
 
     CORRECTION (task #151): network_share_transfer_control was originally
     listed alongside these three here, but it does NOT belong in this
@@ -832,6 +836,55 @@ def _transform_network_share_transfer_config(config: Dict[str, Any]) -> Tuple[Di
         conditions = {"match": "all", "rules": rules}
         actions = {"alert": {}}
 
+    return conditions, actions
+
+
+def _transform_wireless_transfer_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform Wireless / Bluetooth Transfer Control config to backend format.
+
+    Same "agent-polled-config-toggle" architecture as _transform_application_control_config
+    and file_identity_denylist's USB/network-share path: the Windows agent polls
+    GET /agents/{id}/wireless-policy directly and makes its OWN block/allow decision
+    locally -- via an IFEO redirect on fsquirt.exe (Bluetooth File Transfer wizard) and
+    a registry disable of Nearby Sharing/CDP (SOFTWARE\\Policies\\Microsoft\\Windows\\
+    System\\EnableCdp). This transform function is NOT in that enforcement path at all --
+    it exists solely so the Policies page's "violations" counter (which reads through
+    DatabasePolicyEvaluator against ingested events) has something to match against,
+    instead of being permanently stuck at 0 for this policy type (the bug this dispatcher
+    entry was added to fix -- see policy_type dispatch above).
+
+    Matches on event_subtype == "bluetooth_file_transfer", the exact string
+    HandleBlockedLaunch() in agent.cpp sends for every blocked Bluetooth transfer
+    attempt (both allowed and blocked launches emit an event; only blocked ones carry
+    action="blocked"/blocked=true -- see the September 2026 Wireless/Bluetooth Transfer
+    Control audit fix to HandleBlockedLaunch() for the blocked=true field itself).
+    Nearby Sharing/Wi-Fi Direct blocks currently have no corresponding event emission
+    at all (registry disable only, no interception hook), so they cannot be matched
+    here yet -- see CHANGELOG for that limitation.
+
+    Action is always "alert", never "block": the agent has already made and enforced
+    the real decision (IFEO redirect prevents the process from ever launching) before
+    this event is created, so by the time DatabasePolicyEvaluator sees it, "blocking"
+    at the policy-evaluation layer would be a no-op at best. Worse, using "block" here
+    would let ActionExecutor.execute_block()'s declarative event["blocked"] = True
+    silently overwrite the agent's own honest ground truth for any edge case where a
+    launch wasn't actually intercepted -- exactly the failure mode this whole class of
+    fix (Application Control, File Identity Denylist) has been correcting away from.
+    "alert" only surfaces the event and increments the violations counter, without
+    asserting an enforcement outcome the transform layer didn't itself produce.
+    """
+    conditions = {
+        "match": "all",
+        "rules": [
+            {
+                "field": "event_subtype",
+                "operator": "equals",
+                "value": "bluetooth_file_transfer",
+            }
+        ],
+    }
+    actions = {"alert": {}}
     return conditions, actions
 
 

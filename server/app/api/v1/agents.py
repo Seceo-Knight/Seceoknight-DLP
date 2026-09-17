@@ -1397,10 +1397,37 @@ async def get_wireless_policy(
     from CyberSentinel-DLP. Blocks Bluetooth file transfer (the built-in
     fsquirt.exe wizard, via an Image File Execution Options redirect to the
     agent itself -- see SetIFEODebugger()/ApplyWirelessControls() in
-    agent.cpp) and/or Wi-Fi Direct / Windows Nearby Sharing (via the
-    Connected Devices Platform group policy), while leaving Bluetooth audio
+    agent.cpp) and/or Windows Nearby Sharing (via the Connected Devices
+    Platform group policy, EnableCdp=0), while leaving Bluetooth audio
     (A2DP/HFP headphones) and input (HID mice/keyboards) devices untouched --
     those profiles are never disabled by this control.
+
+    NOTE: despite the "Wireless / Bluetooth Transfer Control" name and the
+    dashboard's original "Wi-Fi Direct / Nearby Sharing" toggle label
+    (corrected during the September 2026 audit -- see
+    WirelessTransferControlPolicyForm.tsx), this control does NOT disable
+    the Wi-Fi Direct radio/driver itself. It only disables the Nearby
+    Sharing feature (which happens to use Wi-Fi Direct as a transport).
+    Any other application using Wi-Fi Direct directly is unaffected.
+
+    KNOWN GAP (investigated, not fixed, September 2026 audit): unlike
+    Bluetooth File Transfer -- where launching fsquirt.exe is a distinct,
+    interceptable action that HandleBlockedLaunch() turns into a full
+    audit-trail event -- disabling EnableCdp is a passive killswitch with
+    no equivalent interception point. A user attempting (and failing) to
+    use Nearby Sharing while this policy is enforced produces NO event.
+    Investigated extending this agent's existing WMI process-launch
+    monitor (used for CLI tool interception in network_exfil_monitor.cpp)
+    to the Nearby Sharing share-host process, but rejected: that process
+    is shared across every Windows Share target (email, OneNote, etc, not
+    just Nearby Sharing), so a launch alone isn't attributable, and
+    whether it even launches when CDP is disabled couldn't be verified
+    without a live test rig. No Windows Event Log tailing capability
+    exists in this codebase to fall back on (it was built once for File
+    Access Control's SACL audit trail and fully removed when that feature
+    was reverted). Shipping a speculative, unverified signal here would
+    repeat exactly the failure mode this audit pass has been correcting
+    elsewhere -- so this is documented as a known limitation instead.
 
     mode: "enforce" (agent applies the OS-level disables) | "audit" (agent
     only logs what it would have blocked, no registry changes) | "off".

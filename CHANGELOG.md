@@ -8,6 +8,72 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Wireless / Bluetooth Transfer Control: audit + fixes (September 17, 2026)
+
+Deep audit of `wireless_transfer_control`, covering both enforcement mechanisms: Bluetooth File
+Transfer (IFEO redirect on `fsquirt.exe`) and Nearby Sharing (CDP registry policy key). Found and
+fixed two real bugs, corrected a mislabeling, and investigated (but did not fix, per findings
+below) a structural audit-trail gap.
+
+1. **Bluetooth block events missing `blocked: true`.** `HandleBlockedLaunch()` in `agent.cpp`
+   (the Bluetooth-block event handler) hand-builds its own event JSON rather than going through
+   the shared `EmitEvent()` function used elsewhere in `network_exfil_monitor.cpp` -- so the
+   `blocked: true` fix applied during the Application Control audit (which fixed
+   `EmitEvent()` itself) did NOT propagate here. A real, successful Bluetooth file-transfer block
+   was showing up in Events/Alerts as if nothing had been blocked. Fixed by adding
+   `json.AddBool("blocked", true);` directly to `HandleBlockedLaunch()`, immediately after the
+   existing `action: "blocked"` field.
+
+2. **Violations always showing 0 on the Policies tab.** `wireless_transfer_control` was entirely
+   missing from `policy_transformer.py`'s `transform_frontend_config_to_backend()` dispatcher --
+   the same class of gap already flagged (but not yet fixed) for `print_content_prevention` and
+   `printer_control` during the Application Control audit's docstring. Added the dispatcher
+   branch plus a new `_transform_wireless_transfer_config()` function, matching on
+   `event_subtype == "bluetooth_file_transfer"` with action always `"alert"` (never `"block"`) --
+   same reporting-only rationale as `_transform_application_control_config()`: the agent has
+   already made and enforced the real decision before this event exists, so "blocking" at the
+   policy-evaluation layer would be a no-op at best, and risks silently overwriting the agent's
+   own honest `blocked` ground truth for any edge case where a launch wasn't actually intercepted.
+
+3. **Mislabeled "Wi-Fi Direct / Nearby Sharing" toggle.** The dashboard toggle, its description
+   text, the policy-type selector card, and the `GET /agents/{id}/wireless-policy` endpoint's
+   docstring all implied this control disables the Wi-Fi Direct radio itself. It does not --
+   it only disables Windows' Nearby Sharing feature (`EnableCdp = 0`), which happens to use Wi-Fi
+   Direct as a transport. Any other application using Wi-Fi Direct directly (unrelated to Nearby
+   Sharing) is unaffected and was never covered by this policy. Relabeled to "Nearby Sharing"
+   throughout and corrected the explanatory copy in `WirelessTransferControlPolicyForm.tsx`,
+   `PolicyTypeSelector.tsx`, and `agents.py`.
+
+4. **No audit trail for Nearby Sharing blocks -- investigated, not fixed.** Unlike Bluetooth File
+   Transfer (launching `fsquirt.exe` is a distinct, interceptable action), disabling `EnableCdp`
+   is a passive feature killswitch with no equivalent interception point -- a user attempting and
+   failing to use Nearby Sharing produces no event today. Investigated extending the agent's
+   existing WMI process-launch monitor (used for CLI-tool interception) to the Nearby Sharing
+   share-host process, but rejected it: that process is shared across every Windows Share target
+   (email, OneNote, etc.), not just Nearby Sharing, so a launch alone wouldn't be attributable to
+   this specific action, and whether it even launches when CDP is disabled couldn't be verified
+   without a live Windows test rig. This codebase also has no Windows Event Log tailing capability
+   to fall back on (it was built once for File Access Control's audit trail, then fully removed
+   when that feature was reverted). Shipping a speculative, unverified signal here would repeat
+   the exact failure mode this audit pass has been correcting elsewhere, so this is documented as
+   a known limitation (see the "Known limitation" note in the dashboard form and the "KNOWN GAP"
+   docstring note on the wireless-policy endpoint) rather than fixed.
+
+**Verified:** `agent.cpp` changes checked with the custom brace/string/comment-depth-counting
+script against a `git stash` baseline (no new imbalance). `policy_transformer.py` verified via
+`ast.parse()`. Dashboard/`.tsx` changes verified via `tsc --noEmit`, diffed against the known
+stable 21-error baseline (unchanged before/after both edits). No behavior change to Fix 4 --
+documentation only.
+
+**Deploy note:** `agent.cpp` was modified (Fix 1) -- this requires the CI-rebuild path. After
+`git push`, wait for CI to auto-rebuild `seceoknight_agent.exe` and auto-commit back to `master`
+(`git pull --no-rebase origin master` before your next push), then on the Windows endpoint run
+`manage-agent.ps1` -> [2] Update to pick up the new agent binary. The server/dashboard changes
+(Fixes 2 and 3) only need `git push` + `sudo bash update.sh` on the server -- no separate step,
+since they ship in the same push.
+
+---
+
 ## Application Control: audit + fixes (September 16, 2026)
 
 Deep audit of `application_control`, same rigor as the other policy-type audits this session.

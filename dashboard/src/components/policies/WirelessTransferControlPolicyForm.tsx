@@ -17,9 +17,9 @@ export default function WirelessTransferControlPolicyForm({ config: rawConfig, o
   return (
     <div className="space-y-6">
       <div className="p-4 bg-warning/10 border border-warning/30 rounded-lg text-sm text-warning">
-        Blocks the built-in Bluetooth file-transfer wizard and/or Wi-Fi Direct / Windows Nearby Sharing -- an
-        exfiltration channel independent of USB, network share, and print. Audio (headphones/speakers) and input
-        (mouse/keyboard) Bluetooth devices are never affected.
+        Blocks the built-in Bluetooth file-transfer wizard and/or Windows Nearby Sharing -- an exfiltration channel
+        independent of USB, network share, and print. Audio (headphones/speakers) and input (mouse/keyboard)
+        Bluetooth devices are never affected. Note: this does not disable the Wi-Fi Direct radio itself (see below).
       </div>
 
       {/* Mode */}
@@ -95,16 +95,27 @@ export default function WirelessTransferControlPolicyForm({ config: rawConfig, o
               className="w-4 h-4 text-primary rounded"
             />
             <div>
-              <div className="text-foreground font-medium text-sm">Wi-Fi Direct / Nearby Sharing</div>
-              <div className="text-muted-foreground text-xs">Blocks Windows Nearby Sharing and Wi-Fi Direct device-to-device transfer</div>
+              <div className="text-foreground font-medium text-sm">Nearby Sharing</div>
+              <div className="text-muted-foreground text-xs">
+                Disables Windows Nearby Sharing (the share-sheet "Nearby sharing" target, which uses Wi-Fi Direct +
+                Bluetooth under the hood) via the CDP policy key. Does not disable the Wi-Fi Direct radio/driver
+                itself -- other Wi-Fi Direct-based apps outside Nearby Sharing are not covered.
+              </div>
             </div>
           </label>
         </div>
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Enforced via registry policy (IFEO debugger redirection for the Bluetooth wizard, Wi-Fi Direct/Nearby
-        Sharing policy keys). Reconciled on every policy sync.
+        Enforced via registry policy: IFEO debugger redirection for the Bluetooth file-transfer wizard
+        (fsquirt.exe), and the Nearby Sharing/CDP policy key for Nearby Sharing. Reconciled on every policy sync.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Known limitation: a blocked Bluetooth file-transfer attempt creates a full audit-trail event (who, when,
+        blocked) because launching fsquirt.exe is a distinct, interceptable action. A blocked Nearby Sharing
+        attempt does not -- disabling Nearby Sharing is a passive feature killswitch with no equivalent
+        interception point, so attempted (and failed) use of Nearby Sharing while this policy is enforced produces
+        no event and will not appear in Events/Alerts.
       </p>
     </div>
   )

@@ -13187,6 +13187,17 @@ int HandleBlockedLaunch(int argc, char* argv[]) {
         json.AddString("agent_id", cfg.agentId);
         json.AddString("source_type", "endpoint");
         json.AddString("action", "blocked");
+        // Found during the Wireless/Bluetooth Transfer Control audit
+        // (September 2026): this event build is hand-rolled, separate from
+        // the shared EmitEvent() path in network_exfil_monitor.cpp (which
+        // had the same missing-blocked-field bug fixed for Application
+        // Control just a day earlier) -- so it never got that fix and
+        // independently had the identical problem. EventCreate.blocked
+        // defaults to False whenever this key is absent (events.py), so
+        // every genuinely-blocked Bluetooth file-transfer attempt was
+        // displaying as NOT blocked in Events/Alerts/Incidents despite
+        // fsquirt.exe having been prevented from ever running.
+        json.AddBool("blocked", true);
         json.AddString("block_reason", "wireless_control");
         json.AddString("destination_type", "bluetooth");
         json.AddString("user_email", username);

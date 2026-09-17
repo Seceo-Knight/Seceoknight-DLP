@@ -95,7 +95,7 @@ const policyTypes: Array<{
   {
     type: 'wireless_transfer_control',
     label: 'Wireless / Bluetooth Transfer Control',
-    description: 'Block the Bluetooth file wizard and/or Wi-Fi Direct / Nearby Sharing',
+    description: 'Block the Bluetooth file wizard and/or Windows Nearby Sharing',
     icon: Bluetooth
   },
   {
