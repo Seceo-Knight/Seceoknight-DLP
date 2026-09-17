@@ -50,6 +50,13 @@
  #include "messaging_text_monitor.h"
  #include "policy_engine.h"
  #include "kernel/filter_comm.h"
+ // Best-effort XPS/OPC (ZIP) print-spool text extraction -- see this
+ // header's own top-of-file comment for why (MinGW toolchain, no
+ // MsOpc.lib/msopc.h available, so a vendored public-domain DEFLATE
+ // decompressor is used instead of the OS's OPC Packaging API). Added
+ // during the September 2026 Print Content Prevention "enterprise-grade"
+ // follow-up; only used by ReadSpoolText() below.
+ #include "xps_inflate.h"
  #include <regex>
  #include <iomanip>
  #include <filesystem>
@@ -6086,12 +6093,41 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
          // looking identical to a genuinely clean, low-risk print job.
          if (bytes.size() >= 4 && bytes[0] == 'P' && bytes[1] == 'K' &&
              (unsigned char)bytes[2] == 0x03 && (unsigned char)bytes[3] == 0x04) {
-             logger.Warning("Print job spool file is a ZIP/XPS container (job " +
-                 std::to_string(jobId) + ") -- content text extraction is not "
-                 "implemented for this format, so this job's classification "
-                 "cannot be trusted. Known trigger: printing from Word (and "
-                 "other apps using Windows' XPS print pipeline) to a driver "
-                 "that routes through the XPS-to-downlevel conversion path.");
+             // UPDATED September 2026 (Print Content Prevention
+             // "enterprise-grade" follow-up): this used to just log and give
+             // up -- see xps_inflate.h's own header comment for the full
+             // reasoning on why a vendored public-domain DEFLATE decompressor
+             // is used here instead of the OS's OPC Packaging API (this
+             // agent is built with MinGW, which has no prebuilt import
+             // library for msopc.dll/MsOpc.lib). Wrapped in try/catch and
+             // bounded internally (fixed-size scratch buffers, entry/output
+             // caps) so a malformed or adversarial spool file can only ever
+             // degrade to the pre-existing "give up, fall back below"
+             // behavior -- never a crash or unbounded work.
+             try {
+                 std::vector<unsigned char> zipBytes(bytes.begin(), bytes.end());
+                 std::string xpsText = seceoknight_puff::ExtractXpsText(zipBytes);
+                 if (!xpsText.empty()) {
+                     logger.Info("PRINT_SPOOL_XPS: job " + std::to_string(jobId) +
+                         " -- extracted " + std::to_string(xpsText.size()) +
+                         " chars of text from XPS/ZIP container");
+                     return xpsText;
+                 }
+                 logger.Warning("PRINT_SPOOL_XPS: job " + std::to_string(jobId) +
+                     " -- ZIP/XPS container detected but no .fpage text could be "
+                     "extracted (unsupported compression method, streaming/"
+                     "data-descriptor entries, or a structurally unusual "
+                     "package) -- falling back to raw byte-scan, which is "
+                     "expected to find little to nothing in a compressed "
+                     "container. This job's classification should not be "
+                     "trusted as a real content read.");
+             } catch (const std::exception& e) {
+                 logger.Warning(std::string("PRINT_SPOOL_XPS: extraction threw: ") + e.what() +
+                     " (job " + std::to_string(jobId) + ") -- falling back to raw byte-scan");
+             } catch (...) {
+                 logger.Warning("PRINT_SPOOL_XPS: extraction threw a non-std::exception (job " +
+                     std::to_string(jobId) + ") -- falling back to raw byte-scan");
+             }
          }
 
          return ExtractSpoolStrings(bytes);

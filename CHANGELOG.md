@@ -8,6 +8,82 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Print Content Prevention: real XPS/ZIP spool text extraction (September 17, 2026)
+
+Follow-up to the audit below, prompted by live testing against a real Sharp AR-6020N printer:
+every job sent to it came back "content NOT verified... Local Downlevel Document" -- Windows was
+routing all print jobs through the XPS pipeline (a ZIP/OPC-compressed spool format), which
+`ReadSpoolText()`'s existing byte-scanner (`ExtractSpoolStrings()`) cannot see into at all, since
+the actual text sits inside a DEFLATE-compressed container. This is not specific to this one
+printer -- Windows' "v4" print driver class, which is what most modern MFP driver packages
+(Sharp, HP, Canon, Xerox, Ricoh, etc.) install by default, is XPS-native and cannot be forced
+back to the older EMF spooling path via the "Enable advanced printing features" checkbox (that
+toggle only affects the older "v3" driver class). Confirmed live: unchecking it on this printer
+made no difference. This means the previous "content not verified -> fail-closed Block" mitigation
+was papering over what is likely a common real-world gap, not a one-off.
+
+**What changed:** `agents/endpoint/windows/ReadSpoolText()` used to detect the ZIP magic bytes,
+log a warning, and give up. It now attempts real text extraction first.
+
+**How, and why this way:** the "normal" Windows API for reading a ZIP/OPC package (XPS documents,
+like .docx/.pptx, are ZIP containers) is the OS-provided OPC Packaging API (`msopc.dll`,
+`IOpcFactory`), which requires `MsOpc.lib`/`msopc.h` from the Windows SDK. This agent is built
+with MinGW-w64 g++, not MSVC (see `.github/workflows/build-windows-agent.yml`) -- and MinGW does
+not ship a prebuilt import library for `msopc.dll` (the same class of gap this codebase already
+hit once before for `fltlib.dll`, solved there with a hand-written `.def` + `dlltool`). Hand-
+declaring the OPC COM interfaces' binary vtable layout blind, with no compiler available in this
+development environment to catch a mismatched struct layout or calling convention, was judged too
+risky for a Windows service.
+
+Instead, `agents/endpoint/windows/xps_inflate.h` (new file) vendors in **puff.c/puff.h verbatim
+from the official zlib project** (https://github.com/madler/zlib/tree/master/contrib/puff) -- a
+small, public-domain, deliberately-simple reference DEFLATE decompressor, fetched directly from
+that repository rather than reconstructed from memory, with its original copyright/license notice
+preserved per its terms. This is pure standard C++ with zero Windows-API/COM dependency, so it
+needed no new linker flags and compiles with the exact g++ command line already in CI. On top of
+it, new glue code (`ExtractXpsText()`) walks the spool file's ZIP local-file-headers directly
+(no central directory needed), inflates entries named `*.fpage` (XPS's fixed-page markup, where a
+page's visible text lives), and scans the decompressed XML for `<Glyphs UnicodeString="...">`
+attribute values -- the same string-scanning philosophy `ExtractSpoolStrings()` already uses,
+just after a decompression step it couldn't previously get past.
+
+**Defensive design, since this is genuinely new/unverified code:** every offset read during ZIP
+parsing is bounds-checked against the buffer size before use; entries using the ZIP
+"streaming"/data-descriptor mode (where sizes aren't known upfront) are skipped rather than
+guessed at; each entry inflates into a fixed 256KB scratch buffer rather than trusting a
+(potentially adversarial) header's claimed uncompressed size, so a corrupt or hostile spool file
+can only ever produce less/garbled text, never an unbounded allocation or out-of-bounds read; the
+whole XPS-extraction attempt in `ReadSpoolText()` is wrapped in try/catch and falls straight back
+to the pre-existing `ExtractSpoolStrings()` behavior on any exception. `unknownContentAction =
+Block` from the earlier "fail-closed option" fix remains available as a safety net independent of
+whether this extraction succeeds.
+
+**HONEST DISCLOSURE:** this code has not been compiled or run anywhere in this development
+environment -- no C++ compiler is available here (see the Verified section below for what "brace-
+balance checked" actually means and does not mean). The vendored `puff()` decompressor itself is
+mature, widely-deployed code and low risk; the new ZIP-parsing/XML-scanning glue around it
+(`ExtractXpsText()`, `InflateEntryAndScan()`, `ScanUnicodeStringAttrs()`) is new and is the part
+that most needs careful live testing on the actual endpoint before being trusted for real
+enforcement decisions. Test by printing a document with known sensitive content to a printer that
+previously showed "Local Downlevel Document" / "content NOT verified", and confirm the resulting
+event shows a plausible real classification (and ideally spot-check the extracted text isn't
+garbled) rather than assuming success because the job got classified as something other than
+Public.
+
+**Verified:** `xps_inflate.h` and `agent.cpp` both checked with a custom brace/string/comment-
+depth-counting Python script (no C++ compiler available) against a pre-edit baseline of
+`agent.cpp` -- final depth and all negative-excursion line numbers match exactly after accounting
+for the added `#include` line's shift, confirming no new structural imbalance. This proves the
+code is not obviously malformed; it does NOT prove it compiles or runs correctly -- see the
+disclosure above.
+
+**Deploy note:** `agent.cpp` and the new `xps_inflate.h` require the CI-rebuild path. After
+`git push`, wait for CI to rebuild `seceoknight_agent.exe` and auto-commit back to `master`
+(`git pull --no-rebase origin master` before your next push), then run `manage-agent.ps1` -> [2]
+Update on the Windows endpoint.
+
+---
+
 ## Print Content Prevention / Printer Control: audit + fixes (September 17, 2026)
 
 Deep audit of both print-related policy types. Unlike most of this session's other
