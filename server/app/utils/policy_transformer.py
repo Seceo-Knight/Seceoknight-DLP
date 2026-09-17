@@ -47,6 +47,10 @@ def transform_frontend_config_to_backend(
         return _transform_network_share_transfer_config(config)
     elif policy_type == "wireless_transfer_control":
         return _transform_wireless_transfer_config(config)
+    elif policy_type == "print_content_prevention":
+        return _transform_print_content_prevention_config(config)
+    elif policy_type == "printer_control":
+        return _transform_printer_control_config(config)
     elif policy_type == "web_activity_control":
         return _transform_web_activity_config(config)
     else:
@@ -637,14 +641,16 @@ def _transform_application_control_config(config: Dict[str, Any]) -> Tuple[Dict[
     here (e.g. messaging_app_control) matches on event_subtype alone rather
     than re-deriving the agent's own decision.
 
-    NOTE: print_content_prevention and printer_control are the same
-    agent-polled-config-toggle style as this policy and
-    messaging_app_control, and are currently ALSO missing from this
-    dispatcher -- same "0 violations" display bug likely applies to both.
-    Not fixed here (out of scope for this pass); flagging for a follow-up.
-    (wireless_transfer_control was in this same list originally -- fixed
-    during the September 2026 Wireless/Bluetooth Transfer Control audit,
-    see _transform_wireless_transfer_config below.)
+    (wireless_transfer_control and printer_control were in this same list
+    originally, alongside print_content_prevention -- all three were
+    missing from this dispatcher. wireless_transfer_control and
+    printer_control were fixed the same reporting-only way as this
+    function (see _transform_wireless_transfer_config and
+    _transform_printer_control_config below). print_content_prevention
+    turned out NOT to belong in this bucket at all -- see the CORRECTION
+    below and _transform_print_content_prevention_config's own docstring
+    for why its dispatcher gap was a real enforcement bug, not just a
+    display one.)
 
     CORRECTION (task #151): network_share_transfer_control was originally
     listed alongside these three here, but it does NOT belong in this
@@ -882,6 +888,153 @@ def _transform_wireless_transfer_config(config: Dict[str, Any]) -> Tuple[Dict[st
                 "operator": "equals",
                 "value": "bluetooth_file_transfer",
             }
+        ],
+    }
+    actions = {"alert": {}}
+    return conditions, actions
+
+
+def _transform_print_content_prevention_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform Print Content Prevention config to backend format.
+
+    UNLIKE printer_control/messaging_app_control/wireless_transfer_control
+    (pure agent-polled config toggles where the agent already decided
+    block/allow locally before any event reaches this transform's output --
+    this transform exists purely so the Policies page's violations counter
+    isn't stuck at 0), print_content_prevention's actual sensitive-content
+    decision is made HERE, through the real-time rule engine.
+    EvaluatePrintContent() (agent.cpp) pauses the spool job, extracts its
+    real text, and POSTs it to POST /agents/{id}/policy/evaluate BEFORE the
+    job completes (see evaluate_policy_realtime() in agents.py) -- the
+    exact same synchronous pre-action pattern USB and network-share file
+    transfers already use. The response's "action" field is what the agent
+    actually acts on (`bool block = ExtractJsonValue(response, "action")
+    == "block"`).
+
+    Found during the September 2026 Print Content Prevention audit: this
+    policy_type had NO branch in the dispatcher above, so it fell through
+    to the "unknown type" default -> empty conditions.rules ->
+    DatabasePolicyEvaluator.evaluate_event() skips any policy whose rules
+    list is empty (`if not conditions.get("rules"): continue`). Net
+    effect: a print job containing an SSN, credit-card number, or any
+    other Confidential/Restricted content was NEVER actually cancelled in
+    Enforce mode, no matter how the policy was configured -- only an
+    unrelated Data Matching/EDM source (see evaluate_policy_realtime()'s
+    section 4b) could still catch it. The dashboard's own banner text
+    (PrintContentPreventionPolicyForm.tsx) has always promised exactly
+    this behavior; it silently never happened. This is a REAL enforcement
+    bug, not just a violations-counter display bug -- do not "fix" this
+    the same reporting-only way as printer_control/wireless_transfer_control
+    above.
+
+    Frontend format:
+    {
+        "mode": "enforce" | "audit",
+        "unknownContentAction": "allow" | "block"
+    }
+    (unknownContentAction is intentionally NOT translated here. It's a
+    fail-closed toggle EvaluatePrintContent() applies locally, entirely
+    independent of whether any Policy matched -- see that function's own
+    comment for the exact semantics. It reaches the agent through the
+    existing GET /agents/{id}/printer-policy config-toggle endpoint, not
+    through this rule-engine path.)
+
+    Backend format:
+    conditions: {
+        "match": "all",
+        "rules": [
+            {"field": "event_type", "operator": "equals", "value": "print"},
+            {"field": "classification_level", "operator": "in",
+             "value": ["Confidential", "Restricted"]}
+        ]
+    }
+    actions: {"block": {}} in enforce mode, {"alert": {}} in audit mode --
+    mirroring EvaluatePrintContent()'s own audit-mode short-circuit
+    (`if (block && cmode == "audit") return {false, inspectionStatus};`),
+    so a matched policy still produces a visible, attributable event
+    either way, exactly matching what the agent itself already does.
+    Trigger levels are hardcoded to Confidential/Restricted (not
+    configurable from the UI today) to match
+    PrintContentPreventionPolicyForm.tsx's own banner text verbatim
+    ("cancels the job if it contains Confidential / Restricted content").
+    """
+    mode = config.get("mode", "audit")
+    conditions = {
+        "match": "all",
+        "rules": [
+            {
+                "field": "event_type",
+                "operator": "equals",
+                "value": "print",
+            },
+            {
+                "field": "classification_level",
+                "operator": "in",
+                "value": ["Confidential", "Restricted"],
+            },
+        ],
+    }
+    actions = {"block": {}} if mode == "enforce" else {"alert": {}}
+    return conditions, actions
+
+
+def _transform_printer_control_config(config: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Transform Printer Control (device-level allow/block by printer) config
+    to backend format.
+
+    Same agent-polled-config-toggle architecture as application_control/
+    messaging_app_control/wireless_transfer_control: the Windows agent
+    polls GET /agents/{id}/printer-policy directly and decides locally
+    (ShouldBlockPrinter()) whether a job may proceed to a given printer,
+    before the event is ever created -- this transform is NOT in that
+    enforcement path. It exists purely so the Policies page's violations
+    counter isn't stuck at 0 for this policy type, matching the same
+    "missing dispatcher branch" bug found for wireless_transfer_control
+    (and printer_control was flagged as still missing in that same audit's
+    follow-up note -- see _transform_application_control_config's
+    docstring history above).
+
+    Matches on event_subtype == "print_job" AND block_reason ==
+    "printer_control" -- both fields are already correctly set by the
+    agent's print event emitter (agent.cpp's printMonitor callback: see
+    `json.AddString("block_reason", event.blockReason)`). The
+    block_reason check is necessary (unlike the single-field matches used
+    for application_control/messaging_app_control) because "print_job" is
+    shared: the SAME event_subtype is emitted for print_content_prevention
+    blocks, unverified-content events, and ordinary allowed prints --
+    block_reason is the only field that distinguishes "blocked because of
+    which printer" from those other cases.
+
+    Action is always "alert", never mapped from config.mode/scope -- same
+    reasoning as every other policy type in this reporting-only class: the
+    agent already made and executed the real cancel decision
+    (SetJob(..., JOB_CONTROL_DELETE)) before this event was created, and
+    the event's own honest `blocked` field is already ground truth. Using
+    "block" here would let ActionExecutor.execute_block()'s purely
+    declarative `event["blocked"] = True` override that for any edge case
+    where the job wasn't actually cancelled.
+
+    Frontend format:
+    {
+        "mode": "enforce" | "audit",
+        "scope": "block_all" | "block_network" | "block_local" | "allowlist"
+    }
+    """
+    conditions = {
+        "match": "all",
+        "rules": [
+            {
+                "field": "event_subtype",
+                "operator": "equals",
+                "value": "print_job",
+            },
+            {
+                "field": "block_reason",
+                "operator": "equals",
+                "value": "printer_control",
+            },
         ],
     }
     actions = {"alert": {}}

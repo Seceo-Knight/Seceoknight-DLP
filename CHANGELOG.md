@@ -8,6 +8,66 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Print Content Prevention / Printer Control: audit + fixes (September 17, 2026)
+
+Deep audit of both print-related policy types. Unlike most of this session's other
+"agent-polled-config-toggle" policy types, `print_content_prevention`'s real block decision is
+NOT agent-local -- it round-trips through the generic real-time rule engine (the same path USB
+and network-share content-aware transfers use), which made this audit's headline finding a real
+enforcement bug, not just a cosmetic one.
+
+1. **Critical: sensitive print jobs were never actually blocked.** `EvaluatePrintContent()` in
+   `agent.cpp` pauses a spooled print job, extracts its real text, and POSTs it to
+   `POST /agents/{id}/policy/evaluate` before letting the job proceed -- exactly the same
+   synchronous pre-action pattern USB/network-share transfers use. But `policy_transformer.py`'s
+   dispatcher had no branch for `print_content_prevention`, so every such policy got empty
+   `conditions.rules`, which `DatabasePolicyEvaluator.evaluate_event()` skips outright. Net
+   effect: in Enforce mode, a print job containing an SSN, credit-card number, or any other
+   Confidential/Restricted content was never actually cancelled -- only an unrelated Data
+   Matching/EDM source could still catch it. Fixed by adding a dispatcher branch and a new
+   `_transform_print_content_prevention_config()` with REAL conditions (`event_type == "print"`
+   AND `classification_level in [Confidential, Restricted]`), action mapped from the policy's
+   mode (enforce -> block, audit -> alert) -- deliberately NOT the reporting-only pattern used
+   for the policy types below, since this one's block decision genuinely depends on it.
+
+2. **`printer_control` (device-level printer blocking) missing from the same dispatcher --
+   violations always showing 0.** Unlike Print Content Prevention, `printer_control`'s
+   enforcement (`ShouldBlockPrinter()`) is fully agent-local and already worked correctly; only
+   the Policies-tab violations counter was broken, same class of gap as the Wireless/Bluetooth
+   Transfer Control fix. Fixed with a new `_transform_printer_control_config()` matching on
+   `event_subtype == "print_job"` AND `block_reason == "printer_control"` (both fields already
+   correctly set by the agent) -- the `block_reason` check is necessary because `print_job` is a
+   shared subtype also used for content-based blocks and ordinary allowed prints.
+
+3. **Dashboard didn't disclose the fixed Confidential/Restricted trigger threshold.**
+   `PrintContentPreventionPolicyForm.tsx`'s banner promised exactly the right behavior (which,
+   per Fix 1, is now actually true) but never mentioned that the trigger levels are hardcoded,
+   not admin-configurable per level like Email Send Prevention's checkboxes. Added a clarifying
+   line. Also added a "CONFIRMED LIVE BUG, fixed September 2026" note to the
+   `GET /agents/{id}/printer-policy` endpoint's docstring in `agents.py`, closing the loop on
+   Fix 1 for future readers of that endpoint.
+
+4. **Dropped `content_inspected` field.** `EvaluatePrintContent()` has always sent this (an
+   honest signal distinguishing a real spooled-text read from its filename-only fallback when
+   the spool file was unreadable) but `PolicyEvaluationRequest` never declared it, so it was
+   silently stripped by Pydantic. Declared it, forwarded it into `event_data`, added it to
+   `DatabasePolicyEvaluator`'s field mappings, and used it to downgrade `extraction_status` from
+   the default "readable" to "unreadable" when a caller explicitly reports
+   `content_inspected: false` and no stronger signal already set it -- so a print job whose
+   content genuinely couldn't be verified no longer looks identical to one that was inspected
+   and found clean. Informational/policy-matchable going forward; no existing policy rule reads
+   it yet.
+
+**Verified:** `policy_transformer.py`, `agents.py`, and `database_policy_evaluator.py` changes
+verified via `ast.parse()`. `PrintContentPreventionPolicyForm.tsx` verified via `tsc --noEmit`,
+diffed against the known stable 21-error baseline (unchanged). No `agent.cpp`/C++ changes in
+this pass -- every fix here was server/dashboard-only.
+
+**Deploy note:** server/dashboard-only -- `git push` + `sudo bash update.sh` on the server, no
+Windows-endpoint agent update needed.
+
+---
+
 ## Wireless / Bluetooth Transfer Control: audit + fixes (September 17, 2026)
 
 Deep audit of `wireless_transfer_control`, covering both enforcement mechanisms: Bluetooth File

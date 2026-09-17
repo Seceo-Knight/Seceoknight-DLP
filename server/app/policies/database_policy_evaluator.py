@@ -283,6 +283,15 @@ class DatabasePolicyEvaluator:
             "connection_id": ["connection_id", "metadata.connection_id"],
             "folder_id": ["folder_id", "metadata.folder_id"],
             "channel": ["channel", "event.channel"],
+            # See PolicyEvaluationRequest.content_inspected's docstring
+            # (agents.py) -- lets a rule like {"field": "content_inspected",
+            # "operator": "equals", "value": False} distinguish content
+            # that was genuinely read from a filename-only fallback (today
+            # only the print channel sets this). Added alongside
+            # evaluate_policy_realtime()'s extraction_status downgrade for
+            # the same signal during the September 2026 Print Content
+            # Prevention audit.
+            "content_inspected": ["content_inspected"],
             # Classification fields
             "classification_level": ["classification_metadata.classification_level", "classification_level"],
             "confidence_score": ["classification_metadata.confidence_score", "confidence_score"],

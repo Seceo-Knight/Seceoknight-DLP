@@ -17,8 +17,10 @@ export default function PrintContentPreventionPolicyForm({ config: rawConfig, on
     <div className="space-y-6">
       <div className="p-4 bg-warning/10 border border-warning/30 rounded-lg text-sm text-warning">
         Inspects the actual text of a spooled print job -- not just the document&apos;s filename -- and cancels
-        the job if it contains Confidential / Restricted content. Independent of the printer-device allowlist
-        managed on the Printers page; this is content-level inspection, that is device-level access control.
+        the job if it contains Confidential / Restricted content. The Confidential/Restricted trigger threshold
+        is fixed and not configurable from this form (unlike, e.g., Email Send Prevention's per-level checkboxes).
+        Independent of the printer-device allowlist managed on the Printers page; this is content-level
+        inspection, that is device-level access control.
       </div>
 
       <div>

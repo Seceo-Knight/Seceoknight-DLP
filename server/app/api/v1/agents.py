@@ -1517,6 +1517,17 @@ async def get_printer_policy(
     enforce vs audit controls whether a sensitive verdict actually cancels
     the job or only logs it.
 
+    CONFIRMED LIVE BUG, fixed September 2026: the above was always the
+    intended design, but policy_transformer.py's dispatcher had no branch
+    for "print_content_prevention" -- every such Policy row got empty
+    conditions.rules, which DatabasePolicyEvaluator.evaluate_event() skips
+    outright. So POST /policy/evaluate's classification step always ran,
+    but never matched any policy, and "action" in its response was never
+    "block" for a content-based match -- Enforce mode silently never
+    cancelled a job for sensitive content, no matter how this was
+    configured. See _transform_print_content_prevention_config() in
+    policy_transformer.py for the fix.
+
     The agent polls this on the same cadence as policy sync. Requires
     ``X-Agent-Key`` header.
     """
@@ -1930,6 +1941,18 @@ class PolicyEvaluationRequest(BaseModel):
     # forwarding it below fixes this for every EvaluatePolicyRealtime()
     # caller, not just network-share.
     file_extension: Optional[str] = Field(None, description="File extension without the leading dot, lowercase (e.g. 'pdf'), when the caller already computed it")
+    # EvaluatePrintContent() (agent.cpp) has always sent this -- an honest
+    # signal distinguishing a real spooled-text read from its filename-only
+    # fallback (see that function's own comment at the call site) -- but it
+    # was never declared here either, so it was silently dropped before
+    # ever reaching event_data. Found during the September 2026 Print
+    # Content Prevention audit alongside the dispatcher-gap fix. Currently
+    # informational only (no policy rule reads it yet), but declaring it
+    # here is what would let a future "content_inspected == false" rule
+    # exist at all, and keeps this endpoint's own extraction_status
+    # response field honest about the print channel's real inspection
+    # state rather than defaulting to "readable" regardless.
+    content_inspected: Optional[bool] = Field(None, description="Whether the caller verified real content was read (true) vs. fell back to filename-only (false), when the caller tracks this")
     event_type: str = Field("clipboard_copy", description="Event type (e.g., 'usb_file_transfer', 'clipboard_copy')")
     destination_type: Optional[str] = Field(None, description="Destination type (e.g., 'removable_drive', 'network')")
     source_path: Optional[str] = Field(None, description="Source file path")
@@ -2051,6 +2074,25 @@ async def evaluate_policy_realtime(
                     scanned_chars=len(extracted.text),
                 )
 
+        # Print channel's honest fallback signal (see
+        # PolicyEvaluationRequest.content_inspected's docstring): none of
+        # the branches above cover it, because print never sends
+        # file_content_b64 or inspection_skipped -- it always sends SOME
+        # text in file_content, but that text may just be the document's
+        # filename (EvaluatePrintContent()'s `if (text.size() < 20) text =
+        # docName;` fallback), which classifies as confidently as real
+        # spooled content while actually verifying nothing. Without this,
+        # extraction_status stayed "readable" for a job nobody could
+        # actually read, which is exactly the false sense of security this
+        # field exists to close.
+        if request.content_inspected is False and extraction_status == "readable":
+            extraction_status = "unreadable"
+            extraction_reason = extraction_reason or "caller reported content_inspected=false (filename-only fallback)"
+            logger.info(
+                "Caller signaled uninspected content via content_inspected=false",
+                agent_id=agent_id, file_name=request.file_name, event_type=request.event_type,
+            )
+
         # 1. Classify the file content using ClassificationEngine
         classification_engine = ClassificationEngine(db)
         classification_result = await classification_engine.classify_content(
@@ -2111,6 +2153,14 @@ async def evaluate_policy_realtime(
         if request.file_extension:
             # See PolicyEvaluationRequest.file_extension's docstring above.
             event_data["file_extension"] = request.file_extension
+        if request.content_inspected is not None:
+            # See PolicyEvaluationRequest.content_inspected's docstring
+            # above. Forwarded for the same reason file_hash/file_extension
+            # are: informational today, but makes a future
+            # `content_inspected equals false -> block` rule reachable
+            # without another round of "the field exists agent-side but was
+            # never declared/forwarded" archaeology.
+            event_data["content_inspected"] = request.content_inspected
 
         # 3. Evaluate classification-aware policies
         policy_evaluator = DatabasePolicyEvaluator()
