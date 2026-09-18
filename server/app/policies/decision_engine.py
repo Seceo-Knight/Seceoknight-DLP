@@ -111,11 +111,26 @@ class DecisionEngine:
         try:
             matches = await self._evaluator.evaluate_event(event)
         except Exception as e:
-            logger.error("Policy evaluation failed, defaulting to ALLOW", error=str(e))
+            # SECURITY: previously always defaulted to ALLOW on any internal
+            # error. This endpoint (POST /decision/) isn't currently called
+            # by the shipped Windows agent -- real-time enforcement goes
+            # through evaluate_policy_realtime() in api/v1/agents.py, which
+            # had the identical bug and was fixed the same way -- but this
+            # is kept in step so nothing wires up to it later and silently
+            # inherits a fail-open default. Governed by the same
+            # DLP_FAIL_CLOSED_ON_ERROR setting (default: fail closed).
+            from app.core.config import settings as _settings
+            fail_closed = getattr(_settings, "DLP_FAIL_CLOSED_ON_ERROR", True)
+            logger.error(
+                "Policy evaluation failed",
+                error=str(e),
+                fail_closed=fail_closed,
+            )
             return Decision(
-                action="allow",
-                reason=f"Policy evaluation error: {str(e)} — defaulting to allow",
+                action="block" if fail_closed else "allow",
+                reason=f"SYSTEM ERROR during policy evaluation ({'blocked' if fail_closed else 'allowed'} by DLP_FAIL_CLOSED_ON_ERROR) — {str(e)}",
                 should_log=True,
+                should_create_incident=fail_closed,
             )
 
         if not matches:

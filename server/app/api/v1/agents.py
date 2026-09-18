@@ -133,6 +133,23 @@ async def verify_agent_key(request: Request) -> Optional[str]:
     Returns the agent_id if key is valid, None if no key provided
     (backward compat with agents compiled before key support).
     Raises 401 only if a key IS provided but is invalid.
+
+    SECURITY: this function is intentionally permissive when no key is
+    sent at all -- that's only correct for the one deliberately
+    backward-compatible caller left on it (plain event ingestion in
+    events.py, for agent builds that predate key support). Every other
+    endpoint that used to depend on this directly (heartbeat, unregister,
+    policy sync, the policy-pull GETs, device/authorize) was fully
+    anonymous-accessible despite most of them being scoped to a specific
+    agent_id, since an attacker could simply omit the header. Fixed
+    September 2026 by switching all of them to require_agent_key below --
+    verified every currently-registered agent build already sends
+    X-Agent-Key once SetApiKey() has been called post-registration (see
+    HttpClient::agentApiKey in agent.cpp), so this closes the anonymous
+    path without breaking any real deployed agent. Do not add a new
+    Depends(verify_agent_key) to an agent-scoped endpoint without a
+    specific reason to keep it anonymous-optional -- use
+    require_agent_key instead.
     """
     agent_key = request.headers.get("X-Agent-Key")
     if not agent_key:
@@ -593,7 +610,7 @@ async def agent_heartbeat(
     agent_id: str,
     request: Request,
     heartbeat: Optional[HeartbeatRequest] = None,
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ) -> Dict[str, Any]:
     """
     Update agent heartbeat.  Requires ``X-Agent-Key`` header.
@@ -677,7 +694,7 @@ async def agent_heartbeat(
 async def unregister_agent(
     agent_id: str,
     request: Request,
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     Self-unregister called by the agent during a clean uninstall.
@@ -964,7 +981,7 @@ async def sync_agent_policies(
     sync_request: AgentPolicySyncRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     Provide agents with a policy bundle tailored to their platform/capabilities.
@@ -1053,7 +1070,7 @@ async def sync_agent_policies(
 async def get_cloud_upload_hosts(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     Extra cloud-upload destinations an admin has added from the dashboard, on
@@ -1077,7 +1094,7 @@ async def get_cloud_upload_hosts(
 async def get_agent_app_catalog(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     The watched-destination domain list for Web Activity Control, plus
@@ -1113,7 +1130,7 @@ async def get_agent_app_catalog(
 async def get_usb_allowlist(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     The USB device allowlist the agent enforces locally (strict allowlist /
@@ -1177,7 +1194,7 @@ async def get_usb_allowlist(
 async def get_network_share_policy(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     The network-share (mapped/UNC drive) transfer-control policy the agent
@@ -1240,7 +1257,7 @@ async def get_network_share_policy(
 async def get_application_control(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     The managed-application file-control policy the agent enforces locally.
@@ -1322,7 +1339,7 @@ async def get_application_control(
 async def get_file_identity_denylist(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     Task #152. The file-identity denylist policy the agent enforces locally
@@ -1390,7 +1407,7 @@ async def get_file_identity_denylist(
 async def get_wireless_policy(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     The wireless-transfer control policy the agent enforces locally. Ported
@@ -1485,7 +1502,7 @@ async def get_wireless_policy(
 async def get_printer_policy(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     Combined printer DEVICE control + print CONTENT inspection policy for the
@@ -1709,7 +1726,7 @@ def _message_data_types(cfg: dict) -> list:
 async def get_messaging_app_policy(
     agent_id: str,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     Managed messaging / thick-client app attachment-control policy. Ported
@@ -1823,7 +1840,7 @@ async def log_device_authorization(
     agent_id: str,
     request: DeviceAuthorizeRequest,
     db: AsyncSession = Depends(get_db),
-    _verified_agent: str = Depends(verify_agent_key),
+    _verified_agent: str = Depends(require_agent_key),
 ):
     """
     Records the agent's local USB device connect/block decision as an event,
@@ -2312,10 +2329,30 @@ async def evaluate_policy_realtime(
             file_name=request.file_name,
             error=str(e),
         )
-        # Fail-safe: allow on error (configurable)
+        # SECURITY: this used to unconditionally return action="allow" with a
+        # comment claiming it was "(configurable)" when nothing actually read
+        # a setting -- so any transient failure here (a DB blip, an unhandled
+        # edge case in the classifier) silently let the file/USB/print/email
+        # event through completely uninspected. This is the exact real,
+        # load-bearing endpoint every channel calls (evaluate_policy_realtime
+        # has no dead-code caveat unlike decision_engine.py) -- fixed
+        # September 2026 alongside the same bug class found in the sibling
+        # CyberSentinel-DLP codebase's /decision endpoint. Now governed by
+        # DLP_FAIL_CLOSED_ON_ERROR (see config.py docstring for the
+        # availability-vs-inspection tradeoff), defaulting to fail CLOSED,
+        # consistent with "content that cannot be inspected is never treated
+        # as clean" everywhere else in this codebase. The reason string is
+        # deliberately prefixed "SYSTEM ERROR" (not a real classification)
+        # so it's visibly distinguishable from a genuine policy block in the
+        # Events/Alerts views, and alert_severity is set so operators
+        # actually notice a run of these rather than protection silently
+        # degrading.
+        from app.core.config import settings as _settings
+        fail_closed = getattr(_settings, "DLP_FAIL_CLOSED_ON_ERROR", True)
+        action = "block" if fail_closed else "allow"
         return PolicyEvaluationResponse(
-            action="allow",
-            reason=f"Policy evaluation error: {str(e)}",
+            action=action,
+            reason=f"SYSTEM ERROR during policy evaluation ({'blocked' if fail_closed else 'allowed'} by DLP_FAIL_CLOSED_ON_ERROR) — {str(e)}",
             classification=ClassificationDetails(
                 level="Public",
                 confidence=0.0,
@@ -2324,7 +2361,7 @@ async def evaluate_policy_realtime(
             ),
             policies_triggered=[],
             should_log=True,
-            alert_severity=None,
+            alert_severity="critical" if fail_closed else None,
         )
 
 

@@ -8,6 +8,68 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Security hardening: agent-key enforcement + fail-closed policy evaluation (September 18, 2026)
+
+Prompted by a comparison audit against the sibling CyberSentinel-DLP codebase (both trace back to
+the same origin project) that turned up two issues -- checked, and confirmed both were present
+here too, independent of that comparison.
+
+### Fix 1: `verify_agent_key` let any caller skip authentication by omitting the header
+
+`server/app/api/v1/agents.py`'s `verify_agent_key()` only rejects a request when `X-Agent-Key` is
+present but wrong -- a request with **no header at all** returned `None` (= "allowed") for
+backward compatibility with agent builds that predate key support. 13 agent-scoped endpoints
+depended on it directly: heartbeat, unregister, policy sync, every policy-pull GET
+(cloud-upload-hosts, app-catalog, usb-allowlist, network-share-policy, application-control,
+file-identity-denylist, wireless-policy, printer-policy, messaging-app-policy), and
+device/authorize. Any of them was reachable fully anonymously by simply not sending the header --
+despite being scoped to a specific `agent_id` (heartbeat spoofing, unregistering an arbitrary
+agent, pulling another agent's policy config, or logging fake device authorizations, by anyone who
+could guess/enumerate an agent ID).
+
+There's a companion function, `require_agent_key()`, added August 28 2026 for exactly this reason
+(`login`/`classification`/`decision`/policy-bundle-download endpoints already used it) -- but these
+13 were never switched over. Fixed by switching all 13 to `require_agent_key`. Verified safe:
+`agent.cpp`'s `HttpClient` already sends `X-Agent-Key` on every request once `SetApiKey()` has been
+called post-registration (confirmed 4 call sites, including right after registration and after
+loading a cached config on restart) -- so every currently-registered agent build already sends the
+header and is unaffected; only a genuinely anonymous/unregistered caller now gets rejected.
+
+### Fix 2: real-time policy evaluation failed open on internal errors
+
+`evaluate_policy_realtime()` (`POST /agents/{id}/policy/evaluate` in `agents.py`) -- the endpoint
+every channel actually calls (USB, clipboard, browser upload, email, print) for content-aware
+blocking -- caught **any** exception during classification or policy evaluation and unconditionally
+returned `action="allow"`, with a comment claiming this was "(configurable)" when nothing read a
+setting. A DB hiccup, a classifier bug, or any unhandled edge case meant sensitive content was
+silently let through uninspected, with only a log line as a trace. Same pattern existed in
+`decision_engine.py`'s `DecisionEngine.evaluate()` (not currently called by the shipped agent --
+`/decision/` isn't wired up to `agent.cpp` -- but fixed for the same reason: nothing should inherit
+a fail-open default if it's wired up later) and in `api/v1/decision.py`'s classification sub-step,
+which silently kept `classification_level="Public"` on a classifier exception instead of treating
+un-inspected content as suspect.
+
+Added `DLP_FAIL_CLOSED_ON_ERROR` (`server/app/core/config.py`, **default `True`**). All three call
+sites now check it: on an internal error, `evaluate_policy_realtime` returns `action="block"` (was
+always `"allow"`), `DecisionEngine.evaluate` returns `action="block"` and
+`should_create_incident=True`, and the `/decision/` classification fallback becomes
+`"Restricted"` instead of `"Public"`. Every reason string is prefixed `SYSTEM ERROR` so it's
+visually distinct from a real policy match in Events/Alerts, and `alert_severity="critical"` is set
+so a repeated run of these actually pages an operator instead of protection silently degrading.
+This matches the "content that cannot be inspected is never treated as clean" principle already
+used elsewhere in this codebase (extraction_status="unreadable", File Identity Denylist, etc.) --
+an evaluation *error* is just another form of "couldn't inspect it."
+
+Operators who've decided availability must win over inspection during an outage for a specific
+deployment (e.g. a line where a blocked print queue is worse than a rare unresolved failure) can
+set `DLP_FAIL_CLOSED_ON_ERROR=false` to restore the old allow-on-error behavior -- understand that
+doing so means any transient failure lets that one event through completely uninspected.
+
+**Not yet done:** a full "production-ready / enterprise-grade" hardening pass beyond these two
+items (e.g. broader endpoint-by-endpoint auth audit, rate limiting coverage, HA/observability,
+secrets rotation, compliance documentation) is a much larger, open-ended body of work -- scoped
+separately rather than attempted in this pass.
+
 ## Print Content Prevention: real XPS/ZIP spool text extraction (September 17, 2026)
 
 Follow-up to the audit below, prompted by live testing against a real Sharp AR-6020N printer:

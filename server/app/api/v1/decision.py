@@ -143,7 +143,23 @@ async def make_decision(
             classification_level = result.classification
             confidence_score = result.confidence_score
         except Exception as e:
-            logger.warning("Classification failed in decision path", error=str(e))
+            # SECURITY: previously left classification_level at its
+            # "Public" default on any classifier exception -- content that
+            # errored during inspection (not content genuinely found clean)
+            # would then never match a classification-gated policy rule.
+            # Same bug class found in the sibling CyberSentinel-DLP
+            # codebase's identical decision endpoint. There WAS content
+            # here (the `if content:` guard above), we just failed to read
+            # it, so treat it the same way evaluate_policy_realtime treats
+            # unreadable content: don't certify it as clean. Governed by
+            # DLP_FAIL_CLOSED_ON_ERROR like the other fail-open fixes.
+            from app.core.config import settings as _settings
+            fail_closed = getattr(_settings, "DLP_FAIL_CLOSED_ON_ERROR", True)
+            classification_level = "Restricted" if fail_closed else "Public"
+            logger.warning(
+                "Classification failed in decision path",
+                error=str(e), fail_closed=fail_closed, classification_level=classification_level,
+            )
 
     # Step 2: Build normalized event structure for policy evaluation
     eval_event = {

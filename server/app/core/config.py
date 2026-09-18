@@ -336,6 +336,34 @@ class Settings(BaseSettings):
     DLP_SCAN_TIMEOUT_SECONDS: int = Field(default=30)
     DLP_QUARANTINE_PATH: str = Field(default="./quarantine")
 
+    # Fail-closed on internal evaluation errors (default True: an enterprise
+    # DLP product must not silently let sensitive data through just because
+    # the classifier or a DB call blew up).
+    #
+    # Both evaluate_policy_realtime() (server/app/api/v1/agents.py — the
+    # real endpoint every channel actually calls: USB, clipboard, browser
+    # upload, email, print) and DecisionEngine.evaluate() (decision_engine.py
+    # — currently unused by the shipped agent, kept for API parity) used to
+    # hard-code "except Exception: return action='allow'" with a comment
+    # claiming this was "(configurable)" when nothing actually read a
+    # setting. Found + fixed September 2026 during a security audit that
+    # also caught the same fail-open pattern in the sibling CyberSentinel-DLP
+    # codebase's /decision endpoint and SMTP relay.
+    #
+    # True (default): an evaluation exception returns action="block" (or
+    # quarantine for the decision_engine path) with a reason clearly marked
+    # as a SYSTEM ERROR (not a real policy match) so it's distinguishable in
+    # the dashboard/Events view from a genuine detection, and logged at
+    # error level so a repeated run of these pages ops rather than silently
+    # degrading protection.
+    #
+    # Set to False only if your organization has decided availability must
+    # win over inspection during an outage (e.g. a factory-floor endpoint
+    # where a blocked print queue is worse than a rare unresolved outage) --
+    # understand that doing so means any transient failure (a DB blip, a bug)
+    # lets that one event through uninspected.
+    DLP_FAIL_CLOSED_ON_ERROR: bool = Field(default=True)
+
     # Classification Thresholds
     CLASSIFICATION_HIGH_RISK_THRESHOLD: float = Field(default=0.85)
     CLASSIFICATION_MEDIUM_RISK_THRESHOLD: float = Field(default=0.60)
