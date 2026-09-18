@@ -8,6 +8,32 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: time-range selector reset when navigating between pages (September 18, 2026)
+
+Reported live: pick "3 days" (or any non-default range) on Dashboard or Events, navigate to the
+other page, and it shows its own default (24h on Dashboard, "All time" on Events) instead of what
+was just picked — then navigating back resets again.
+
+Root cause: `Dashboard.tsx`'s `rangeHours` (`useState<number>(24)`) and `Events.tsx`'s `rangeHours`
+(`useState<number | undefined>(undefined)`) were two fully independent pieces of local component
+state. There was never any shared state to begin with — each page's selector only ever remembered
+its own default, since a fresh `useState` call runs again every time a page mounts.
+
+Added `dashboard/src/hooks/useSharedTimeRange.ts`, a small localStorage-backed hook (`dlp-time-range-
+hours` key) instead of a React Context — this codebase has no existing Context usage, and Dashboard/
+Events are never mounted simultaneously (single-route SPA), so there's nothing to keep in sync
+live; each page just needs to read the last-written value on mount and write back on change.
+Two exports: `useSharedRangeHours(fallback)` for Dashboard (always needs a concrete window — its
+stats/time-series queries have no "all time" mode) and `useSharedRangeHoursOrAll(fallback)` for
+Events (supports "All time" too). Both pages' `TIME_RANGES` already used identical hour values
+(12/24/72/168/2160), so the stored value is directly compatible between them. Bonus: the selection
+now also survives a full page reload, not just in-app navigation.
+
+Verified: `tsc --noEmit` unchanged at the stable 21-error baseline (none in the touched files),
+`npm run build` succeeds.
+
+---
+
 ## Fix: ALLOWED_HOSTS never actually wired into docker-compose.prod.yml (September 18, 2026)
 
 Caught immediately on a live `update.sh` run: `seceoknight-manager` refused to start with "ALLOWED_HOSTS

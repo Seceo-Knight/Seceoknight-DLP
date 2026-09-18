@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useSharedRangeHours } from '@/hooks/useSharedTimeRange'
 import { useQuery } from '@tanstack/react-query'
 import {
   Server, AlertCircle, FileText, ShieldAlert, Shield, Activity,
@@ -119,7 +120,10 @@ function ChartTooltip({ active, payload, label, labelFormatter, drillHint }: any
 // ── Page ────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const navigate = useNavigate()
-  const [rangeHours, setRangeHours] = useState<number>(24)
+  // Shared across pages (Events.tsx uses the same key) so switching pages
+  // doesn't silently reset back to this page's own default -- see
+  // useSharedTimeRange.ts for why.
+  const [rangeHours, setRangeHours] = useSharedRangeHours(24)
   const activeRange = TIME_RANGES.find((r) => r.hours === rangeHours) ?? TIME_RANGES[1]
   const isDaily = rangeHours > 168
 

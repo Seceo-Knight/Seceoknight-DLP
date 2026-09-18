@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import { extractErrorDetail } from '@/utils/errorUtils'
+import { useSharedRangeHoursOrAll } from '@/hooks/useSharedTimeRange'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
 import {
@@ -690,7 +691,10 @@ export default function Events() {
   const [showFilters, setShowFilters] = useState(false)
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [rangeHours, setRangeHours] = useState<number | undefined>(undefined)
+  // Shared across pages (Dashboard.tsx uses the same key) so switching
+  // pages doesn't silently reset back to this page's own default -- see
+  // useSharedTimeRange.ts for why.
+  const [rangeHours, setRangeHours] = useSharedRangeHoursOrAll(undefined)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const activeRange = TIME_RANGES.find((r) => r.hours === rangeHours) ?? TIME_RANGES[0]
