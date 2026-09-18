@@ -507,7 +507,18 @@ class ValidatedUserRegistration(BaseModel):
 
 class RateLimiter:
     """
-    Simple rate limiter using Redis
+    Simple rate limiter using Redis.
+
+    NOTE: found unused (zero call sites anywhere in the repo) during the
+    September 2026 security hardening audit -- actual enforcement lives in
+    RateLimitMiddleware (app/middleware/rate_limit.py) and auth.py's login
+    limiter. Kept rather than deleted (no import risk either way, but this
+    is a public-ish class name something could plausibly reach for later).
+    Its Redis-outage fallback below was fail-open with no way to configure
+    otherwise, unlike everywhere else in this codebase after the same
+    audit -- fixed so that if this ever DOES get wired up, it doesn't
+    silently inherit the exact fail-open bug class that was found and
+    fixed twice elsewhere (evaluate_policy_realtime, DecisionEngine).
     """
 
     def __init__(self, redis_client):
@@ -544,9 +555,18 @@ class RateLimiter:
             return True
 
         except Exception as e:
-            logger.error("Rate limit check failed", error=str(e))
-            # Fail open (allow request if Redis is down)
-            return True
+            from app.core.config import settings as _settings
+            fail_closed = getattr(_settings, "DLP_FAIL_CLOSED_ON_ERROR", True)
+            logger.error("Rate limit check failed", error=str(e), fail_closed=fail_closed)
+            # Previously always "fail open (allow request if Redis is
+            # down)" unconditionally. Now respects the same
+            # DLP_FAIL_CLOSED_ON_ERROR setting everything else in this
+            # codebase's error paths does -- rate limiting isn't itself a
+            # content-inspection decision, but "fail open" here still means
+            # "no throttling at all during an outage", which is exactly
+            # the kind of silent protection loss that setting exists to
+            # prevent by default.
+            return not fail_closed
 
     async def get_remaining(self, key: str, max_requests: int) -> int:
         """Get remaining requests in window"""

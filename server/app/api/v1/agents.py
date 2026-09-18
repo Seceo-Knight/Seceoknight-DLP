@@ -226,6 +226,12 @@ class AgentCreate(BaseModel):
     hostname: Optional[str] = Field(None, description="Machine hostname, as reported by the agent")
     os_version: Optional[str] = Field(None, description="Precise OS build string")
     username: Optional[str] = Field(None, description="Currently logged-in Windows user")
+    # SECURITY: see register_agent()'s docstring. Optional so this model
+    # stays backward compatible with agent builds that predate the field
+    # (and with AGENT_ENROLLMENT_SECRET being unset, in which case it's
+    # never checked at all) -- required only when the operator has opted
+    # into gating enrollment.
+    enrollment_secret: Optional[str] = Field(None, description="Pre-shared secret proving this caller is authorized to enroll a new agent (required when AGENT_ENROLLMENT_SECRET is configured server-side)")
 
 
 class Agent(AgentBase):
@@ -440,8 +446,36 @@ async def register_agent(
     Returns the agent record **and** a one-time ``api_key``.  The agent
     must store this key and send it as ``X-Agent-Key`` header on all
     subsequent requests (events, heartbeat, policy sync).
+
+    SECURITY: this endpoint has no auth dependency by design -- a brand
+    new agent doesn't have an api_key yet, that's what this call produces.
+    Found (security hardening audit, September 2026) to be a real gap: with
+    NOTHING else gating it, anyone with network access could POST here and
+    walk away with a fully valid api_key, which then passes
+    require_agent_key on every endpoint the earlier hardening pass just
+    locked down -- making that hardening only as strong as "can reach this
+    one open endpoint first." Closed with an optional pre-shared
+    AGENT_ENROLLMENT_SECRET (config.py): when set, a request missing or
+    mismatching enrollment_secret is rejected before touching the DB or
+    issuing a key. Left OFF (None) by default so this doesn't retroactively
+    break any already-deployed agent build that doesn't send the field --
+    operators are strongly encouraged to set it. docker-compose.prod.yml
+    requires it via the same ${VAR:?message} mechanism as SECRET_KEY.
     """
     import secrets
+    from app.core.config import settings as _settings
+
+    if _settings.AGENT_ENROLLMENT_SECRET:
+        provided = (await request.json()).get("enrollment_secret") or ""
+        if not secrets.compare_digest(provided, _settings.AGENT_ENROLLMENT_SECRET):
+            logger.warning(
+                "Agent registration rejected: missing/invalid enrollment_secret",
+                client_ip=request.client.host if request.client else None,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Valid enrollment_secret is required to register a new agent",
+            )
 
     db = get_mongodb()
     agents_collection = db["agents"]

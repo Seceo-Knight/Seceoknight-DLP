@@ -1539,6 +1539,18 @@ void Log(const std::string& level, const std::string& message) {
         // why) so install.ps1 for the browser extension can read it and
         // reuse this agent's identity instead of registering a new one.
         std::string apiKey;
+        // Pre-shared secret proving this install is authorized to enroll --
+        // sent as enrollment_secret in RegisterAgent()'s JSON body, checked
+        // server-side against AGENT_ENROLLMENT_SECRET (see that setting's
+        // docstring in config.py: added September 2026 because registration
+        // previously had NO auth at all, so anyone reaching the server could
+        // mint a valid api_key). Empty by default -- most deployments won't
+        // have set the server-side secret yet, and sending an empty field is
+        // harmless (server only checks it when AGENT_ENROLLMENT_SECRET is
+        // configured). Read from agent_config.json's "enrollment_secret" key
+        // or the SECEOKNIGHT_ENROLLMENT_SECRET env var, same pattern as
+        // serverUrl/SECEOKNIGHT_SERVER_URL above.
+        std::string enrollmentSecret;
         int heartbeatInterval = 3;
         int policySyncInterval = 60;
 
@@ -1580,7 +1592,10 @@ void Log(const std::string& level, const std::string& message) {
             // Default server URL: check environment variable, then use localhost
             const char* envUrl = std::getenv("SECEOKNIGHT_SERVER_URL");
             serverUrl = envUrl ? envUrl : "http://localhost:55000/api/v1";
-            
+
+            const char* envEnrollSecret = std::getenv("SECEOKNIGHT_ENROLLMENT_SECRET");
+            enrollmentSecret = envEnrollSecret ? envEnrollSecret : "";
+
             // Generate unique agent ID
             agentId = GenerateUUID();
             
@@ -1738,6 +1753,20 @@ void Log(const std::string& level, const std::string& message) {
                 std::string extractedKey = ExtractJsonValue(content, "api_key");
                 if (!extractedKey.empty()) {
                     apiKey = extractedKey;
+                }
+
+                // Extract enrollment_secret (see the field's declaration
+                // comment above). Env var takes precedence when both are
+                // set, so an operator can override a baked-in config value
+                // per-machine without editing the file (e.g. a scripted
+                // rollout that injects it via the scheduled task's
+                // environment rather than writing it to disk in plaintext).
+                std::string extractedSecret = ExtractJsonValue(content, "enrollment_secret");
+                const char* envEnrollSecret2 = std::getenv("SECEOKNIGHT_ENROLLMENT_SECRET");
+                if (envEnrollSecret2 && *envEnrollSecret2) {
+                    enrollmentSecret = envEnrollSecret2;
+                } else if (!extractedSecret.empty()) {
+                    enrollmentSecret = extractedSecret;
                 }
 
                 // Extract heartbeat_interval
@@ -4926,7 +4955,13 @@ void SendUSBTransferEvent(const std::string& relativePath, const std::string& us
              json.AddString("username", GetUsername());
              json.AddString("ip_address", GetRealIPAddress());
              json.AddString("version", AGENT_VERSION);
-             
+             if (!config.enrollmentSecret.empty()) {
+                 // Only sent when configured -- see AgentConfig::enrollmentSecret.
+                 // Harmless to omit/send-empty against a server that hasn't set
+                 // AGENT_ENROLLMENT_SECRET; required against one that has.
+                 json.AddString("enrollment_secret", config.enrollmentSecret);
+             }
+
              std::pair<int, std::string> reg = GetHttpClient()->Post("/agents", json.Build());
              auto& [status, response] = reg;
 

@@ -829,7 +829,23 @@ app.add_middleware(
 # Compression
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
-# Trusted hosts
+# Trusted hosts — same wildcard-in-production guard CORS_ORIGINS has above
+# (found missing here in the September 2026 security hardening audit).
+# TrustedHostMiddleware itself is still only added when DEBUG is false, so
+# a wildcard ALLOWED_HOSTS in a *debug* deployment is unaffected (matches
+# CORS_ORIGINS's own dev-only leniency, logged there via _wildcard_cors).
+_wildcard_hosts = settings.ALLOWED_HOSTS == ["*"]
+if _wildcard_hosts and not settings.DEBUG and settings.ENVIRONMENT.lower() == "production":
+    logger.error(
+        "ALLOWED_HOSTS is set to ['*'] in production — this is insecure "
+        "(disables Host-header validation entirely). Set ALLOWED_HOSTS to "
+        "your server's actual hostname(s)/IP(s) in .env."
+    )
+    raise SystemExit("Refusing to start with wildcard ALLOWED_HOSTS in production.")
+
+if _wildcard_hosts and not settings.DEBUG:
+    logger.warning("ALLOWED_HOSTS is ['*'] — acceptable for development only")
+
 if not settings.DEBUG:
     app.add_middleware(
         TrustedHostMiddleware,

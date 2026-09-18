@@ -236,6 +236,17 @@ services:
       - JWT_ALGORITHM=HS256
       - JWT_EXPIRATION=3600
 
+      # Agent enrollment gate — OPTIONAL, unlike SECRET_KEY/POSTGRES_PASSWORD
+      # above (deliberately not `:?message` — this is new as of September
+      # 2026's security hardening pass, and making it hard-required here
+      # would break `docker compose up` on every existing deployment that
+      # hasn't set it yet). Unset = registration stays open (today's
+      # behavior). Strongly recommended: generate one (e.g.
+      # `openssl rand -base64 32`), set it here AND in every agent's
+      # agent_config.json ("enrollment_secret") / SECEOKNIGHT_ENROLLMENT_SECRET
+      # env var, matching. See config.py's AGENT_ENROLLMENT_SECRET docstring.
+      - AGENT_ENROLLMENT_SECRET=${AGENT_ENROLLMENT_SECRET:-}
+
       # CORS — explicit allowlist only. No wildcard default.
       - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set (JSON list of allowed origins)}
 

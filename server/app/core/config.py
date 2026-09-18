@@ -364,6 +364,33 @@ class Settings(BaseSettings):
     # lets that one event through uninspected.
     DLP_FAIL_CLOSED_ON_ERROR: bool = Field(default=True)
 
+    # Pre-shared secret required to enroll a NEW agent (POST /api/v1/agents/).
+    # Registration has no other auth dependency -- a brand new agent has no
+    # api_key yet, that's what this endpoint produces -- so with this unset
+    # (the default), anyone who can reach the server can register and walk
+    # away with a fully valid api_key, which then passes require_agent_key
+    # on every other agent endpoint. Found in a security hardening audit,
+    # September 2026. Left optional/off by default so this doesn't
+    # retroactively break any already-deployed agent build; set it and
+    # rebuild agents with the matching value (agent_config.json's
+    # "enrollment_secret", or SECEOKNIGHT_ENROLLMENT_SECRET env var) to
+    # close the gap. Required in docker-compose.prod.yml via the same
+    # ${VAR:?message} mechanism as SECRET_KEY/POSTGRES_PASSWORD.
+    AGENT_ENROLLMENT_SECRET: Optional[str] = Field(default=None)
+
+    # Rate limit for the "heavy" classification-triggering agent endpoints
+    # (policy/evaluate, web-activity/evaluate, everything under /decision/)
+    # -- see rate_limit.py's HEAVY_PATH_SUFFIXES/_PREFIX. These used to be
+    # fully exempt from rate limiting (the exemption was sized for cheap
+    # heartbeat/event-push traffic, not these), so a caller holding any
+    # agent key could hammer the document-extraction/classification
+    # pipeline with zero throttling. Keyed per-agent-key (not per-IP, since
+    # a shared/NATed IP would either over- or under-throttle), higher than
+    # the generic per-IP limit above since one busy real agent can
+    # legitimately fire many of these per minute.
+    RATE_LIMIT_AGENT_HEAVY_MAX_REQUESTS: int = Field(default=300)
+    RATE_LIMIT_AGENT_HEAVY_WINDOW_SECONDS: int = Field(default=60)
+
     # Classification Thresholds
     CLASSIFICATION_HIGH_RISK_THRESHOLD: float = Field(default=0.85)
     CLASSIFICATION_MEDIUM_RISK_THRESHOLD: float = Field(default=0.60)
@@ -487,6 +514,50 @@ class Settings(BaseSettings):
             raise ValueError(
                 "SECRET_KEY is insecure. Set a random string of at least 32 characters. "
                 "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+            )
+        return v
+
+    @field_validator(
+        "POSTGRES_PASSWORD", "MONGODB_PASSWORD", "REDIS_PASSWORD", "OPENSEARCH_PASSWORD",
+        mode="after",
+    )
+    @classmethod
+    def reject_weak_db_password(cls, v: Optional[str], info) -> Optional[str]:
+        """Prevent startup with the exact placeholder .env.example ships.
+
+        SECRET_KEY has had this check since early on; these four never did
+        (found in the September 2026 security hardening audit) despite
+        .env.example shipping exactly the kind of guessable placeholder this
+        exists to catch (e.g. "change-this-strong-postgres-password") -- an
+        operator who copies .env.example to .env without changing these
+        four boots a fully working server with default, source-visible DB
+        credentials and no warning. REDIS_PASSWORD alone is genuinely
+        Optional (an unauthenticated local Redis is a supported
+        configuration) so None/empty passes through untouched; the other
+        three are required fields already enforced non-empty by Field(...).
+        Deliberately looser than SECRET_KEY's 32-char/CSPRNG bar -- these
+        are operator-chosen infra passwords, not a cryptographic signing
+        key -- but still blocks the exact shipped placeholders and the
+        obvious single-word guesses.
+        """
+        if v is None or v == "":
+            return v
+        weak_passwords = {
+            "change-this-strong-postgres-password",
+            "change-this-strong-mongodb-password",
+            "change-this-strong-redis-password",
+            "change-this-strong-opensearch-password",
+            "password",
+            "changeme",
+            "admin",
+            "postgres",
+        }
+        if v.lower() in weak_passwords:
+            field_name = info.field_name
+            raise ValueError(
+                f"{field_name} is set to a placeholder/default value from .env.example. "
+                f"Set a real, unique password. Generate one with: "
+                f"python -c \"import secrets; print(secrets.token_urlsafe(24))\""
             )
         return v
 

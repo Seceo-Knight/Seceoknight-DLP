@@ -8,6 +8,84 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Security hardening pass 2: enrollment gate, agent rate limiting, weak-secret guards (September 18, 2026)
+
+Follow-up to the pass below, from a full endpoint-by-endpoint security audit of the server
+(prompted by "make our DLP solution production ready enterprise grade"). Four fixes:
+
+### 1. `register_agent` had no auth at all — undercut everything in the pass below
+
+`POST /api/v1/agents/` (new-agent enrollment) has zero auth dependency by design — a brand new
+agent has no `api_key` yet, that's what this call produces. With nothing else gating it, anyone
+who could reach the server could POST here and walk away with a fully valid `api_key`, which then
+passes `require_agent_key` on every endpoint the previous pass just locked down. In effect, that
+hardening only raised the bar from "no key needed" to "get a free key in one unauthenticated POST."
+
+Added `AGENT_ENROLLMENT_SECRET` (`config.py`, default `None`/off) — when set, `register_agent`
+rejects (401) any request missing or mismatching `enrollment_secret` in its body, checked with
+`secrets.compare_digest`. **Off by default** so this doesn't retroactively break any
+already-deployed agent build (verified `HttpClient::agentApiKey` already sends `X-Agent-Key` post
+-registration regardless, and `agent_key.json` is loaded from disk on every startup independent of
+whether re-registration succeeds — so an existing agent keeps working even if a future
+registration call gets rejected). Agent side: new `AgentConfig::enrollmentSecret`, read from
+`agent_config.json`'s `"enrollment_secret"` key or `SECEOKNIGHT_ENROLLMENT_SECRET` env var, sent
+as `enrollment_secret` in `RegisterAgent()`'s body when non-empty. `docker-compose.prod.yml` and
+`.env.example` document the new var (intentionally *not* hard-required via `${VAR:?message}` like
+`SECRET_KEY` — that would break every existing deployment's `docker compose up` outright).
+**Operators: this is a real capability, not yet enforced anywhere until you set the secret and
+rebuild/redeploy agents with a matching value — strongly recommended.**
+
+### 2. `policy/evaluate` and `web-activity/evaluate` had zero rate limiting
+
+The `RateLimitMiddleware` blanket-exempts `/api/v1/agents/`, `/api/v1/events/`, and
+`/api/v1/decision/` from its per-IP limit, sized for cheap high-frequency heartbeat/event-push
+traffic. That exemption also covered the two expensive, classification-triggering endpoints
+(`policy/evaluate`, `web-activity/evaluate`) and everything under `/decision/` — so once a caller
+had *any* agent key (see #1), they could hammer document extraction + classification with zero
+throttling. These now get their own real limit, keyed per-`X-Agent-Key` (not per-IP — a NATed/
+shared IP would over- or under-throttle) via new `RATE_LIMIT_AGENT_HEAVY_MAX_REQUESTS` /
+`_WINDOW_SECONDS` settings (default 300 req / 60s — high enough for one legitimately busy agent,
+bounded against abuse).
+
+### 3. `POSTGRES_PASSWORD`/`MONGODB_PASSWORD`/`REDIS_PASSWORD`/`OPENSEARCH_PASSWORD` accepted the exact `.env.example` placeholders
+
+`SECRET_KEY` has rejected weak/placeholder values at startup for a long time; these four never
+did, despite `.env.example` shipping guessable placeholders (`change-this-strong-postgres-password`
+etc.) for exactly this reason — an operator who copies `.env.example` to `.env` without changing
+these four got a fully working server with default, source-visible DB credentials and no warning.
+Added a matching `field_validator` (looser than `SECRET_KEY`'s 32-char/CSPRNG bar — these are
+operator-chosen infra passwords — but blocks the exact shipped placeholders and obvious guesses
+like `password`/`admin`). `REDIS_PASSWORD` alone stays genuinely optional (unauthenticated local
+Redis is a supported config). Verified live: `Settings()` now raises `ValidationError` at import
+time when any of the four is still the placeholder, and loads normally with real values.
+
+### 4. Cleanup batch
+
+- `validation.py`'s unused `RateLimiter` class (zero call sites anywhere in the repo, confirmed by
+  grep) had an unconditional fail-open on Redis errors; now respects `DLP_FAIL_CLOSED_ON_ERROR` so
+  nothing inherits that bug class if it's ever wired up later.
+- `.secrets.baseline` was a literal `{}` (a stub, not a real `detect-secrets` baseline) — regenerated
+  for real with `detect-secrets scan` (pinned v1.4.0, matching `.pre-commit-config.yaml`). 42
+  findings across 24 files, spot-checked the higher-signal ones (a "Private Key" hit in `main.py`
+  is a detection *regex* for private-key headers, not an embedded key; similar for the others) —
+  all false positives, as expected for a DLP product whose own job is pattern-matching this stuff.
+- `ALLOWED_HOSTS` gets the same wildcard-in-production `SystemExit` guard `CORS_ORIGINS` already
+  had. **Deploy note:** `docker-compose.prod.yml` doesn't set `ALLOWED_HOSTS` and its default is
+  `["*"]` — if your `.env` doesn't already set a real value (per `.env.example`'s
+  `ALLOWED_HOSTS=localhost,127.0.0.1` guidance), the server will now refuse to start in production.
+  Check this **before** restarting/redeploying.
+- Quarantine file download's `Content-Disposition` filename is now sanitized (strips `"`/`\`) before
+  interpolation into the header value.
+
+### Not yet done
+
+This covers the audit's top findings; lower-signal items not acted on this pass: OAuth callback
+CSRF/replay validation (plumbing exists, didn't verify enforcement), PowerShell/shell script
+command-injection review (`install-agent.ps1`, `manage-agent.ps1`, etc. — not reached), and the
+manual-auth-in-body-instead-of-Depends pattern on a few endpoints (cosmetic, not a bypass).
+
+---
+
 ## Security hardening: agent-key enforcement + fail-closed policy evaluation (September 18, 2026)
 
 Prompted by a comparison audit against the sibling CyberSentinel-DLP codebase (both trace back to

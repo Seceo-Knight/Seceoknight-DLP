@@ -1684,13 +1684,20 @@ async def download_quarantine_file(
         )
 
     file_name = event.get("quarantine_file_name") or "quarantined_file"
+    # Sanitize before interpolating into the header value: a filename
+    # containing a literal `"` would break the quoted-string parameter
+    # (not itself an injection -- Starlette/h11 already reject embedded
+    # CRLF in header values -- but a malformed header regardless), and a
+    # bare backslash could be read as an escape by some clients' parsers.
+    # Found in the September 2026 security hardening audit.
+    safe_file_name = file_name.replace("\\", "_").replace('"', "_")
 
     logger.info("quarantine_file_downloaded", event_id=event_id, user=str(getattr(current_user, "email", current_user)))
 
     return Response(
         content=raw,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+        headers={"Content-Disposition": f'attachment; filename="{safe_file_name}"'},
     )
 
 
