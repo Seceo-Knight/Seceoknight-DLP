@@ -250,6 +250,21 @@ services:
       # CORS — explicit allowlist only. No wildcard default.
       - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS must be set (JSON list of allowed origins)}
 
+      # BUG FOUND September 2026: this var was never wired into this
+      # service's environment at all -- .env's ALLOWED_HOSTS value was
+      # silently ignored no matter what an operator set it to, so
+      # TrustedHostMiddleware always ran with the code default (["*"]),
+      # i.e. Host-header validation was a permanent no-op in every existing
+      # deployment. Adding the new wildcard-in-production guard in main.py
+      # (same day) turned that silent gap into a hard boot failure for
+      # anyone upgrading -- which is the guard doing its job, but it can't
+      # do its job at all without this line actually passing the value
+      # through. Not `:?message`-required like CORS_ORIGINS/SECRET_KEY
+      # above: unlike those, the code has always had a (silently broken)
+      # working default, so this stays soft-optional to avoid a second
+      # surprise boot failure for anyone who hasn't set ALLOWED_HOSTS yet.
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
+
       # Timezone (display only — storage is always UTC)
       - APP_TIMEZONE=${APP_TIMEZONE:-UTC}
 

@@ -8,6 +8,28 @@ This document details all changes, fixes, and improvements made during testing a
 
 ---
 
+## Fix: ALLOWED_HOSTS never actually wired into docker-compose.prod.yml (September 18, 2026)
+
+Caught immediately on a live `update.sh` run: `seceoknight-manager` refused to start with "ALLOWED_HOSTS
+is set to ['*'] in production" — even though the operator's `.env` already had a correct,
+non-wildcard `ALLOWED_HOSTS` value. Root cause: `docker-compose.prod.yml`'s `manager` service
+environment block never listed `ALLOWED_HOSTS` at all (unlike `CORS_ORIGINS`, right next to it,
+which is required via `${VAR:?message}`) — so the container's environment never received it
+regardless of `.env`, and `Settings()` silently fell back to its code default (`["*"]`). This meant
+`TrustedHostMiddleware` has been running with Host-header validation effectively disabled in every
+existing deployment this whole time, with no warning — the new wildcard-in-production guard added
+earlier today didn't create this gap, it just turned a silent no-op into a loud (correct) boot
+failure the moment it started checking a value that was never actually being passed through.
+
+Fixed by adding `- ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}` to the manager service's environment block.
+Kept soft-optional (not `:?message`-required) since, unlike `CORS_ORIGINS`, this previously had a
+(silently broken) working default — making it hard-required would be a second unannounced boot
+failure for anyone who hasn't set it. **Action for existing deployments:** re-run `update.sh` (or
+`docker compose -f docker-compose.prod.yml up -d manager`) to pick up the compose file change, after
+confirming `.env`'s `ALLOWED_HOSTS` lists every hostname/IP the dashboard is actually reached at.
+
+---
+
 ## Security hardening pass 2: enrollment gate, agent rate limiting, weak-secret guards (September 18, 2026)
 
 Follow-up to the pass below, from a full endpoint-by-endpoint security audit of the server
